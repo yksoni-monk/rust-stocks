@@ -142,9 +142,14 @@ fn prompt_user(message: &str) -> Result<bool> {
 
 /// Perform automatic initial setup with S&P 500 data (no prompts)
 async fn perform_initial_setup_auto(data_collector: &DataCollector) -> Result<()> {
-    println!("\n📋 Step 1: Syncing S&P 500 stock list...");
-    let stocks_added = data_collector.sync_sp500_list().await?;
-    println!("✅ Added {} stocks to database", stocks_added);
+    println!("\n📋 Step 1: Checking S&P 500 stock list...");
+    let stocks = data_collector.get_active_stocks()?;
+    if stocks.is_empty() {
+        println!("❌ No stocks found in database!");
+        println!("💡 Run 'cargo run --bin update_sp500' first to populate the S&P 500 list.");
+        return Ok(());
+    }
+    println!("✅ Found {} stocks in database", stocks.len());
     
     println!("\n📊 Step 2: Fetching current stock quotes...");
     match data_collector.fetch_current_quotes().await {
@@ -168,9 +173,14 @@ async fn perform_initial_setup_auto(data_collector: &DataCollector) -> Result<()
 
 /// Perform initial setup with S&P 500 data
 async fn perform_initial_setup(data_collector: &DataCollector) -> Result<()> {
-    println!("\n📋 Step 1: Syncing S&P 500 stock list...");
-    let stocks_added = data_collector.sync_sp500_list().await?;
-    println!("✅ Added {} stocks to database", stocks_added);
+    println!("\n📋 Step 1: Checking S&P 500 stock list...");
+    let stocks = data_collector.get_active_stocks()?;
+    if stocks.is_empty() {
+        println!("❌ No stocks found in database!");
+        println!("💡 Run 'cargo run --bin update_sp500' first to populate the S&P 500 list.");
+        return Ok(());
+    }
+    println!("✅ Found {} stocks in database", stocks.len());
     
     println!("\n📊 Step 2: Fetching current stock quotes...");
     let quotes_updated = data_collector.fetch_current_quotes().await?;

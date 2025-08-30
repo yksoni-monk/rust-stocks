@@ -31,39 +31,12 @@ impl DataCollector {
         }
     }
 
-    /// Sync S&P 500 stock list to database
-    pub async fn sync_sp500_list(&self) -> Result<usize> {
-        info!("🔄 Syncing S&P 500 stock list...");
-        
-        let symbols = self.schwab_client.get_sp500_symbols().await?;
-        let mut added_count = 0;
-
-        let total_symbols = symbols.len();
-        
-        for symbol in &symbols {
-            // Check if stock already exists
-            if self.database.get_stock_by_symbol(&symbol)?.is_none() {
-                // Create new stock entry with minimal info
-                let stock = Stock {
-                    id: None,
-                    symbol: symbol.clone(),
-                    company_name: format!("{} Inc.", symbol), // Placeholder - will be updated when we get real data
-                    sector: None,
-                    industry: None,
-                    market_cap: None,
-                    status: StockStatus::Active,
-                    first_trading_date: None,
-                    last_updated: Some(Utc::now()),
-                };
-
-                self.database.upsert_stock(&stock)?;
-                added_count += 1;
-                debug!("Added stock: {}", symbol);
-            }
-        }
-
-        info!("✅ Synced {} stocks ({} new)", total_symbols, added_count);
-        Ok(added_count)
+    /// Get all active S&P 500 stocks from database
+    pub fn get_active_stocks(&self) -> Result<Vec<Stock>> {
+        info!("📊 Getting active stocks from database...");
+        let stocks = self.database.get_active_stocks()?;
+        info!("✅ Found {} active stocks in database", stocks.len());
+        Ok(stocks)
     }
 
     /// Fetch current quotes for all active stocks
@@ -141,39 +114,55 @@ impl DataCollector {
         let stocks = self.database.get_active_stocks()?;
         let total_stocks = stocks.len();
         
-        info!("Processing {} stocks concurrently...", total_stocks);
+        info!("Processing {} stocks concurrently with max 10 parallel requests...", total_stocks);
         
-        // Create concurrent tasks for each stock
-        let results: Vec<Result<usize>> = stream::iter(stocks)
-            .map(|stock| {
-                let client = self.schwab_client.clone();
-                let database = self.database.clone();
-                let semaphore = self.concurrency_semaphore.clone();
-                
-                async move {
-                    let _permit = semaphore.acquire().await.unwrap();
-                    Self::fetch_stock_history(client, database, stock, from_date, end_date).await
-                }
-            })
-            .buffer_unordered(10) // Process up to 10 stocks concurrently
-            .collect()
-            .await;
-
-        // Aggregate results
+        // Track progress
         let mut total_records = 0;
         let mut success_count = 0;
         let mut error_count = 0;
-
-        for result in results {
+        let mut processed = 0;
+        
+        // Create concurrent stream that yields results as they complete
+        let mut results = stream::iter(stocks)
+            .enumerate()
+            .map(|(index, stock)| {
+                let client = self.schwab_client.clone();
+                let database = self.database.clone();
+                let semaphore = self.concurrency_semaphore.clone();
+                let symbol = stock.symbol.clone();
+                
+                async move {
+                    let _permit = semaphore.acquire().await.unwrap();
+                    let result = Self::fetch_stock_history(client, database, stock, from_date, end_date).await;
+                    (index, symbol, result)
+                }
+            })
+            .buffer_unordered(10); // Process up to 10 stocks concurrently
+        
+        // Process results as they come in
+        while let Some((index, symbol, result)) = results.next().await {
+            processed += 1;
+            
             match result {
                 Ok(records) => {
                     total_records += records;
                     success_count += 1;
+                    if records > 0 {
+                        info!("✅ {}/{}: {} - {} records added", processed, total_stocks, symbol, records);
+                    } else {
+                        debug!("⚪ {}/{}: {} - no new records", processed, total_stocks, symbol);
+                    }
                 }
                 Err(e) => {
-                    error!("Failed to fetch stock history: {}", e);
                     error_count += 1;
+                    error!("❌ {}/{}: {} failed - {}", processed, total_stocks, symbol, e);
                 }
+            }
+            
+            // Progress update every 25 stocks
+            if processed % 25 == 0 {
+                info!("📊 Progress: {}/{} stocks processed, {} records collected, {} errors", 
+                      processed, total_stocks, total_records, error_count);
             }
         }
 
@@ -187,7 +176,7 @@ impl DataCollector {
     }
 
     /// Fetch historical data for a single stock
-    async fn fetch_stock_history(
+    pub async fn fetch_stock_history(
         client: Arc<SchwabClient>,
         database: Arc<DatabaseManager>,
         stock: Stock,

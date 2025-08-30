@@ -1,0 +1,11 @@
+/target
+.env
+stocks.db
+schwab_tokens.json
+__pycache__/
+*.pyc
+*.pyo
+*.db
+*.sqlite
+*.bak
+*.log

@@ -1,0 +1,57 @@
+[package]
+name = "rust-stocks"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Async runtime and utilities
+tokio = { version = "1.0", features = ["full"] }
+futures = "0.3"
+tokio-stream = "0.1"
+
+# HTTP client for API calls
+reqwest = { version = "0.11", features = ["json"] }
+
+# Database
+rusqlite = { version = "0.30", features = ["bundled", "chrono"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Date and time handling
+chrono = { version = "0.4", features = ["serde"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Environment variables
+dotenvy = "0.15"
+
+# UI Framework
+ratatui = "0.28"
+crossterm = "0.27"
+
+# Rate limiting
+governor = "0.6"
+
+# Fuzzy search for stock lookup
+fuzzy-matcher = "0.3"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Base64 encoding for API authentication
+base64 = "0.21"
+
+# URL encoding
+url = "2.4"
+
+# Async traits
+async-trait = "0.1"
+
+# Additional dependencies for testing
+[dev-dependencies]
+tempfile = "3.8"

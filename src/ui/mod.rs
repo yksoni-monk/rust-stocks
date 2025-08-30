@@ -6,14 +6,14 @@ use crossterm::{
 };
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout, Margin},
+    layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
     Terminal, Frame,
 };
 use std::io;
-use tracing::{info, error};
+use tracing::info;
 
 use crate::analysis::{AnalysisEngine, SummaryStats};
 use crate::models::{StockAnalysis, StockDetail, Stock};

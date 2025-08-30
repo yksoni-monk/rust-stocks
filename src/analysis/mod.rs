@@ -2,7 +2,7 @@ use anyhow::Result;
 use chrono::{Duration, NaiveDate, Utc};
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
-use tracing::{info, warn, error};
+use tracing::{info, warn};
 
 use crate::database::DatabaseManager;
 use crate::models::{Stock, StockAnalysis, StockDetail, DailyPrice};

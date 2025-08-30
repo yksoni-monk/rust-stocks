@@ -1,8 +1,8 @@
 /// UI components and utilities for the stock analysis application
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
+    layout::Rect,
+    style::{Color, Style},
+    text::Span,
     widgets::{Block, Borders, Gauge, Paragraph},
     Frame,
 };

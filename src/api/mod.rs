@@ -1,11 +1,8 @@
-use anyhow::{Result, anyhow};
-use chrono::{DateTime, NaiveDate, Utc};
-use reqwest::Client;
-use serde_json::Value;
+use anyhow::Result;
+use chrono::NaiveDate;
 use std::time::Duration;
-use tracing::{info, warn, error, debug};
 
-use crate::models::{Config, SchwabQuote, SchwabPriceBar};
+use crate::models::{SchwabQuote, SchwabPriceBar};
 
 pub mod schwab_client;
 pub use schwab_client::SchwabClient;

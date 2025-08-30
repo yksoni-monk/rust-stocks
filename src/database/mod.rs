@@ -1,10 +1,10 @@
 use anyhow::Result;
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{NaiveDate, Utc};
 use rusqlite::{Connection, params};
 use std::sync::{Arc, Mutex};
-use tracing::{info, warn, error};
+use tracing::info;
 
-use crate::models::{Stock, DailyPrice, StockStatus, SystemMetadata};
+use crate::models::{Stock, DailyPrice, StockStatus};
 
 #[derive(Clone)]
 pub struct DatabaseManager {

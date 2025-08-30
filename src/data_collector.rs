@@ -8,7 +8,7 @@ use tracing::{info, warn, error, debug};
 
 use crate::api::{SchwabClient, StockDataProvider};
 use crate::database::DatabaseManager;
-use crate::models::{Config, Stock, DailyPrice, StockStatus, SchwabQuote, SchwabPriceBar};
+use crate::models::{Config, Stock, DailyPrice, SchwabQuote};
 
 /// Data collection system for fetching and storing stock data
 pub struct DataCollector {

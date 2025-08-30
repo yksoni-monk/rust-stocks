@@ -8,8 +8,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tracing::{info, warn, error, debug};
-use url::Url;
+use tracing::{info, warn, debug};
 
 use crate::models::{Config, SchwabQuote, SchwabPriceBar};
 use super::{ApiRateLimiter, StockDataProvider};

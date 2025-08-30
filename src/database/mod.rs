@@ -359,4 +359,14 @@ impl DatabaseManager {
 
         Ok((stock_count, price_count, last_update))
     }
+
+    /// Clear all stocks from database
+    pub fn clear_stocks(&self) -> Result<()> {
+        let conn = self.connection.lock().unwrap();
+        conn.execute("DELETE FROM daily_prices", [])?;
+        conn.execute("DELETE FROM stocks", [])?;
+        info!("🗑️  Cleared all stocks and price data");
+        Ok(())
+    }
+
 }

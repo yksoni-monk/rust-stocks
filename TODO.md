@@ -15,6 +15,10 @@ Building a high-performance Rust-based stock analysis system that fetches, store
 - [x] **Historical Data Test** - Successfully fetched AAPL data from Jan 1 2020 to today
   - Retrieved 1,424 price records
   - AAPL: $73.41 → $232.14 (216.2% return)
+- [x] **Smart Market Calendar** - Automatic weekend/holiday handling using Schwab market hours API ✅ **NEW**
+  - Saturday/Sunday requests return Friday data automatically
+  - Real-time trading day validation for dates within 7 days
+  - Fallback weekend detection for historical dates
 
 ### Phase 2: Complete S&P 500 Company Data ✅ **COMPLETED**
 - [x] **Complete S&P 500 List** - Fetched all 503 real S&P 500 companies from GitHub datasets
@@ -85,7 +89,7 @@ Building a high-performance Rust-based stock analysis system that fetches, store
 - [ ] **Incremental Update System**
   - Implement daily update mechanism
   - Only fetch data since last update
-  - Handle market holidays and weekends
+  - ✅ Handle market holidays and weekends ✅ **COMPLETED**
   - State tracking and recovery
 
 ### Phase 5: Analysis Features
@@ -104,23 +108,35 @@ Building a high-performance Rust-based stock analysis system that fetches, store
 ## 🛠️ Technical Implementation Notes
 
 ### Current Tools Created
+- **`collect_with_detailed_logs.rs`** - Professional CLI data collector ✅ **NEW**
+  - Named arguments with comprehensive validation  
+  - Real-time batch progress tracking
+  - Configurable batch size and delays
+  - Built-in help system with examples
+- **`smart_collect.rs`** - Smart collection with market calendar ✅ **NEW**
+  - Automatic weekend/holiday handling
+  - Saturday requests return Friday data automatically  
+  - Shows original vs adjusted date ranges for transparency
 - `fetch_history.rs` - Single stock historical data fetcher (working)
-- `generate_sp500_list.rs` - S&P 500 company list generator (completed)
+- `update_sp500.rs` - S&P 500 company list updater (completed)
 - `list_companies.rs` - Database company listing tool
 - `test_api.rs` - API connectivity tester
 - `refresh_token.py` - Python token management utility
 
 ### Key Code Components
 - **Schwab API Client** - Full authentication and data retrieval ✅
+- **Market Calendar** - Smart weekend/holiday detection using Schwab API ✅ **NEW**
 - **Database Manager** - SQLite operations with proper schema ✅
 - **Data Models** - Stock, DailyPrice, StockAnalysis structures ✅
 - **Data Collector** - High-performance concurrent historical data fetching ✅ **NEW**
-- **Progress Tracking** - Real-time monitoring with error recovery ✅ **NEW**
+- **Professional CLI** - Named arguments with comprehensive validation ✅ **NEW**  
+- **Progress Tracking** - Real-time batch monitoring with error recovery ✅ **NEW**
 - **Analysis Engine** - P/E calculations and stock ranking (partially implemented)
 
 ### Architecture Alignment
 Following the PRD requirements:
 - ✅ Concurrent data fetching ✅ **IMPLEMENTED & RUNNING**
+- ✅ Smart market calendar ✅ **IMPLEMENTED**  
 - ✅ Rate limiting (120 requests/minute with semaphore control)
 - ✅ SQLite local persistence
 - ✅ Incremental updates ✅ **IMPLEMENTED**

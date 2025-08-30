@@ -261,6 +261,12 @@ impl SchwabClient {
         let url = format!("https://api.schwabapi.com/marketdata/v1/markets/{}", market);
         self.make_request(&url).await
     }
+    
+    /// Get market hours for a specific date
+    pub async fn get_market_hours_for_date(&self, market: &str, date: &str) -> Result<Value> {
+        let url = format!("https://api.schwabapi.com/marketdata/v1/markets?markets={}&date={}", market, date);
+        self.make_request(&url).await
+    }
 }
 
 #[async_trait::async_trait]

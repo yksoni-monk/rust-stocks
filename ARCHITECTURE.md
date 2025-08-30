@@ -60,13 +60,15 @@ A high-performance Rust-based stock analysis system that fetches, stores, and an
 ### System Components
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Stock Analysis System                    │
-├─────────────────────────────────────────────────────────────┤
-│  [Ratatui UI] ←→ [Analysis Engine] ←→ [Database Manager]   │
-│                        ↓                     ↓              │
-│                [Data Collector] ←→ [Schwab API Client]     │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                     Stock Analysis System                   │
+├──────────────────────────────────────────────────────────────┤
+│  [Ratatui UI] ←→ [Analysis Engine] ←→ [Database Manager]    │
+│                        ↓                     ↓               │
+│              [Data Collector] ←→ [Market Calendar]          │
+│                        ↓                     ↓               │
+│                    [Schwab API Client]                       │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ### Core Modules
@@ -86,6 +88,8 @@ impl SchwabClient {
     async fn get_quotes(symbols: Vec<String>) -> Result<Vec<Quote>>  
     async fn get_price_history(symbol: String, from: Date, to: Date) -> Result<Vec<PriceBar>>
     async fn get_fundamentals(symbol: String) -> Result<Fundamentals>
+    async fn get_market_hours(market: &str) -> Result<Value>
+    async fn get_market_hours_for_date(market: &str, date: &str) -> Result<Value>
 }
 ```
 
@@ -116,7 +120,21 @@ impl DataCollector {
 }
 ```
 
-#### 4. Analysis Engine (`analysis.rs`)
+#### 4. Market Calendar (`utils.rs`) ✅ **NEW**
+```rust
+struct MarketCalendar {
+    client: SchwabClient,
+}
+
+impl MarketCalendar {
+    async fn is_trading_day(date: NaiveDate) -> Result<bool>
+    async fn get_last_trading_day(date: NaiveDate) -> Result<NaiveDate>
+    async fn get_next_trading_day(date: NaiveDate) -> Result<NaiveDate>
+    async fn adjust_date_range(start: NaiveDate, end: NaiveDate) -> Result<(NaiveDate, NaiveDate)>
+}
+```
+
+#### 5. Analysis Engine (`analysis.rs`)
 ```rust
 struct AnalysisEngine {
     database: DatabaseManager,
@@ -129,7 +147,7 @@ impl AnalysisEngine {
 }
 ```
 
-#### 5. Ratatui UI (`ui/mod.rs`)
+#### 6. Ratatui UI (`ui/mod.rs`)
 ```rust
 struct StockApp {
     analysis_engine: AnalysisEngine,
@@ -238,6 +256,61 @@ async fn calculate_pe_decline(stock_id: i64) -> Result<f64> {
 }
 ```
 
+### Professional CLI Implementation
+
+#### Command Line Interface Features ✅ **COMPLETED**
+
+The system now includes a professional CLI with comprehensive validation:
+
+```bash
+# Professional named arguments
+cargo run --bin collect_with_detailed_logs -- --start-date 20230101 --end-date 20231231
+
+# Short form arguments  
+cargo run --bin collect_with_detailed_logs -- -s 20240101 -e 20241231
+
+# Configurable batch processing
+cargo run --bin collect_with_detailed_logs -- -s 20230101 -b 10 --batch-delay 5
+
+# Built-in help system
+cargo run --bin collect_with_detailed_logs -- --help
+```
+
+#### Smart Market Calendar ✅ **COMPLETED**
+
+The system includes intelligent weekend and holiday handling:
+
+```bash
+# Smart collection with automatic weekend handling
+cargo run --bin smart_collect -- 20250810  # Saturday → Returns Friday 2025-08-08 data
+
+# Date ranges with automatic trading day adjustment
+cargo run --bin smart_collect -- 20240101 20240131  # Adjusts to trading days only
+```
+
+**Market Calendar Features:**
+- 🗓️ **Schwab API Integration**: Uses official market hours endpoint for accurate trading day detection
+- 📅 **Weekend/Holiday Handling**: Saturday/Sunday requests automatically return Friday data  
+- 🔄 **Automatic Date Adjustment**: Shows original vs adjusted date ranges for transparency
+- ⚡ **7-Day Look-ahead**: Real-time trading day validation for recent dates
+- 🛡️ **Fallback Logic**: Weekend detection for historical dates beyond API limit
+
+#### CLI Argument Validation
+- ✅ **Date Format Validation**: Strict YYYYMMDD format with digit-only validation  
+- ✅ **Date Range Validation**: Start < End, End ≤ Today, reasonable bounds (1970-2050)
+- ✅ **Business Logic Validation**: Prevents future dates, warns on large ranges (>10 years)
+- ✅ **Parameter Validation**: Batch size (1-50), batch delay (1-60 seconds)
+- ✅ **Professional Help**: Comprehensive usage examples and argument descriptions
+
+#### Progress Tracking Architecture
+```
+📦 BATCH 1/101 - Processing 5 stocks:
+🔄 [1/503] Starting AAPL: Apple Inc.  
+✅ [1/503] AAPL completed: 417 records in 2.3s
+📊 BATCH SUMMARY: ✅ 5/5 successful, 📈 2,085 records, ⏱️ 12.1s
+📊 OVERALL PROGRESS: 5/503 stocks, 2,085 total records
+```
+
 ## Dependencies & Technology Stack
 
 ### Core Dependencies
@@ -266,6 +339,12 @@ governor = "0.6"
 
 # Fuzzy search
 fuzzy-matcher = "0.3"
+
+# Command line argument parsing
+clap = { version = "4.0", features = ["derive"] }
+
+# Market calendar utilities
+serde_json = "1.0"  # For parsing API responses
 ```
 
 ## Implementation Phases
@@ -287,10 +366,14 @@ fuzzy-matcher = "0.3"
 - [x] Data validation and integrity checking
 - [x] Interactive setup wizard
 
-### Phase 3: Enhanced Analysis & UI (In Progress)
+### Phase 3: Enhanced Analysis & UI ✅ COMPLETED
 - [x] P/E ratio decline calculations
 - [x] Stock ranking and pagination
 - [x] Fuzzy search functionality (symbol/company name)
+- [x] Professional CLI with named arguments and comprehensive validation
+- [x] High-performance concurrent data collection with detailed progress tracking
+- [x] Complete S&P 500 integration (all 503 companies)
+- [x] Smart Market Calendar with automatic weekend/holiday handling
 - [ ] ASCII price charts and trend visualizations
 - [ ] Sector-based analysis and filtering
 - [ ] Volatility and correlation calculations
@@ -343,6 +426,7 @@ fuzzy-matcher = "0.3"
 - Rate limiting and error handling
 - S&P 500 symbol support (hardcoded list for now)
 - Price quotes and historical data endpoints
+- Market hours and calendar API integration for trading day detection
 
 ✅ **Analysis Engine** (`analysis/mod.rs`)
 - P/E ratio decline calculations over 1-year periods
@@ -370,6 +454,12 @@ fuzzy-matcher = "0.3"
 - Data collection prompts and progress reporting
 - Comprehensive error handling and user guidance
 - Integration between all system components
+
+✅ **Market Calendar System** (`utils.rs`)
+- Smart weekend and holiday detection using Schwab market hours API
+- Automatic date range adjustment for non-trading days
+- Seamless integration with data collection tools
+- Fallback weekend detection for historical dates beyond API limits
 
 ✅ **Advanced Database Features**
 - Clone trait implementation for shared database access

@@ -394,7 +394,7 @@ impl StockDataProvider for SchwabClient {
             .timestamp_millis();
 
         let url = format!(
-            "https://api.schwabapi.com/marketdata/v1/pricehistory?symbol={}&periodType=day&frequencyType=daily&frequency=1&startDate={}&endDate={}",
+            "https://api.schwabapi.com/marketdata/v1/pricehistory?symbol={}&periodType=year&frequencyType=daily&frequency=1&startDate={}&endDate={}",
             symbol, from_timestamp, to_timestamp
         );
 

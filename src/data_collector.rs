@@ -329,17 +329,17 @@ impl DataCollector {
         }
 
         for batch_num in 1..=total_batches {
-            if let Some(ref callback) = progress_callback {
-                callback(format!("Batch {}/{}: Fetching {} to {}", 
-                               batch_num, total_batches, current_date, end_date));
-            }
-
             // Calculate batch end date
             let batch_end_date = if batch_num == total_batches {
                 end_date
             } else {
                 current_date + chrono::Duration::days(batch_size as i64 - 1)
             };
+
+            if let Some(ref callback) = progress_callback {
+                callback(format!("Batch {}/{}: Fetching {} to {}", 
+                               batch_num, total_batches, current_date, batch_end_date));
+            }
 
             // Fetch data for this batch
             match self.schwab_client.get_price_history(symbol, current_date, batch_end_date).await {

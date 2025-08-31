@@ -68,15 +68,15 @@ async fn main() -> Result<()> {
     let mut current_date = start_date;
 
     for batch_num in 1..=total_batches {
-        println!("\n🔄 Batch {}/{}: Fetching data from {} to {}", 
-                 batch_num, total_batches, current_date, end_date);
-
         // Calculate batch end date
         let batch_end_date = if batch_num == total_batches {
             end_date
         } else {
             current_date + Duration::days(batch_size as i64 - 1)
         };
+
+        println!("\n🔄 Batch {}/{}: Fetching data from {} to {}", 
+                 batch_num, total_batches, current_date, batch_end_date);
 
         println!("📅 Batch date range: {} to {}", current_date, batch_end_date);
 

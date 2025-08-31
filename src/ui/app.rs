@@ -183,21 +183,6 @@ impl StockTuiApp {
             KeyCode::Char('r') | KeyCode::Char('R') => {
                 self.refresh_data()?;
             }
-            KeyCode::Char('1') => {
-                self.select_tab(0);
-            }
-            KeyCode::Char('2') => {
-                self.select_tab(1);
-            }
-            KeyCode::Char('3') => {
-                self.select_tab(2);
-            }
-            KeyCode::Char('4') => {
-                self.select_tab(3);
-            }
-            KeyCode::Char('5') => {
-                self.select_tab(4);
-            }
             _ => {
                 // If we're in data collection view, let it handle other keys
                 if self.selected_tab == 1 {

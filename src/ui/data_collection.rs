@@ -281,15 +281,8 @@ impl DataCollectionView {
         // Handle date selection
         if let Some(ref mut date_state) = self.date_selection_state {
             match key {
-                crossterm::event::KeyCode::Tab => {
-                    // Switch between start and end date fields
-                    date_state.current_field = match date_state.current_field {
-                        DateField::StartDate => DateField::EndDate,
-                        DateField::EndDate => DateField::StartDate,
-                    };
-                }
                 crossterm::event::KeyCode::Char(c) => {
-                    if c.is_numeric() {
+                    if c.is_numeric() || c == '-' {
                         date_state.current_input.push(c);
                     }
                 }
@@ -298,18 +291,21 @@ impl DataCollectionView {
                 }
                 crossterm::event::KeyCode::Enter => {
                     // Parse the date input
-                    if date_state.current_input.len() == 8 {
-                        let input = date_state.current_input.clone();
-                        
-                        // Parse date manually to avoid borrowing issues
-                        let parse_result = if input.len() == 8 {
-                            let year: i32 = input[0..4].parse().unwrap_or(0);
-                            let month: u32 = input[4..6].parse().unwrap_or(0);
-                            let day: u32 = input[6..8].parse().unwrap_or(0);
-                            NaiveDate::from_ymd_opt(year, month, day)
-                        } else {
-                            None
-                        };
+                    let input = date_state.current_input.clone();
+                    
+                    // Parse date manually to avoid borrowing issues
+                    let parse_result = if input.len() == 8 {
+                        // YYYYMMDD format
+                        let year: i32 = input[0..4].parse().unwrap_or(0);
+                        let month: u32 = input[4..6].parse().unwrap_or(0);
+                        let day: u32 = input[6..8].parse().unwrap_or(0);
+                        NaiveDate::from_ymd_opt(year, month, day)
+                    } else if input.len() == 10 && input.contains('-') {
+                        // YYYY-MM-DD format
+                        NaiveDate::parse_from_str(&input, "%Y-%m-%d").ok()
+                    } else {
+                        None
+                    };
                         
                         if let Some(date) = parse_result {
                             match date_state.current_field {
@@ -318,13 +314,13 @@ impl DataCollectionView {
                                     date_state.current_field = DateField::EndDate;
                                     date_state.current_input.clear();
                                     // Store log message for later
-                                    self.pending_log_message = Some(format!("Start date set to: {}", date));
+                                    self.pending_log_message = Some(format!("Start date set to: {}. Now enter end date:", date));
                                     self.pending_log_level = Some(LogLevel::Info);
                                 }
                                 DateField::EndDate => {
                                     date_state.end_date = date;
                                     // Store log message and action for later
-                                    self.pending_log_message = Some(format!("End date set to: {}", date));
+                                    self.pending_log_message = Some(format!("End date set to: {}. Starting collection...", date));
                                     self.pending_log_level = Some(LogLevel::Info);
                                     
                                     let symbol = date_state.selected_stock.clone();
@@ -346,10 +342,9 @@ impl DataCollectionView {
                             }
                         } else {
                             date_state.current_input.clear();
-                            self.pending_log_message = Some("Invalid date format. Use YYYYMMDD".to_string());
+                            self.pending_log_message = Some("Invalid date format. Use YYYYMMDD or YYYY-MM-DD".to_string());
                             self.pending_log_level = Some(LogLevel::Error);
                         }
-                    }
                 }
                 crossterm::event::KeyCode::Esc => {
                     self.log_info("Date selection cancelled");
@@ -955,24 +950,23 @@ impl DataCollectionView {
                 Span::styled("Start Date: ", start_style),
                 Span::styled(&start_date_str, start_style),
             ]),
-            Line::from(vec![
-                Span::styled("Input: ", start_style),
-                Span::styled(&date_state.current_input, start_style),
-                Span::styled("_", if matches!(date_state.current_field, DateField::StartDate) { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::Gray) }),
-            ]),
             Line::from(vec![Span::styled("", Style::default())]),
             Line::from(vec![
                 Span::styled("End Date: ", end_style),
                 Span::styled(&end_date_str, end_style),
             ]),
+            Line::from(vec![Span::styled("", Style::default())]),
             Line::from(vec![
-                Span::styled("Input: ", end_style),
-                Span::styled(&date_state.current_input, end_style),
-                Span::styled("_", if matches!(date_state.current_field, DateField::EndDate) { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::Gray) }),
+                Span::styled(match date_state.current_field {
+                    DateField::StartDate => "Enter Start Date: ",
+                    DateField::EndDate => "Enter End Date: ",
+                }, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(&date_state.current_input, Style::default().fg(Color::Yellow)),
+                Span::styled("_", Style::default().fg(Color::Yellow)),
             ]),
             Line::from(vec![Span::styled("", Style::default())]),
             Line::from(vec![
-                Span::styled("Format: YYYYMMDD (e.g., 20240101)", Style::default().fg(Color::Gray)),
+                Span::styled("Format: YYYYMMDD (e.g., 20240101) or YYYY-MM-DD (e.g., 2024-01-01)", Style::default().fg(Color::Gray)),
             ]),
         ];
 
@@ -982,7 +976,11 @@ impl DataCollectionView {
         f.render_widget(date_inputs, chunks[1]);
 
         // Status
-        let status = Paragraph::new("Tab: Switch field • Type: Enter date • Enter: Confirm • Esc: Cancel")
+        let status_text = match date_state.current_field {
+            DateField::StartDate => "Type start date and press Enter • Esc: Cancel",
+            DateField::EndDate => "Type end date and press Enter • Esc: Cancel",
+        };
+        let status = Paragraph::new(status_text)
             .block(Block::default().borders(Borders::ALL))
             .style(Style::default().fg(Color::Gray));
         f.render_widget(status, chunks[2]);

@@ -24,11 +24,7 @@ pub struct DataCollectionAction {
 /// Types of data collection actions
 #[derive(Debug, Clone)]
 pub enum ActionType {
-    UpdateSP500List,
     CollectHistoricalData { start_date: NaiveDate, end_date: NaiveDate },
-    IncrementalUpdate,
-    ValidateData,
-    ViewProgress,
     SingleStockCollection { symbol: String, start_date: NaiveDate, end_date: NaiveDate },
     SelectStockAndDates,
 }
@@ -112,55 +108,27 @@ impl DataCollectionView {
     pub fn new() -> Self {
         let actions = vec![
             DataCollectionAction {
-                id: "update_sp500".to_string(),
-                title: "📋 Update S&P 500 company list".to_string(),
-                description: "Fetch latest S&P 500 constituents from official sources".to_string(),
-                action_type: ActionType::UpdateSP500List,
-                requires_confirmation: false,
-            },
-            DataCollectionAction {
-                id: "single_stock_collection".to_string(),
-                title: "📈 Collect data for single stock".to_string(),
-                description: "Select a stock and date range, then fetch data".to_string(),
+                id: "single_stock".to_string(),
+                title: "📈 Fetch Single Stock Data".to_string(),
+                description: "Fetch data for a specific stock and date range".to_string(),
+                requires_confirmation: true,
                 action_type: ActionType::SelectStockAndDates,
-                requires_confirmation: false,
             },
             DataCollectionAction {
-                id: "collect_historical".to_string(),
-                title: "📈 Collect historical data (2020-2025)".to_string(),
-                description: "Fetch complete historical OHLC data for all stocks".to_string(),
+                id: "all_stocks".to_string(),
+                title: "📊 Fetch All Stocks Data".to_string(),
+                description: "Fetch data for all stocks in a given date range".to_string(),
+                requires_confirmation: true,
                 action_type: ActionType::CollectHistoricalData {
-                    start_date: NaiveDate::from_ymd_opt(2020, 1, 1).unwrap(),
+                    start_date: chrono::NaiveDate::from_ymd_opt(2020, 1, 1).unwrap(),
                     end_date: chrono::Utc::now().date_naive(),
                 },
-                requires_confirmation: true,
-            },
-            DataCollectionAction {
-                id: "incremental_update".to_string(),
-                title: "🔄 Incremental daily updates".to_string(),
-                description: "Fetch latest data since last update".to_string(),
-                action_type: ActionType::IncrementalUpdate,
-                requires_confirmation: false,
-            },
-            DataCollectionAction {
-                id: "validate_data".to_string(),
-                title: "📊 Validate data integrity".to_string(),
-                description: "Check data completeness and identify gaps".to_string(),
-                action_type: ActionType::ValidateData,
-                requires_confirmation: false,
-            },
-            DataCollectionAction {
-                id: "view_progress".to_string(),
-                title: "📊 View collection progress".to_string(),
-                description: "Show current data collection status".to_string(),
-                action_type: ActionType::ViewProgress,
-                requires_confirmation: false,
             },
         ];
 
         Self {
-            selected_action: 0,
             actions,
+            selected_action: 0,
             is_executing: false,
             current_operation: None,
             log_messages: Vec::new(),
@@ -406,18 +374,6 @@ impl DataCollectionView {
     pub fn start_operation_by_type(&mut self, action_type: &ActionType) -> Result<()> {
         // Execute the action based on type
         match action_type {
-            ActionType::UpdateSP500List => {
-                self.is_executing = true;
-                self.current_operation = Some(ActiveOperation {
-                    action_id: "operation".to_string(),
-                    start_time: Utc::now(),
-                    progress: 0.0,
-                    current_message: "Starting operation...".to_string(),
-                    logs: Vec::new(),
-                });
-                self.log_info("Starting S&P 500 list update...");
-                self.run_update_sp500()?;
-            }
             ActionType::CollectHistoricalData { start_date, end_date } => {
                 self.is_executing = true;
                 self.current_operation = Some(ActiveOperation {
@@ -429,42 +385,6 @@ impl DataCollectionView {
                 });
                 self.log_info(&format!("Starting historical data collection from {} to {}", start_date, end_date));
                 self.run_historical_collection(*start_date, *end_date)?;
-            }
-            ActionType::IncrementalUpdate => {
-                self.is_executing = true;
-                self.current_operation = Some(ActiveOperation {
-                    action_id: "operation".to_string(),
-                    start_time: Utc::now(),
-                    progress: 0.0,
-                    current_message: "Starting operation...".to_string(),
-                    logs: Vec::new(),
-                });
-                self.log_info("Starting incremental update...");
-                self.run_incremental_update()?;
-            }
-            ActionType::ValidateData => {
-                self.is_executing = true;
-                self.current_operation = Some(ActiveOperation {
-                    action_id: "operation".to_string(),
-                    start_time: Utc::now(),
-                    progress: 0.0,
-                    current_message: "Starting operation...".to_string(),
-                    logs: Vec::new(),
-                });
-                self.log_info("Starting data validation...");
-                self.validate_data_integrity()?;
-            }
-            ActionType::ViewProgress => {
-                self.is_executing = true;
-                self.current_operation = Some(ActiveOperation {
-                    action_id: "operation".to_string(),
-                    start_time: Utc::now(),
-                    progress: 0.0,
-                    current_message: "Starting operation...".to_string(),
-                    logs: Vec::new(),
-                });
-                self.log_info("Showing collection progress...");
-                self.show_collection_progress();
             }
             ActionType::SingleStockCollection { symbol, start_date, end_date } => {
                 self.is_executing = true;
@@ -488,27 +408,7 @@ impl DataCollectionView {
         Ok(())
     }
 
-    /// Run S&P 500 list update
-    pub fn run_update_sp500(&mut self) -> Result<()> {
-        self.log_info("Executing: cargo run --bin update_sp500");
-        
-        let output = Command::new("cargo")
-            .args(["run", "--bin", "update_sp500"])
-            .output()?;
 
-        if output.status.success() {
-            self.log_success("S&P 500 list updated successfully");
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            self.log_info(&format!("Output: {}", stdout.trim()));
-        } else {
-            self.log_error("Failed to update S&P 500 list");
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            self.log_error(&format!("Error: {}", stderr.trim()));
-        }
-
-        self.complete_operation();
-        Ok(())
-    }
 
     /// Run historical data collection
     pub fn run_historical_collection(&mut self, start_date: NaiveDate, end_date: NaiveDate) -> Result<()> {
@@ -538,47 +438,7 @@ impl DataCollectionView {
         Ok(())
     }
 
-    /// Run incremental update
-    pub fn run_incremental_update(&mut self) -> Result<()> {
-        self.log_info("Executing: cargo run --bin smart_collect");
-        
-        let output = Command::new("cargo")
-            .args(["run", "--bin", "smart_collect"])
-            .output()?;
 
-        if output.status.success() {
-            self.log_success("Incremental update completed successfully");
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            self.log_info(&format!("Output: {}", stdout.trim()));
-        } else {
-            self.log_error("Failed to perform incremental update");
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            self.log_error(&format!("Error: {}", stderr.trim()));
-        }
-
-        self.complete_operation();
-        Ok(())
-    }
-
-    /// Validate data integrity
-    pub fn validate_data_integrity(&mut self) -> Result<()> {
-        self.log_info("Validating data integrity...");
-        
-        // TODO: Implement actual data validation logic
-        self.log_info("Checking data completeness...");
-        self.log_info("Identifying data gaps...");
-        self.log_success("Data validation completed");
-        
-        self.complete_operation();
-        Ok(())
-    }
-
-    /// Show collection progress
-    pub fn show_collection_progress(&mut self) {
-        self.log_info("Showing collection progress...");
-        // TODO: Implement progress display
-        self.complete_operation();
-    }
 
     /// Start stock and date selection process
     pub fn start_stock_and_date_selection(&mut self) {

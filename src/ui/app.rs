@@ -1,42 +1,45 @@
 use anyhow::Result;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind},
+    event::{self, Event, KeyCode},
+    execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-    ExecutableCommand,
 };
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
-    Terminal, Frame,
+    widgets::{Block, Borders, Paragraph, Tabs},
+    Frame, Terminal,
 };
 use std::io;
 
-use crate::models::Config;
-use crate::database::DatabaseManager;
-use super::dashboard::Dashboard;
-use super::data_collection::DataCollectionView;
+use crate::{
+    database::DatabaseManager,
+    models::Config,
+    ui::{dashboard::Dashboard, data_collection::DataCollectionView},
+};
 
 pub struct StockTuiApp {
-    pub database: DatabaseManager,
+    pub selected_tab: usize,
+    pub should_quit: bool,
     pub dashboard: Dashboard,
     pub data_collection: DataCollectionView,
-    pub should_quit: bool,
-    pub selected_tab: usize,
+    pub database: DatabaseManager,
 }
 
 impl StockTuiApp {
     pub fn new(config: &Config) -> Result<Self> {
         let database = DatabaseManager::new(&config.database_path)?;
-        
+        let dashboard = Dashboard::new();
+        let data_collection = DataCollectionView::new();
+
         Ok(Self {
-            database,
-            dashboard: Dashboard::new(),
-            data_collection: DataCollectionView::new(),
-            should_quit: false,
             selected_tab: 0,
+            should_quit: false,
+            dashboard,
+            data_collection,
+            database,
         })
     }
 
@@ -55,12 +58,9 @@ impl StockTuiApp {
         
         // Render content based on selected tab
         match self.selected_tab {
-            0 => self.dashboard.render(f, chunks[1]),
-            1 => self.data_collection.render(f, chunks[1]),
-            2 => self.render_stock_analysis_view(f, chunks[1]),
-            3 => self.render_progress_analyzer_view(f, chunks[1]),
-            4 => self.render_settings_view(f, chunks[1]),
-            _ => self.dashboard.render(f, chunks[1]),
+            0 => self.data_collection.render(f, chunks[1]),
+            1 => self.render_data_analysis_view(f, chunks[1]),
+            _ => self.data_collection.render(f, chunks[1]),
         }
 
         // Render status bar
@@ -69,11 +69,8 @@ impl StockTuiApp {
 
     fn render_tab_bar(&self, f: &mut Frame, area: Rect) {
         let titles = vec![
-            "Dashboard",
-            "Data Collection", 
-            "Stock Analysis",
-            "Progress",
-            "Settings"
+            "Data Collection",
+            "Data Analysis",
         ];
         
         let tabs = ratatui::widgets::Tabs::new(titles)
@@ -85,60 +82,21 @@ impl StockTuiApp {
         f.render_widget(tabs, area);
     }
 
-    fn render_stock_analysis_view(&self, f: &mut Frame, area: Rect) {
+    fn render_data_analysis_view(&self, f: &mut Frame, area: Rect) {
         let paragraph = Paragraph::new(vec![
-            Line::from("🔍 Stock Analysis Features"),
+            Line::from("📊 Data Analysis"),
             Line::from(""),
-            Line::from("• P/E Ratio Analysis"),
-            Line::from("• Price Performance Tracking"), 
-            Line::from("• Market Trend Analysis"),
-            Line::from("• Portfolio Optimization"),
+            Line::from("Category: Data Analysis"),
+            Line::from(""),
+            Line::from("1. View data for any stock (latest, date range etc)"),
+            Line::from("2. Analyse data (e.g. show top 10 stocks with largest % fall in P/E ratio)"),
+            Line::from("3. Show stock with largest growth for a date range"),
             Line::from(""),
             Line::from("Coming Soon: Advanced analytics and stock screening"),
         ])
         .block(Block::default()
             .borders(Borders::ALL)
-            .title("📊 Stock Analysis"))
-        .style(Style::default().fg(Color::White));
-        
-        f.render_widget(paragraph, area);
-    }
-
-    fn render_progress_analyzer_view(&self, f: &mut Frame, area: Rect) {
-        let paragraph = Paragraph::new(vec![
-            Line::from("📈 Progress Analysis"),
-            Line::from(""),
-            Line::from("• Data collection completion: In Progress"),
-            Line::from("• Target: All S&P 500 companies"),
-            Line::from("• Date range: Jan 1, 2020 - Present"),
-            Line::from("• Expected records: ~1.5M price points"),
-            Line::from(""),
-            Line::from("Status will be shown here once data collection starts"),
-        ])
-        .block(Block::default()
-            .borders(Borders::ALL) 
-            .title("🎯 Progress Analyzer"))
-        .style(Style::default().fg(Color::White));
-        
-        f.render_widget(paragraph, area);
-    }
-
-    fn render_settings_view(&self, f: &mut Frame, area: Rect) {
-        let paragraph = Paragraph::new(vec![
-            Line::from("⚙️ System Settings"),
-            Line::from(""),
-            Line::from("• Schwab API Configuration"),
-            Line::from("• Database Settings"),
-            Line::from("• Collection Parameters"),
-            Line::from("• Display Preferences"),
-            Line::from(""),
-            Line::from("Configuration files:"),
-            Line::from("• .env - API credentials"),
-            Line::from("• stocks.db - SQLite database"),
-        ])
-        .block(Block::default()
-            .borders(Borders::ALL)
-            .title("⚙️ Settings"))
+            .title("📊 Data Analysis"))
         .style(Style::default().fg(Color::White));
         
         f.render_widget(paragraph, area);
@@ -166,7 +124,7 @@ impl StockTuiApp {
 
     pub fn handle_key_event(&mut self, key: KeyCode) -> Result<()> {
         // If we're in data collection view and it's executing, let it handle the event
-        if self.selected_tab == 1 && self.data_collection.is_executing {
+        if self.selected_tab == 0 && self.data_collection.is_executing {
             return self.data_collection.handle_key_event(key);
         }
 
@@ -185,7 +143,7 @@ impl StockTuiApp {
             }
             _ => {
                 // If we're in data collection view, let it handle other keys
-                if self.selected_tab == 1 {
+                if self.selected_tab == 0 {
                     self.data_collection.handle_key_event(key)?;
                 }
             }
@@ -194,17 +152,11 @@ impl StockTuiApp {
     }
 
     fn next_tab(&mut self) {
-        self.selected_tab = (self.selected_tab + 1) % 5;
+        self.selected_tab = (self.selected_tab + 1) % 2;
     }
 
     fn previous_tab(&mut self) {
-        self.selected_tab = if self.selected_tab == 0 { 4 } else { self.selected_tab - 1 };
-    }
-
-    fn select_tab(&mut self, tab: usize) {
-        if tab < 5 {
-            self.selected_tab = tab;
-        }
+        self.selected_tab = if self.selected_tab == 0 { 1 } else { 0 };
     }
 
     fn refresh_data(&mut self) -> Result<()> {
@@ -218,7 +170,7 @@ impl StockTuiApp {
 pub fn run_app() -> Result<()> {
     // Setup terminal
     enable_raw_mode()?;
-    io::stdout().execute(EnterAlternateScreen)?;
+    execute!(io::stdout(), EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
     
@@ -238,20 +190,18 @@ pub fn run_app() -> Result<()> {
 
         // Handle events
         if let Ok(Event::Key(key)) = event::read() {
-            if key.kind == KeyEventKind::Press {
-                if let Err(e) = app.handle_key_event(key.code) {
-                    break Err(e);
-                }
+            if let Err(e) = app.handle_key_event(key.code) {
+                break Err(e);
+            }
 
-                if app.should_quit {
-                    break Ok(());
-                }
+            if app.should_quit {
+                break Ok(());
             }
         }
     };
 
     // Cleanup terminal
     disable_raw_mode()?;
-    io::stdout().execute(LeaveAlternateScreen)?;
+    execute!(io::stdout(), LeaveAlternateScreen)?;
     result
 }

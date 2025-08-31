@@ -111,7 +111,7 @@ impl DataCollectionView {
                 id: "single_stock".to_string(),
                 title: "📈 Fetch Single Stock Data".to_string(),
                 description: "Fetch data for a specific stock and date range".to_string(),
-                requires_confirmation: true,
+                requires_confirmation: false,
                 action_type: ActionType::SelectStockAndDates,
             },
             DataCollectionAction {

@@ -455,14 +455,38 @@ impl DataCollectionView {
 
     /// Get available stocks from database
     fn get_available_stocks(&self) -> Vec<String> {
-        // For now, return a sample list. In a real implementation, this would query the database
-        vec![
-            "AAPL".to_string(), "MSFT".to_string(), "GOOGL".to_string(), "AMZN".to_string(),
-            "TSLA".to_string(), "META".to_string(), "NVDA".to_string(), "NFLX".to_string(),
-            "JPM".to_string(), "JNJ".to_string(), "PG".to_string(), "V".to_string(),
-            "HD".to_string(), "DIS".to_string(), "PYPL".to_string(), "INTC".to_string(),
-            "VZ".to_string(), "ADBE".to_string(), "CRM".to_string(), "NKE".to_string(),
-        ]
+        // Query the database for all active stocks
+        match crate::database::DatabaseManager::new("stocks.db") {
+            Ok(database) => {
+                match database.get_active_stocks() {
+                    Ok(stocks) => {
+                        stocks.into_iter()
+                            .map(|stock| stock.symbol)
+                            .collect()
+                    }
+                    Err(_) => {
+                        // Fallback to sample list if database query fails
+                        vec![
+                            "AAPL".to_string(), "MSFT".to_string(), "GOOGL".to_string(), "AMZN".to_string(),
+                            "TSLA".to_string(), "META".to_string(), "NVDA".to_string(), "NFLX".to_string(),
+                            "JPM".to_string(), "JNJ".to_string(), "PG".to_string(), "V".to_string(),
+                            "HD".to_string(), "DIS".to_string(), "PYPL".to_string(), "INTC".to_string(),
+                            "VZ".to_string(), "ADBE".to_string(), "CRM".to_string(), "NKE".to_string(),
+                        ]
+                    }
+                }
+            }
+            Err(_) => {
+                // Fallback to sample list if database connection fails
+                vec![
+                    "AAPL".to_string(), "MSFT".to_string(), "GOOGL".to_string(), "AMZN".to_string(),
+                    "TSLA".to_string(), "META".to_string(), "NVDA".to_string(), "NFLX".to_string(),
+                    "JPM".to_string(), "JNJ".to_string(), "PG".to_string(), "V".to_string(),
+                    "HD".to_string(), "DIS".to_string(), "PYPL".to_string(), "INTC".to_string(),
+                    "VZ".to_string(), "ADBE".to_string(), "CRM".to_string(), "NKE".to_string(),
+                ]
+            }
+        }
     }
 
     /// Filter stocks based on search query

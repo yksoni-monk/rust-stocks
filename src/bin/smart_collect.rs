@@ -1,12 +1,11 @@
 use anyhow::Result;
-use chrono::NaiveDate;
+use chrono::{NaiveDate, Datelike};
 use std::env;
 
 use rust_stocks::api::{SchwabClient, StockDataProvider};
 use rust_stocks::database::DatabaseManager;
 use rust_stocks::data_collector::DataCollector;
 use rust_stocks::models::Config;
-use rust_stocks::utils::MarketCalendar;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -21,33 +20,31 @@ async fn main() -> Result<()> {
     let start_str = &args[1];
     let end_str = if args.len() > 2 { &args[2] } else { start_str };
 
-    println!("🗓️  Smart Stock Data Collection with Market Calendar");
+    println!("🗓️  Smart Stock Data Collection");
     println!("📅 Requested date range: {} to {}", start_str, end_str);
 
     // Parse dates
     let start_date = parse_date(start_str)?;
     let end_date = parse_date(end_str)?;
 
+    // Simple weekend adjustment
+    let adjusted_start = adjust_for_weekend(start_date);
+    let adjusted_end = adjust_for_weekend(end_date);
+
+    if adjusted_start != start_date || adjusted_end != end_date {
+        println!("📅 Date range adjusted for weekends:");
+        println!("   Original: {} to {}", start_date, end_date);
+        println!("   Adjusted: {} to {}", adjusted_start, adjusted_end);
+    } else {
+        println!("✅ Requested dates are valid (not weekends)");
+    }
+
     // Setup
     let config = Config::from_env()?;
     let database = DatabaseManager::new(&config.database_path)?;
     let client = SchwabClient::new(&config)?;
-    let calendar = MarketCalendar::new(SchwabClient::new(&config)?);
 
     println!("✅ Setup complete");
-
-    // Check if dates are trading days and adjust if needed
-    println!("\n🗓️  Checking market calendar...");
-    
-    let (adjusted_start, adjusted_end) = calendar.adjust_date_range(start_date, end_date).await?;
-    
-    if adjusted_start != start_date || adjusted_end != end_date {
-        println!("📅 Date range adjusted for trading days:");
-        println!("   Original: {} to {}", start_date, end_date);
-        println!("   Adjusted: {} to {}", adjusted_start, adjusted_end);
-    } else {
-        println!("✅ Requested dates are valid trading days");
-    }
 
     // Get first 10 stocks to test with
     let data_collector = DataCollector::new(client, database, config);
@@ -80,8 +77,8 @@ async fn main() -> Result<()> {
     }
 
     println!("\n🎉 Completed! Total records: {}", total_records);
-    println!("💡 Market calendar handled {} weekend/holiday adjustments", 
-             if adjusted_start != start_date || adjusted_end != end_date { "automatic" } else { "no" });
+    println!("💡 Weekend adjustment handled: {}", 
+             if adjusted_start != start_date || adjusted_end != end_date { "yes" } else { "no" });
     
     Ok(())
 }
@@ -97,4 +94,12 @@ fn parse_date(date_str: &str) -> Result<NaiveDate> {
     
     NaiveDate::from_ymd_opt(year, month, day)
         .ok_or_else(|| anyhow::anyhow!("Invalid date"))
+}
+
+fn adjust_for_weekend(date: NaiveDate) -> NaiveDate {
+    match date.weekday() {
+        chrono::Weekday::Sat => date - chrono::Duration::days(1), // Saturday -> Friday
+        chrono::Weekday::Sun => date - chrono::Duration::days(2), // Sunday -> Friday
+        _ => date, // Weekdays stay the same
+    }
 }

@@ -93,8 +93,10 @@ pub struct DateSelectionState {
     pub selected_stock: String,
     pub start_date: NaiveDate,
     pub end_date: NaiveDate,
-    pub current_field: DateField, // start_date or end_date
-    pub current_input: String,
+    pub selected_field: DateField, // start_date or end_date
+    pub start_date_input: String,
+    pub end_date_input: String,
+    pub cursor_position: usize, // cursor position within the current field
 }
 
 /// Date field being edited
@@ -249,70 +251,116 @@ impl DataCollectionView {
         // Handle date selection
         if let Some(ref mut date_state) = self.date_selection_state {
             match key {
+                crossterm::event::KeyCode::Up => {
+                    // Navigate to previous field
+                    date_state.selected_field = match date_state.selected_field {
+                        DateField::StartDate => DateField::EndDate,
+                        DateField::EndDate => DateField::StartDate,
+                    };
+                    date_state.cursor_position = 0;
+                }
+                crossterm::event::KeyCode::Down => {
+                    // Navigate to next field
+                    date_state.selected_field = match date_state.selected_field {
+                        DateField::StartDate => DateField::EndDate,
+                        DateField::EndDate => DateField::StartDate,
+                    };
+                    date_state.cursor_position = 0;
+                }
+                crossterm::event::KeyCode::Left => {
+                    // Move cursor left within current field
+                    if date_state.cursor_position > 0 {
+                        date_state.cursor_position -= 1;
+                    }
+                }
+                crossterm::event::KeyCode::Right => {
+                    // Move cursor right within current field
+                    let current_input = match date_state.selected_field {
+                        DateField::StartDate => &date_state.start_date_input,
+                        DateField::EndDate => &date_state.end_date_input,
+                    };
+                    if date_state.cursor_position < current_input.len() {
+                        date_state.cursor_position += 1;
+                    }
+                }
                 crossterm::event::KeyCode::Char(c) => {
+                    // Only allow digits and hyphens
                     if c.is_numeric() || c == '-' {
-                        date_state.current_input.push(c);
+                        let current_input = match date_state.selected_field {
+                            DateField::StartDate => &mut date_state.start_date_input,
+                            DateField::EndDate => &mut date_state.end_date_input,
+                        };
+                        
+                        if date_state.cursor_position <= current_input.len() {
+                            current_input.insert(date_state.cursor_position, c);
+                            date_state.cursor_position += 1;
+                        }
                     }
                 }
                 crossterm::event::KeyCode::Backspace => {
-                    date_state.current_input.pop();
+                    let current_input = match date_state.selected_field {
+                        DateField::StartDate => &mut date_state.start_date_input,
+                        DateField::EndDate => &mut date_state.end_date_input,
+                    };
+                    
+                    if date_state.cursor_position > 0 {
+                        current_input.remove(date_state.cursor_position - 1);
+                        date_state.cursor_position -= 1;
+                    }
+                }
+                crossterm::event::KeyCode::Delete => {
+                    let current_input = match date_state.selected_field {
+                        DateField::StartDate => &mut date_state.start_date_input,
+                        DateField::EndDate => &mut date_state.end_date_input,
+                    };
+                    
+                    if date_state.cursor_position < current_input.len() {
+                        current_input.remove(date_state.cursor_position);
+                    }
                 }
                 crossterm::event::KeyCode::Enter => {
-                    // Parse the date input
-                    let input = date_state.current_input.clone();
+                    // Extract values before mutable borrow
+                    let selected_stock = date_state.selected_stock.clone();
+                    let start_input = date_state.start_date_input.clone();
+                    let end_input = date_state.end_date_input.clone();
                     
-                    // Parse date manually to avoid borrowing issues
-                    let parse_result = if input.len() == 8 {
-                        // YYYYMMDD format
-                        let year: i32 = input[0..4].parse().unwrap_or(0);
-                        let month: u32 = input[4..6].parse().unwrap_or(0);
-                        let day: u32 = input[6..8].parse().unwrap_or(0);
-                        NaiveDate::from_ymd_opt(year, month, day)
-                    } else if input.len() == 10 && input.contains('-') {
-                        // YYYY-MM-DD format
-                        NaiveDate::parse_from_str(&input, "%Y-%m-%d").ok()
-                    } else {
-                        None
-                    };
-                        
-                        if let Some(date) = parse_result {
-                            match date_state.current_field {
-                                DateField::StartDate => {
-                                    date_state.start_date = date;
-                                    date_state.current_field = DateField::EndDate;
-                                    date_state.current_input.clear();
-                                    // Store log message for later
-                                    self.pending_log_message = Some(format!("Start date set to: {}. Now enter end date:", date));
-                                    self.pending_log_level = Some(LogLevel::Info);
-                                }
-                                DateField::EndDate => {
-                                    date_state.end_date = date;
-                                    // Store log message and action for later
-                                    self.pending_log_message = Some(format!("End date set to: {}. Starting collection...", date));
-                                    self.pending_log_level = Some(LogLevel::Info);
-                                    
-                                    let symbol = date_state.selected_stock.clone();
-                                    let start_date = date_state.start_date;
-                                    let end_date = date;
-                                    
-                                    // Clear state and start operation
-                                    self.date_selection_state = None;
-                                    self.process_pending_logs();
-                                    
-                                    let action_type = ActionType::SingleStockCollection {
-                                        symbol,
-                                        start_date,
-                                        end_date,
-                                    };
-                                    self.start_operation_by_type(&action_type)?;
-                                    return Ok(());
-                                }
+                    // Parse dates outside of mutable borrow
+                    let start_result = self.parse_date_input(&start_input);
+                    let end_result = self.parse_date_input(&end_input);
+                    
+                    match (start_result, end_result) {
+                        (Ok(start_date), Ok(end_date)) => {
+                            if start_date > end_date {
+                                self.pending_log_message = Some("Start date cannot be after end date".to_string());
+                                self.pending_log_level = Some(LogLevel::Error);
+                            } else {
+                                // Store log message and action for later
+                                self.pending_log_message = Some(format!("Starting collection for {} from {} to {}", 
+                                    selected_stock, start_date, end_date));
+                                self.pending_log_level = Some(LogLevel::Info);
+                                
+                                // Clear state and start operation
+                                self.date_selection_state = None;
+                                self.process_pending_logs();
+                                
+                                let action_type = ActionType::SingleStockCollection {
+                                    symbol: selected_stock,
+                                    start_date,
+                                    end_date,
+                                };
+                                self.start_operation_by_type(&action_type)?;
+                                return Ok(());
                             }
-                        } else {
-                            date_state.current_input.clear();
-                            self.pending_log_message = Some("Invalid date format. Use YYYYMMDD or YYYY-MM-DD".to_string());
+                        }
+                        (Err(_), _) => {
+                            self.pending_log_message = Some("Invalid start date format. Use YYYY-MM-DD".to_string());
                             self.pending_log_level = Some(LogLevel::Error);
                         }
+                        (_, Err(_)) => {
+                            self.pending_log_message = Some("Invalid end date format. Use YYYY-MM-DD".to_string());
+                            self.pending_log_level = Some(LogLevel::Error);
+                        }
+                    }
                 }
                 crossterm::event::KeyCode::Esc => {
                     self.log_info("Date selection cancelled");
@@ -516,20 +564,36 @@ impl DataCollectionView {
             selected_stock: stock,
             start_date: default_start,
             end_date: today,
-            current_field: DateField::StartDate,
-            current_input: String::new(),
+            selected_field: DateField::StartDate,
+            start_date_input: default_start.format("%Y-%m-%d").to_string(),
+            end_date_input: today.format("%Y-%m-%d").to_string(),
+            cursor_position: 0,
         });
         
         self.stock_selection_state = None;
-        self.log_info("Date selection started. Tab to switch fields, Enter to confirm");
+        self.log_info("Date selection started. Use ↑/↓ to navigate, ←/→ to edit, Enter to confirm");
     }
 
 
 
-    /// Parse date input in YYYYMMDD format
+    /// Parse date input in YYYY-MM-DD format
     fn parse_date_input(&self, input: &str) -> Result<NaiveDate> {
+        // Try YYYY-MM-DD format first
+        if input.len() == 10 && input.contains('-') {
+            let parts: Vec<&str> = input.split('-').collect();
+            if parts.len() == 3 {
+                let year: i32 = parts[0].parse()?;
+                let month: u32 = parts[1].parse()?;
+                let day: u32 = parts[2].parse()?;
+                
+                return NaiveDate::from_ymd_opt(year, month, day)
+                    .ok_or_else(|| anyhow::anyhow!("Invalid date"));
+            }
+        }
+        
+        // Fallback to YYYYMMDD format
         if input.len() != 8 {
-            return Err(anyhow::anyhow!("Date must be YYYYMMDD format"));
+            return Err(anyhow::anyhow!("Date must be YYYY-MM-DD or YYYYMMDD format"));
         }
         
         let year: i32 = input[0..4].parse()?;
@@ -814,60 +878,78 @@ impl DataCollectionView {
         f.render_widget(title, chunks[0]);
 
         // Date inputs
-        let start_style = if matches!(date_state.current_field, DateField::StartDate) {
+        let start_selected = matches!(date_state.selected_field, DateField::StartDate);
+        let end_selected = matches!(date_state.selected_field, DateField::EndDate);
+        
+        let start_style = if start_selected {
             Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::White)
         };
 
-        let end_style = if matches!(date_state.current_field, DateField::EndDate) {
+        let end_style = if end_selected {
             Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::White)
         };
-
-        let start_date_str = date_state.start_date.format("%Y-%m-%d").to_string();
-        let end_date_str = date_state.end_date.format("%Y-%m-%d").to_string();
+        
+        // Create input field strings with cursor
+        let start_input_with_cursor = self.render_input_field(&date_state.start_date_input, date_state.cursor_position, start_selected);
+        let end_input_with_cursor = self.render_input_field(&date_state.end_date_input, date_state.cursor_position, end_selected);
         
         let date_content = vec![
             Line::from(vec![
+                Span::styled("📅 Default Date Range", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            ]),
+            Line::from(vec![Span::styled("", Style::default())]),
+            Line::from(vec![
                 Span::styled("Start Date: ", start_style),
-                Span::styled(&start_date_str, start_style),
+                Span::styled(&start_input_with_cursor, start_style),
             ]),
             Line::from(vec![Span::styled("", Style::default())]),
             Line::from(vec![
                 Span::styled("End Date: ", end_style),
-                Span::styled(&end_date_str, end_style),
+                Span::styled(&end_input_with_cursor, end_style),
             ]),
             Line::from(vec![Span::styled("", Style::default())]),
             Line::from(vec![
-                Span::styled(match date_state.current_field {
-                    DateField::StartDate => "Enter Start Date: ",
-                    DateField::EndDate => "Enter End Date: ",
-                }, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                Span::styled(&date_state.current_input, Style::default().fg(Color::Yellow)),
-                Span::styled("_", Style::default().fg(Color::Yellow)),
+                Span::styled("Format: YYYY-MM-DD (e.g., 2024-01-01)", Style::default().fg(Color::Gray)),
             ]),
             Line::from(vec![Span::styled("", Style::default())]),
             Line::from(vec![
-                Span::styled("Format: YYYYMMDD (e.g., 20240101) or YYYY-MM-DD (e.g., 2024-01-01)", Style::default().fg(Color::Gray)),
+                Span::styled("↑/↓: Navigate fields • ←/→: Move cursor • Enter: Start collection • Esc: Cancel", Style::default().fg(Color::Gray)),
             ]),
         ];
 
         let date_inputs = Paragraph::new(date_content)
-            .block(Block::default().borders(Borders::ALL).title("Date Range"))
+            .block(Block::default().borders(Borders::ALL).title("Date Range Selection"))
             .style(Style::default().fg(Color::White));
         f.render_widget(date_inputs, chunks[1]);
 
         // Status
-        let status_text = match date_state.current_field {
-            DateField::StartDate => "Type start date and press Enter • Esc: Cancel",
-            DateField::EndDate => "Type end date and press Enter • Esc: Cancel",
+        let status_text = match date_state.selected_field {
+            DateField::StartDate => "Editing start date • Use arrow keys to navigate • Enter to start collection",
+            DateField::EndDate => "Editing end date • Use arrow keys to navigate • Enter to start collection",
         };
         let status = Paragraph::new(status_text)
             .block(Block::default().borders(Borders::ALL))
             .style(Style::default().fg(Color::Gray));
         f.render_widget(status, chunks[2]);
+    }
+
+    /// Render an input field with cursor
+    fn render_input_field(&self, input: &str, cursor_pos: usize, is_selected: bool) -> String {
+        if !is_selected {
+            return input.to_string();
+        }
+        
+        let mut result = input.to_string();
+        if cursor_pos <= result.len() {
+            result.insert(cursor_pos, '|');
+        } else {
+            result.push('|');
+        }
+        result
     }
 
     /// Render the actions list

@@ -311,7 +311,7 @@ pub struct DataGap {
     pub symbol: String,
     pub missing_range: DateRange,
     pub missing_days: usize,
-    pub priority: Priority,
+    pub priority_score: f64,
 }
 
 /// Gap analysis summary
@@ -323,55 +323,3 @@ pub struct GapAnalysis {
     pub estimated_collection_time: std::time::Duration,
 }
 
-/// Action recommendation
-#[derive(Debug, Clone)]
-pub struct ActionRecommendation {
-    pub action_type: ActionType,
-    pub priority: Priority,
-    pub description: String,
-    pub estimated_impact: String,
-}
-
-/// Action type enumeration
-#[derive(Debug, Clone)]
-pub enum ActionType {
-    CollectMissingData { 
-        symbols: Vec<String>, 
-        date_range: DateRange 
-    },
-    FillDataGaps { 
-        symbol: String, 
-        gaps: Vec<DateRange> 
-    },
-    ValidateDataQuality { 
-        symbols: Vec<String> 
-    },
-    UpdateRecentData,
-}
-
-/// Priority levels
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Priority {
-    Low,
-    Medium,
-    High,
-    Critical,
-}
-
-/// Search mode for stock analysis
-#[derive(Debug, Clone, PartialEq)]
-pub enum SearchMode {
-    BySymbol,
-    ByCompanyName,
-    BySector,
-}
-
-/// Application view states
-#[derive(Debug, Clone, PartialEq)]
-pub enum AppView {
-    Dashboard,
-    DataCollection,
-    StockAnalysis,
-    ProgressAnalyzer,
-    Settings,
-}

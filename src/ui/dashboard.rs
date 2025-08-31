@@ -12,7 +12,6 @@ use crate::database::DatabaseManager;
 
 pub struct Dashboard {
     pub database_stats: Option<DatabaseStats>,
-    pub target_date: NaiveDate,
 }
 
 // Simple database stats structure
@@ -29,7 +28,6 @@ impl Dashboard {
     pub fn new() -> Self {
         Self {
             database_stats: None,
-            target_date: NaiveDate::from_ymd_opt(2020, 1, 1).unwrap(),
         }
     }
 

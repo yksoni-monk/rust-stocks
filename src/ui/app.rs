@@ -9,7 +9,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Paragraph},
     Terminal, Frame,
 };
 use std::io;
@@ -17,10 +17,12 @@ use std::io;
 use crate::models::Config;
 use crate::database::DatabaseManager;
 use super::dashboard::Dashboard;
+use super::data_collection::DataCollectionView;
 
 pub struct StockTuiApp {
     pub database: DatabaseManager,
     pub dashboard: Dashboard,
+    pub data_collection: DataCollectionView,
     pub should_quit: bool,
     pub selected_tab: usize,
 }
@@ -32,6 +34,7 @@ impl StockTuiApp {
         Ok(Self {
             database,
             dashboard: Dashboard::new(),
+            data_collection: DataCollectionView::new(),
             should_quit: false,
             selected_tab: 0,
         })
@@ -53,7 +56,7 @@ impl StockTuiApp {
         // Render content based on selected tab
         match self.selected_tab {
             0 => self.dashboard.render(f, chunks[1]),
-            1 => self.render_data_collection_view(f, chunks[1]),
+            1 => self.data_collection.render(f, chunks[1]),
             2 => self.render_stock_analysis_view(f, chunks[1]),
             3 => self.render_progress_analyzer_view(f, chunks[1]),
             4 => self.render_settings_view(f, chunks[1]),
@@ -80,27 +83,6 @@ impl StockTuiApp {
             .select(self.selected_tab);
             
         f.render_widget(tabs, area);
-    }
-
-    fn render_data_collection_view(&self, f: &mut Frame, area: Rect) {
-        let items = vec![
-            ListItem::new("📋 Update S&P 500 company list"),
-            ListItem::new("📈 Collect historical data (2020-2025)"),
-            ListItem::new("🔄 Incremental daily updates"),
-            ListItem::new("📊 Validate data integrity"),
-            ListItem::new(""),
-            ListItem::new("Instructions:"),
-            ListItem::new("• Run: cargo run --bin update_sp500"),
-            ListItem::new("• Run: cargo run --bin collect_with_detailed_logs -- -s 20240101"),
-        ];
-        
-        let list = List::new(items)
-            .block(Block::default()
-                .borders(Borders::ALL)
-                .title("🚀 Data Collection"))
-            .style(Style::default().fg(Color::White));
-            
-        f.render_widget(list, area);
     }
 
     fn render_stock_analysis_view(&self, f: &mut Frame, area: Rect) {
@@ -183,6 +165,11 @@ impl StockTuiApp {
     }
 
     pub fn handle_key_event(&mut self, key: KeyCode) -> Result<()> {
+        // If we're in data collection view and it's executing, let it handle the event
+        if self.selected_tab == 1 && self.data_collection.is_executing {
+            return self.data_collection.handle_key_event(key);
+        }
+
         match key {
             KeyCode::Char('q') | KeyCode::Char('Q') => {
                 self.should_quit = true;
@@ -211,7 +198,12 @@ impl StockTuiApp {
             KeyCode::Char('5') => {
                 self.select_tab(4);
             }
-            _ => {}
+            _ => {
+                // If we're in data collection view, let it handle other keys
+                if self.selected_tab == 1 {
+                    self.data_collection.handle_key_event(key)?;
+                }
+            }
         }
         Ok(())
     }

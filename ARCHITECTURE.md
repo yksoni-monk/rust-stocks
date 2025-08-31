@@ -526,43 +526,61 @@ struct CollectionProgress {
 
 ```rust
 struct DataCollectionView {
-    collection_mode: CollectionMode,
-    progress_tracker: ProgressTracker,
-    stock_status_list: Vec<StockCollectionStatus>,
-    active_collection: Option<ActiveCollection>,
+    selected_action: usize,
+    actions: Vec<DataCollectionAction>,
+    is_executing: bool,
+    current_operation: Option<ActiveOperation>,
+    log_messages: Vec<LogMessage>,
+    date_range: Option<DateRange>,
 }
 
-enum CollectionMode {
-    FullHistorical,    // Jan 1, 2020 to today for all stocks
-    IncrementalUpdate, // Latest data only
-    CustomRange,       // User-specified date range
-    SingleStock,       // Individual stock collection
+struct DataCollectionAction {
+    id: String,
+    title: String,
+    description: String,
+    action_type: ActionType,
+    requires_confirmation: bool,
 }
 
-struct StockCollectionStatus {
-    symbol: String,
-    company_name: String,
-    status: CollectionStatus,
-    date_range: Option<(NaiveDate, NaiveDate)>,
-    record_count: usize,
-    progress_percentage: f64,
+enum ActionType {
+    UpdateSP500List,
+    CollectHistoricalData { start_date: NaiveDate, end_date: NaiveDate },
+    IncrementalUpdate,
+    ValidateData,
+    ViewProgress,
 }
 
-enum CollectionStatus {
-    NotStarted,
-    InProgress { current_date: NaiveDate },
-    Completed,
-    Failed { error: String },
-    PartialData { gaps: Vec<DateRange> },
+struct ActiveOperation {
+    action_id: String,
+    start_time: DateTime<Utc>,
+    progress: f64,
+    current_message: String,
+    logs: Vec<String>,
+}
+
+struct LogMessage {
+    timestamp: DateTime<Utc>,
+    level: LogLevel,
+    message: String,
+}
+
+enum LogLevel {
+    Info,
+    Success,
+    Warning,
+    Error,
 }
 ```
 
 **Features**:
-- 🚀 **Interactive Data Collection**: Start/stop/pause collection processes
-- 📋 **Stock-by-Stock Progress**: Real-time status for all 503 S&P 500 companies
-- 📅 **Date Range Management**: Visual representation of data coverage
-- 🔄 **Smart Collection**: Automatically handle weekends/holidays using market calendar
-- ⚠️ **Gap Detection**: Identify and prioritize missing data ranges
+- 🎯 **Interactive Action Selection**: Arrow keys navigation with Enter to execute
+- 🚀 **Direct Execution**: Run data collection operations from within TUI
+- 📊 **Real-time Progress**: Live progress bars and status updates
+- 📝 **Live Logging**: Real-time log display during operations
+- 📅 **Date Range Selection**: Interactive date picker for historical data
+- ⏸️ **Operation Control**: Start, pause, cancel operations
+- 🔄 **Background Processing**: Non-blocking UI during long operations
+- ✅ **Status Feedback**: Success/failure indicators with detailed messages
 
 #### 3. Stock Analysis View (`ui/stock_analysis.rs`)
 **Purpose**: Interactive stock search, selection, and analysis
@@ -725,11 +743,96 @@ struct MainApp {
    - Transaction support for bulk operations
 
 ### Phase 3 Implementation Plan: Enhanced UI & Analysis
-1. **Enhanced Terminal UI**: ✅ **DESIGNED** - Comprehensive Ratatui application with multiple views
-2. **Data Progress Tracking**: ✅ **DESIGNED** - Complete progress analysis and gap detection
-3. **Interactive Data Collection**: ✅ **DESIGNED** - User-friendly collection interface
+1. **Enhanced Terminal UI**: ✅ **COMPLETED** - Comprehensive Ratatui application with multiple views
+2. **Interactive Data Collection**: 🔄 **IN PROGRESS** - Interactive action selection and execution
+3. **Data Progress Tracking**: ✅ **DESIGNED** - Complete progress analysis and gap detection
 4. **Advanced Stock Analysis**: ✅ **DESIGNED** - Search, charts, and metrics analysis
 5. **Real-time Monitoring**: ✅ **DESIGNED** - Background operations with live updates
+
+### Interactive Data Collection Implementation
+
+#### Action Definitions
+```rust
+let actions = vec![
+    DataCollectionAction {
+        id: "update_sp500".to_string(),
+        title: "📋 Update S&P 500 company list".to_string(),
+        description: "Fetch latest S&P 500 constituents from official sources".to_string(),
+        action_type: ActionType::UpdateSP500List,
+        requires_confirmation: false,
+    },
+    DataCollectionAction {
+        id: "collect_historical".to_string(),
+        title: "📈 Collect historical data (2020-2025)".to_string(),
+        description: "Fetch complete historical OHLC data for all stocks".to_string(),
+        action_type: ActionType::CollectHistoricalData { 
+            start_date: NaiveDate::from_ymd_opt(2020, 1, 1).unwrap(),
+            end_date: chrono::Utc::now().date_naive(),
+        },
+        requires_confirmation: true,
+    },
+    DataCollectionAction {
+        id: "incremental_update".to_string(),
+        title: "🔄 Incremental daily updates".to_string(),
+        description: "Fetch latest data since last update".to_string(),
+        action_type: ActionType::IncrementalUpdate,
+        requires_confirmation: false,
+    },
+    DataCollectionAction {
+        id: "validate_data".to_string(),
+        title: "📊 Validate data integrity".to_string(),
+        description: "Check data completeness and identify gaps".to_string(),
+        action_type: ActionType::ValidateData,
+        requires_confirmation: false,
+    },
+    DataCollectionAction {
+        id: "view_progress".to_string(),
+        title: "📊 View collection progress".to_string(),
+        description: "Show current data collection status".to_string(),
+        action_type: ActionType::ViewProgress,
+        requires_confirmation: false,
+    },
+];
+```
+
+#### User Interaction Flow
+1. **Navigation**: Arrow keys (↑/↓) to select action
+2. **Selection**: Enter to execute selected action
+3. **Confirmation**: For destructive operations, show confirmation dialog
+4. **Execution**: Run operation in background with progress updates
+5. **Feedback**: Display real-time logs and status messages
+6. **Completion**: Show success/failure summary
+
+#### Operation Execution
+```rust
+async fn execute_action(&mut self, action: &DataCollectionAction) -> Result<()> {
+    match &action.action_type {
+        ActionType::UpdateSP500List => {
+            self.log_info("Starting S&P 500 list update...");
+            // Execute: cargo run --bin update_sp500
+            self.run_update_sp500().await?;
+        }
+        ActionType::CollectHistoricalData { start_date, end_date } => {
+            self.log_info(&format!("Starting historical data collection from {} to {}", start_date, end_date));
+            // Execute: cargo run --bin collect_with_detailed_logs -- -s {start_date} -e {end_date}
+            self.run_historical_collection(*start_date, *end_date).await?;
+        }
+        ActionType::IncrementalUpdate => {
+            self.log_info("Starting incremental update...");
+            // Execute: cargo run --bin smart_collect
+            self.run_incremental_update().await?;
+        }
+        ActionType::ValidateData => {
+            self.log_info("Validating data integrity...");
+            self.validate_data_integrity().await?;
+        }
+        ActionType::ViewProgress => {
+            self.show_collection_progress();
+        }
+    }
+    Ok(())
+}
+```
 
 ### Known Challenges & Solutions
 - **Rate Limiting**: Use governor crate for request throttling

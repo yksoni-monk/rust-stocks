@@ -308,6 +308,69 @@ impl DataCollector {
         
         Ok(validation_report)
     }
+
+    /// Fetch data for a single stock in batches with progress updates
+    pub async fn fetch_single_stock_batched(
+        &self,
+        symbol: &str,
+        start_date: NaiveDate,
+        end_date: NaiveDate,
+        batch_size: usize,
+        progress_callback: Option<Box<dyn Fn(String) + Send>>,
+    ) -> Result<usize> {
+        let total_days = (end_date - start_date).num_days() as usize;
+        let total_batches = (total_days + batch_size - 1) / batch_size;
+        let mut total_bars = 0;
+        let mut current_date = start_date;
+
+        if let Some(ref callback) = progress_callback {
+            callback(format!("Starting batched collection for {} ({} days, {} batches)", 
+                           symbol, total_days, total_batches));
+        }
+
+        for batch_num in 1..=total_batches {
+            if let Some(ref callback) = progress_callback {
+                callback(format!("Batch {}/{}: Fetching {} to {}", 
+                               batch_num, total_batches, current_date, end_date));
+            }
+
+            // Calculate batch end date
+            let batch_end_date = if batch_num == total_batches {
+                end_date
+            } else {
+                current_date + chrono::Duration::days(batch_size as i64 - 1)
+            };
+
+            // Fetch data for this batch
+            match self.schwab_client.get_price_history(symbol, current_date, batch_end_date).await {
+                Ok(bars) => {
+                    total_bars += bars.len();
+                    if let Some(ref callback) = progress_callback {
+                        callback(format!("✅ Batch {}: Fetched {} bars (Total: {})", 
+                                       batch_num, bars.len(), total_bars));
+                    }
+                }
+                Err(e) => {
+                    if let Some(ref callback) = progress_callback {
+                        callback(format!("❌ Batch {}: Error - {}", batch_num, e));
+                    }
+                    // Continue with next batch instead of failing completely
+                }
+            }
+
+            // Move to next batch start date
+            current_date = batch_end_date + chrono::Duration::days(1);
+            
+            // Add a small delay between batches to avoid rate limiting
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        }
+
+        if let Some(ref callback) = progress_callback {
+            callback(format!("🎉 Collection complete! Total bars: {}", total_bars));
+        }
+
+        Ok(total_bars)
+    }
 }
 
 /// Statistics about data collection

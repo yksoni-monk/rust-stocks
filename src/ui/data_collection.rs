@@ -661,24 +661,38 @@ impl DataCollectionView {
             .ok_or_else(|| anyhow::anyhow!("Invalid date"))
     }
 
-    /// Run single stock collection
+    /// Run single stock collection using batched approach
     pub fn run_single_stock_collection(&mut self, symbol: String, start_date: NaiveDate, end_date: NaiveDate) -> Result<()> {
-        self.log_info(&format!("Starting single stock collection for {} from {} to {}", symbol, start_date, end_date));
+        self.log_info(&format!("Starting batched single stock collection for {} from {} to {}", symbol, start_date, end_date));
         
-        // Use smart_collect binary with specific parameters
+        // Create a progress callback that logs to the TUI
+        let _progress_callback = Box::new(|_message: String| {
+            // This will be called from the async function to update the UI
+            // For now, we'll use a simple approach
+        });
+        
+        // For now, let's use the working batched test approach
         let start_str = start_date.format("%Y%m%d").to_string();
         let end_str = end_date.format("%Y%m%d").to_string();
         
-        self.log_info(&format!("Executing: cargo run --bin smart_collect -- {} {}", start_str, end_str));
+        self.log_info(&format!("Executing: cargo run --bin test_batched_stock -- {} {} {}", symbol, start_str, end_str));
         
         let output = Command::new("cargo")
-            .args(["run", "--bin", "smart_collect", "--", &start_str, &end_str])
+            .args(["run", "--bin", "test_batched_stock", "--", &symbol, &start_str, &end_str])
             .output()?;
 
         if output.status.success() {
-            self.log_success(&format!("Single stock collection completed for {}", symbol));
+            self.log_success(&format!("Batched single stock collection completed for {}", symbol));
             let stdout = String::from_utf8_lossy(&output.stdout);
-            self.log_info(&format!("Output: {}", stdout.trim()));
+            
+            // Parse the output and log the progress
+            for line in stdout.lines() {
+                if line.contains("🔄 Batch") || line.contains("✅ Batch") || line.contains("❌ Batch") {
+                    self.log_info(line);
+                } else if line.contains("🎉") {
+                    self.log_success(line);
+                }
+            }
         } else {
             self.log_error(&format!("Failed to collect data for {}", symbol));
             let stderr = String::from_utf8_lossy(&output.stderr);

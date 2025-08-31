@@ -140,7 +140,7 @@ impl DataCollector {
             .buffer_unordered(10); // Process up to 10 stocks concurrently
         
         // Process results as they come in
-        while let Some((index, symbol, result)) = results.next().await {
+        while let Some((_index, symbol, result)) = results.next().await {
             processed += 1;
             
             match result {

@@ -148,3 +148,230 @@ impl Config {
         })
     }
 }
+
+// ============================================================================
+// Enhanced TUI Application Models
+// ============================================================================
+
+/// Date range for data analysis
+#[derive(Debug, Clone, PartialEq)]
+pub struct DateRange {
+    pub start: NaiveDate,
+    pub end: NaiveDate,
+}
+
+impl DateRange {
+    pub fn new(start: NaiveDate, end: NaiveDate) -> Self {
+        Self { start, end }
+    }
+    
+    pub fn days_count(&self) -> i64 {
+        (self.end - self.start).num_days() + 1
+    }
+}
+
+/// Database statistics for dashboard
+#[derive(Debug, Clone)]
+pub struct DatabaseStats {
+    pub total_stocks: usize,
+    pub total_price_records: usize,
+    pub data_coverage_percentage: f64,
+    pub last_update_date: Option<NaiveDate>,
+    pub oldest_data_date: Option<NaiveDate>,
+}
+
+/// Collection progress metrics
+#[derive(Debug, Clone)]
+pub struct CollectionProgress {
+    pub stocks_with_data: usize,
+    pub stocks_missing_data: usize,
+    pub target_start_date: NaiveDate, // Jan 1, 2020
+    pub completion_percentage: f64,
+    pub estimated_records_remaining: usize,
+}
+
+/// Stock collection status for data collection view
+#[derive(Debug, Clone)]
+pub struct StockCollectionStatus {
+    pub symbol: String,
+    pub company_name: String,
+    pub status: CollectionStatus,
+    pub date_range: Option<(NaiveDate, NaiveDate)>,
+    pub record_count: usize,
+    pub progress_percentage: f64,
+}
+
+/// Collection status enumeration
+#[derive(Debug, Clone)]
+pub enum CollectionStatus {
+    NotStarted,
+    InProgress { current_date: NaiveDate },
+    Completed,
+    Failed { error: String },
+    PartialData { gaps: Vec<DateRange> },
+}
+
+/// Collection mode for data collection
+#[derive(Debug, Clone, PartialEq)]
+pub enum CollectionMode {
+    FullHistorical,    // Jan 1, 2020 to today for all stocks
+    IncrementalUpdate, // Latest data only
+    CustomRange {      // User-specified date range
+        start: NaiveDate,
+        end: NaiveDate,
+    },
+    SingleStock {      // Individual stock collection
+        symbol: String,
+        start: NaiveDate,
+        end: NaiveDate,
+    },
+}
+
+/// Data coverage analysis for stocks
+#[derive(Debug, Clone)]
+pub struct DataCoverage {
+    pub earliest_date: Option<NaiveDate>,
+    pub latest_date: Option<NaiveDate>,
+    pub total_records: usize,
+    pub missing_ranges: Vec<DateRange>,
+    pub coverage_percentage: f64,
+}
+
+/// Stock metrics for analysis
+#[derive(Debug, Clone)]
+pub struct StockMetrics {
+    pub pe_ratio_trend: Option<PETrend>,
+    pub price_performance: PricePerformance,
+    pub volatility_metrics: VolatilityMetrics,
+}
+
+/// P/E ratio trend analysis
+#[derive(Debug, Clone)]
+pub struct PETrend {
+    pub current_pe: Option<f64>,
+    pub year_ago_pe: Option<f64>,
+    pub decline_percentage: f64,
+    pub trend_direction: TrendDirection,
+}
+
+/// Price performance metrics
+#[derive(Debug, Clone)]
+pub struct PricePerformance {
+    pub current_price: f64,
+    pub year_ago_price: f64,
+    pub change_percentage: f64,
+    pub ytd_return: f64,
+    pub volatility: f64,
+}
+
+/// Volatility metrics
+#[derive(Debug, Clone)]
+pub struct VolatilityMetrics {
+    pub daily_volatility: f64,
+    pub monthly_volatility: f64,
+    pub beta: Option<f64>,
+    pub sharpe_ratio: Option<f64>,
+}
+
+/// Trend direction enumeration
+#[derive(Debug, Clone, PartialEq)]
+pub enum TrendDirection {
+    Increasing,
+    Decreasing,
+    Stable,
+    Unknown,
+}
+
+/// Overall progress tracking
+#[derive(Debug, Clone)]
+pub struct OverallProgress {
+    pub target_start_date: NaiveDate, // Jan 1, 2020
+    pub total_target_records: usize,   // ~1.5M records
+    pub current_records: usize,
+    pub completion_percentage: f64,
+    pub stocks_completed: usize,       // 100% data from Jan 1, 2020
+    pub stocks_partial: usize,         // Some data but gaps
+    pub stocks_missing: usize,         // No data at all
+}
+
+/// Individual stock progress
+#[derive(Debug, Clone)]
+pub struct StockProgress {
+    pub stock: Stock,
+    pub data_range: Option<(NaiveDate, NaiveDate)>,
+    pub record_count: usize,
+    pub expected_records: usize,
+    pub missing_ranges: Vec<DateRange>,
+    pub priority_score: f64, // Higher = needs attention
+}
+
+/// Data gap information
+#[derive(Debug, Clone)]
+pub struct DataGap {
+    pub symbol: String,
+    pub missing_range: DateRange,
+    pub missing_days: usize,
+    pub priority: Priority,
+}
+
+/// Gap analysis summary
+#[derive(Debug, Clone)]
+pub struct GapAnalysis {
+    pub total_missing_days: usize,
+    pub largest_gaps: Vec<DataGap>,
+    pub stocks_needing_attention: Vec<String>,
+    pub estimated_collection_time: std::time::Duration,
+}
+
+/// Action recommendation
+#[derive(Debug, Clone)]
+pub struct ActionRecommendation {
+    pub action_type: ActionType,
+    pub priority: Priority,
+    pub description: String,
+    pub estimated_impact: String,
+}
+
+/// Action type enumeration
+#[derive(Debug, Clone)]
+pub enum ActionType {
+    CollectMissingData { 
+        symbols: Vec<String>, 
+        date_range: DateRange 
+    },
+    FillDataGaps { 
+        symbol: String, 
+        gaps: Vec<DateRange> 
+    },
+    ValidateDataQuality { 
+        symbols: Vec<String> 
+    },
+    UpdateRecentData,
+}
+
+/// Priority levels
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Priority {
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+/// Search mode for stock analysis
+#[derive(Debug, Clone, PartialEq)]
+pub enum SearchMode {
+    BySymbol,
+    ByCompanyName,
+    BySector,
+}
+
+/// Application view states
+#[derive(Debug, Clone, PartialEq)]
+pub enum AppView {
+    Dashboard,
+    DataCollection,
+    StockAnalysis,
+    ProgressAnalyzer,
+    Settings,
+}

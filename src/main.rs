@@ -4,6 +4,7 @@ mod data_collector;
 mod database;
 mod models;
 mod ui;
+mod utils;
 
 use anyhow::Result;
 use tracing::{info, error, Level};
@@ -14,20 +15,19 @@ use crate::api::SchwabClient;
 use crate::data_collector::DataCollector;
 use crate::database::DatabaseManager;
 use crate::models::Config;
-use crate::ui::StockApp;
+// use crate::ui::StockApp;
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    // Initialize logging
+fn main() -> Result<()> {
+    // Initialize logging - suppress most logs for TUI
     let subscriber = FmtSubscriber::builder()
-        .with_max_level(Level::INFO)
-        .with_env_filter("rust_stocks=info")
+        .with_max_level(Level::ERROR)
+        .with_env_filter("rust_stocks=error")
         .finish();
     
     tracing::subscriber::set_global_default(subscriber)
         .expect("setting default subscriber failed");
 
-    info!("🚀 Starting Rust Stocks Analysis System");
+    // info!("🚀 Starting Rust Stocks Analysis System");
 
     // Load configuration
     let config = match Config::from_env() {
@@ -40,7 +40,7 @@ async fn main() -> Result<()> {
         }
     };
 
-    info!("📋 Configuration loaded successfully");
+    // info!("📋 Configuration loaded successfully");
 
     // Initialize database
     let database = match DatabaseManager::new(&config.database_path) {
@@ -52,78 +52,60 @@ async fn main() -> Result<()> {
         }
     };
 
-    info!("💾 Database initialized at: {}", config.database_path);
+    // info!("💾 Database initialized at: {}", config.database_path);
 
+    // Skip Schwab client initialization for TUI testing
+    /*
     // Initialize Schwab API client
-    let schwab_client = match SchwabClient::new(&config) {
-        Ok(client) => client,
-        Err(e) => {
-            error!("Failed to initialize Schwab client: {}", e);
-            eprintln!("❌ API Client Error: {}", e);
-            eprintln!("Make sure your Schwab API tokens are valid and accessible.");
-            std::process::exit(1);
-        }
-    };
-
-    info!("🔑 Schwab API client initialized");
-
+    let schwab_client = SchwabClient::new(&config)?;
+    
     // Initialize data collector
     let data_collector = DataCollector::new(schwab_client, database.clone(), config.clone());
-    
-    info!("🔄 Data collector initialized");
+    */
 
+    // Skip heavy initialization for now to get TUI working fast
+    /*
     // Initialize analysis engine
     let analysis_engine = AnalysisEngine::new(database);
     
-    info!("📊 Analysis engine initialized");
-
-    // Get database statistics and determine if we need data collection
+    // Get database statistics
     let stats = analysis_engine.get_summary_stats().await?;
-    info!("📈 Database contains {} stocks with {} price records", 
-          stats.total_stocks, stats.total_price_records);
-    
-    if let Some(last_update) = stats.last_update_date {
-        info!("📅 Last data update: {}", last_update);
-    } else {
-        info!("📅 No previous data updates found - will need initial data sync");
-    }
+    */
 
-    // Check if we need to collect data
-    if stats.total_stocks == 0 || stats.total_price_records == 0 {
-        println!("\n🚀 Welcome to Rust Stocks Analysis System!");
-        println!("No stock data found in database. Running initial setup automatically...");
-        
-        // Run initial setup automatically for now
-        match perform_initial_setup_auto(&data_collector).await {
-            Ok(_) => println!("✅ Initial setup completed successfully!"),
-            Err(e) => {
-                println!("❌ Setup failed: {}", e);
-                println!("⚠️  Cannot proceed without data. Exiting.");
-                std::process::exit(1);
-            }
-        }
-    } else {
-        println!("✅ Database has {} stocks with {} price records", 
-                stats.total_stocks, stats.total_price_records);
-    }
-
-    // Initialize and run the TUI application
-    let mut app = StockApp::new(analysis_engine);
+    // Force TUI to run - ignore TTY detection
+    println!("🚀 Starting Stock Analysis TUI...");
     
-    info!("🖥️  Starting terminal user interface...");
-    
-    match app.run().await {
+    match ui::app::run_app() {
         Ok(_) => {
-            info!("👋 Application closed successfully");
             println!("Thanks for using Rust Stocks Analysis System!");
         }
         Err(e) => {
-            error!("Application error: {}", e);
-            eprintln!("❌ Application Error: {}", e);
+            eprintln!("❌ TUI Error: {}", e);
             std::process::exit(1);
         }
     }
 
+    Ok(())
+}
+
+/// CLI interface fallback when TUI is not available
+fn run_cli_interface() -> Result<()> {
+    println!("");
+    println!("📊 STOCK ANALYSIS SYSTEM - CLI MODE");
+    println!("===================================");
+    println!("");
+    println!("Available commands:");
+    println!("  📋 update_sp500    - Update S&P 500 company list");
+    println!("  📈 collect_data    - Collect historical price data");
+    println!("  🔍 check_status    - Check database status");
+    println!("  📊 show_stats      - Show database statistics");
+    println!("");
+    println!("Usage examples:");
+    println!("  cargo run --bin update_sp500");
+    println!("  cargo run --bin collect_with_detailed_logs -- --start-date 20240101");
+    println!("");
+    println!("💡 For full TUI experience, run from a proper terminal (not IDE)");
+    
     Ok(())
 }
 

@@ -2,6 +2,17 @@
 
 A high-performance Rust-based stock analysis system that fetches, stores, and analyzes S&P 500 stock data using the Charles Schwab API.
 
+## 🚀 Quick Start - Just Run It!
+
+```bash
+# Clone and run the main application
+git clone <repo>
+cd rust-stocks
+cargo run
+```
+
+**That's it!** The main interactive application will start automatically.
+
 ## 🎯 Project Overview
 
 This system provides comprehensive stock market data collection and analysis capabilities, featuring:
@@ -35,7 +46,16 @@ This system provides comprehensive stock market data collection and analysis cap
    cargo build --release
    ```
 
-### Initialize S&P 500 Data
+### Run the Main Application
+```bash
+# Start the interactive TUI application (DEFAULT - recommended)
+cargo run
+
+# OR be explicit about the main binary
+cargo run --bin rust-stocks
+```
+
+### Initialize S&P 500 Data (First Time Setup)
 ```bash
 # Update the complete S&P 500 company list (503 companies)
 cargo run --bin update_sp500
@@ -115,12 +135,21 @@ cargo run --bin smart_collect -- 20240115  # Monday → Returns same day data
 
 ## 🛠️ Available Tools
 
-### Core Binaries
+### Main Application
 
-- **`collect_with_detailed_logs`**: Main data collection tool with professional CLI
+- **`rust-stocks`** (DEFAULT): Interactive TUI application for stock analysis and data management
+  ```bash
+  cargo run  # Runs this automatically
+  ```
+
+### Data Collection Tools
+
+- **`collect_with_detailed_logs`**: Professional CLI data collection with progress tracking
 - **`smart_collect`**: Smart collection with automatic weekend/holiday handling
 - **`update_sp500`**: Update S&P 500 company list with state tracking
-- **`rust-stocks`**: Main TUI application for stock analysis
+
+### Testing & Analysis Tools
+
 - **`test_api`**: Test Schwab API connectivity
 - **`fetch_history`**: Single stock historical data fetcher
 

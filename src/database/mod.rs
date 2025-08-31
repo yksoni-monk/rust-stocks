@@ -4,7 +4,9 @@ use rusqlite::{Connection, params};
 use std::sync::{Arc, Mutex};
 use tracing::info;
 
-use crate::models::{Stock, DailyPrice, StockStatus};
+use crate::models::{Stock, DailyPrice, StockStatus, DatabaseStats, CollectionProgress, 
+                    StockProgress, DataCoverage, OverallProgress, StockCollectionStatus, 
+                    CollectionStatus};
 
 #[derive(Clone)]
 pub struct DatabaseManager {
@@ -368,5 +370,310 @@ impl DatabaseManager {
         info!("🗑️  Cleared all stocks and price data");
         Ok(())
     }
+
+    // ============================================================================
+    // Enhanced Progress Analysis Methods for TUI Application
+    // ============================================================================
+
+    /// Get comprehensive database statistics
+    pub fn get_database_stats(&self) -> Result<DatabaseStats> {
+        let conn = self.connection.lock().unwrap();
+        
+        let total_stocks: usize = conn.query_row(
+            "SELECT COUNT(*) FROM stocks", 
+            [], 
+            |row| Ok(row.get(0)?)
+        )?;
+
+        let total_price_records: usize = conn.query_row(
+            "SELECT COUNT(*) FROM daily_prices", 
+            [], 
+            |row| Ok(row.get(0)?)
+        )?;
+
+        let oldest_data_date: Option<NaiveDate> = conn.query_row(
+            "SELECT MIN(date) FROM daily_prices",
+            [],
+            |row| Ok(row.get(0)?)
+        ).ok();
+
+        let stocks_with_data: usize = conn.query_row(
+            "SELECT COUNT(DISTINCT stock_id) FROM daily_prices",
+            [],
+            |row| Ok(row.get(0)?)
+        ).unwrap_or(0);
+
+        let data_coverage_percentage = if total_stocks > 0 {
+            (stocks_with_data as f64 / total_stocks as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        Ok(DatabaseStats {
+            total_stocks,
+            total_price_records,
+            data_coverage_percentage,
+            last_update_date: self.get_last_update_date()?,
+            oldest_data_date,
+        })
+    }
+
+    /// Get collection progress toward target date
+    pub fn get_collection_progress(&self, target_date: NaiveDate) -> Result<CollectionProgress> {
+        let conn = self.connection.lock().unwrap();
+        
+        let total_stocks: usize = conn.query_row(
+            "SELECT COUNT(*) FROM stocks WHERE status = 'active'", 
+            [], 
+            |row| Ok(row.get(0)?)
+        )?;
+
+        let stocks_with_data: usize = conn.query_row(
+            "SELECT COUNT(DISTINCT s.id) FROM stocks s 
+             JOIN daily_prices dp ON s.id = dp.stock_id 
+             WHERE s.status = 'active' AND dp.date >= ?1",
+            params![target_date],
+            |row| Ok(row.get(0)?)
+        ).unwrap_or(0);
+
+        let stocks_missing_data = total_stocks.saturating_sub(stocks_with_data);
+        
+        let completion_percentage = if total_stocks > 0 {
+            (stocks_with_data as f64 / total_stocks as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        // Estimate remaining records needed (assuming ~1400 records per stock on average)
+        let estimated_records_remaining = stocks_missing_data * 1400;
+
+        Ok(CollectionProgress {
+            stocks_with_data,
+            stocks_missing_data,
+            target_start_date: target_date,
+            completion_percentage,
+            estimated_records_remaining,
+        })
+    }
+
+    /// Get overall progress analysis
+    pub fn get_overall_progress(&self, target_date: NaiveDate) -> Result<OverallProgress> {
+        let conn = self.connection.lock().unwrap();
+        
+        let target_records_per_stock = 1400; // Approximate trading days from 2020-01-01 to today
+        
+        let total_stocks: usize = conn.query_row(
+            "SELECT COUNT(*) FROM stocks WHERE status = 'active'",
+            [],
+            |row| Ok(row.get(0)?)
+        )?;
+        
+        let total_target_records = total_stocks * target_records_per_stock;
+        
+        let current_records: usize = conn.query_row(
+            "SELECT COUNT(*) FROM daily_prices dp 
+             JOIN stocks s ON dp.stock_id = s.id 
+             WHERE s.status = 'active' AND dp.date >= ?1",
+            params![target_date],
+            |row| Ok(row.get(0)?)
+        ).unwrap_or(0);
+
+        // Count stocks by completion status
+        let stocks_completed: usize = conn.query_row(
+            "SELECT COUNT(*) FROM stocks s WHERE s.status = 'active' AND 
+             EXISTS (SELECT 1 FROM daily_prices dp WHERE dp.stock_id = s.id AND dp.date = ?1)",
+            params![target_date],
+            |row| Ok(row.get(0)?)
+        ).unwrap_or(0);
+
+        let stocks_with_some_data: usize = conn.query_row(
+            "SELECT COUNT(DISTINCT s.id) FROM stocks s 
+             JOIN daily_prices dp ON s.id = dp.stock_id 
+             WHERE s.status = 'active' AND dp.date >= ?1",
+            params![target_date],
+            |row| Ok(row.get(0)?)
+        ).unwrap_or(0);
+
+        let stocks_partial = stocks_with_some_data.saturating_sub(stocks_completed);
+        let stocks_missing = total_stocks.saturating_sub(stocks_with_some_data);
+        
+        let completion_percentage = if total_target_records > 0 {
+            (current_records as f64 / total_target_records as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        Ok(OverallProgress {
+            target_start_date: target_date,
+            total_target_records,
+            current_records,
+            completion_percentage,
+            stocks_completed,
+            stocks_partial,
+            stocks_missing,
+        })
+    }
+
+    /// Get data coverage for a specific stock
+    pub fn get_stock_data_coverage(&self, stock_id: i64, target_date: NaiveDate) -> Result<DataCoverage> {
+        let conn = self.connection.lock().unwrap();
+        
+        let mut stmt = conn.prepare(
+            "SELECT MIN(date) as earliest, MAX(date) as latest, COUNT(*) as total
+             FROM daily_prices WHERE stock_id = ?1"
+        )?;
+
+        let (earliest_date, latest_date, total_records) = stmt.query_row(
+            params![stock_id],
+            |row| {
+                Ok((
+                    row.get::<_, Option<NaiveDate>>(0)?,
+                    row.get::<_, Option<NaiveDate>>(1)?,
+                    row.get::<_, usize>(2)?
+                ))
+            }
+        ).unwrap_or((None, None, 0));
+
+        // Calculate coverage percentage based on target date
+        let coverage_percentage = if let (Some(earliest), Some(latest)) = (earliest_date, latest_date) {
+            if earliest <= target_date {
+                let total_possible_days = (latest - target_date.max(earliest)).num_days() + 1;
+                if total_possible_days > 0 {
+                    (total_records as f64 / total_possible_days as f64 * 5.0 / 7.0) * 100.0 // Adjust for weekends
+                } else {
+                    0.0
+                }
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        };
+
+        // TODO: Implement missing_ranges calculation
+        let missing_ranges = Vec::new();
+
+        Ok(DataCoverage {
+            earliest_date,
+            latest_date,
+            total_records,
+            missing_ranges,
+            coverage_percentage: coverage_percentage.min(100.0),
+        })
+    }
+
+    /// Get stock progress list for all stocks
+    pub fn get_all_stock_progress(&self, target_date: NaiveDate) -> Result<Vec<StockProgress>> {
+        let stocks = self.get_active_stocks()?;
+        let mut progress_list = Vec::new();
+        
+        for stock in stocks {
+            if let Some(stock_id) = stock.id {
+                let coverage = self.get_stock_data_coverage(stock_id, target_date)?;
+                
+                let data_range = if let (Some(earliest), Some(latest)) = (coverage.earliest_date, coverage.latest_date) {
+                    Some((earliest, latest))
+                } else {
+                    None
+                };
+
+                // Estimate expected records (approximately 250 trading days per year)
+                let years_since_target = (chrono::Utc::now().date_naive() - target_date).num_days() / 365;
+                let expected_records = (years_since_target as usize + 1) * 250;
+
+                // Calculate priority score (higher = needs more attention)
+                let priority_score = if coverage.total_records == 0 {
+                    100.0 // Highest priority for stocks with no data
+                } else {
+                    100.0 - coverage.coverage_percentage
+                };
+
+                progress_list.push(StockProgress {
+                    stock,
+                    data_range,
+                    record_count: coverage.total_records,
+                    expected_records,
+                    missing_ranges: coverage.missing_ranges,
+                    priority_score,
+                });
+            }
+        }
+
+        // Sort by priority score (descending)
+        progress_list.sort_by(|a, b| b.priority_score.partial_cmp(&a.priority_score).unwrap_or(std::cmp::Ordering::Equal));
+        
+        Ok(progress_list)
+    }
+
+    /// Get stock collection status for UI display
+    pub fn get_stock_collection_status(&self, target_date: NaiveDate) -> Result<Vec<StockCollectionStatus>> {
+        let stocks = self.get_active_stocks()?;
+        let mut status_list = Vec::new();
+        
+        for stock in stocks {
+            if let Some(stock_id) = stock.id {
+                let coverage = self.get_stock_data_coverage(stock_id, target_date)?;
+                
+                let status = if coverage.total_records == 0 {
+                    CollectionStatus::NotStarted
+                } else if coverage.coverage_percentage >= 95.0 {
+                    CollectionStatus::Completed
+                } else if !coverage.missing_ranges.is_empty() {
+                    CollectionStatus::PartialData { 
+                        gaps: coverage.missing_ranges.clone() 
+                    }
+                } else {
+                    CollectionStatus::Completed
+                };
+
+                let date_range = if let (Some(earliest), Some(latest)) = (coverage.earliest_date, coverage.latest_date) {
+                    Some((earliest, latest))
+                } else {
+                    None
+                };
+
+                status_list.push(StockCollectionStatus {
+                    symbol: stock.symbol,
+                    company_name: stock.company_name,
+                    status,
+                    date_range,
+                    record_count: coverage.total_records,
+                    progress_percentage: coverage.coverage_percentage,
+                });
+            }
+        }
+
+        Ok(status_list)
+    }
+
+    /// Get total number of price records in database
+    pub fn get_total_price_records(&self) -> Result<usize> {
+        let conn = self.connection.lock().unwrap();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM daily_prices",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    }
+
+    /// Get the oldest data date in the database
+    pub fn get_oldest_data_date(&self) -> Result<Option<NaiveDate>> {
+        let conn = self.connection.lock().unwrap();
+        let result = conn.query_row(
+            "SELECT MIN(date) FROM daily_prices",
+            [],
+            |row| {
+                let date_str: String = row.get(0)?;
+                Ok(NaiveDate::parse_from_str(&date_str, "%Y-%m-%d").unwrap_or_default())
+            },
+        );
+        
+        match result {
+            Ok(date) => Ok(Some(date)),
+            Err(_) => Ok(None),
+        }
+    }
+
 
 }

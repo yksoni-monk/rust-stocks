@@ -473,12 +473,263 @@ serde_json = "1.0"  # For parsing API responses
 📈 **Historical Analysis Ready**: Complete price history from 2020 enables P/E trend analysis
 ⚡ **Performance Optimized**: Semaphore-based concurrency control and batched processing
 
-### Phase 3 Ready: Enhanced UI & Analysis
-1. **Enhanced Terminal UI**: ASCII charts, better stock detail views, real-time updates
-2. **Advanced Analysis**: Sector analysis, volatility calculations, correlation matrices  
-3. **Performance Monitoring**: Database query optimization, memory usage tracking
-4. **User Experience**: Progress bars, better error messages, help system
-5. **Testing & Documentation**: Comprehensive test suite and user documentation
+## Enhanced Main Application Architecture ✅ **NEW DESIGN**
+
+### Interactive Ratatui Application Design
+
+The main application will be redesigned as a comprehensive interactive TUI with the following architecture:
+
+#### Main Application Views
+```
+┌─────────────────────────────────────────────────────────────┐
+│                   Stock Analysis System                     │
+├─────────────────────────────────────────────────────────────┤
+│  [Dashboard] [Data Collection] [Stock Analysis] [Settings]  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### 1. Dashboard View (`ui/dashboard.rs`)
+**Purpose**: System overview and quick navigation
+```rust
+struct Dashboard {
+    database_stats: DatabaseStats,
+    collection_progress: CollectionProgress,
+    recent_updates: Vec<RecentUpdate>,
+    quick_actions: Vec<QuickAction>,
+}
+
+struct DatabaseStats {
+    total_stocks: usize,
+    total_price_records: usize,
+    data_coverage_percentage: f64,
+    last_update_date: Option<NaiveDate>,
+    oldest_data_date: Option<NaiveDate>,
+}
+
+struct CollectionProgress {
+    stocks_with_data: usize,
+    stocks_missing_data: usize,
+    target_start_date: NaiveDate, // Jan 1, 2020
+    completion_percentage: f64,
+    estimated_records_remaining: usize,
+}
+```
+
+**Features**:
+- 📊 Real-time database statistics
+- 📈 Progress toward Jan 1, 2020 goal 
+- 🎯 Data collection completion metrics
+- ⚡ Quick action buttons for common tasks
+
+#### 2. Data Collection View (`ui/data_collection.rs`)
+**Purpose**: Interactive data fetching and progress monitoring
+
+```rust
+struct DataCollectionView {
+    collection_mode: CollectionMode,
+    progress_tracker: ProgressTracker,
+    stock_status_list: Vec<StockCollectionStatus>,
+    active_collection: Option<ActiveCollection>,
+}
+
+enum CollectionMode {
+    FullHistorical,    // Jan 1, 2020 to today for all stocks
+    IncrementalUpdate, // Latest data only
+    CustomRange,       // User-specified date range
+    SingleStock,       // Individual stock collection
+}
+
+struct StockCollectionStatus {
+    symbol: String,
+    company_name: String,
+    status: CollectionStatus,
+    date_range: Option<(NaiveDate, NaiveDate)>,
+    record_count: usize,
+    progress_percentage: f64,
+}
+
+enum CollectionStatus {
+    NotStarted,
+    InProgress { current_date: NaiveDate },
+    Completed,
+    Failed { error: String },
+    PartialData { gaps: Vec<DateRange> },
+}
+```
+
+**Features**:
+- 🚀 **Interactive Data Collection**: Start/stop/pause collection processes
+- 📋 **Stock-by-Stock Progress**: Real-time status for all 503 S&P 500 companies
+- 📅 **Date Range Management**: Visual representation of data coverage
+- 🔄 **Smart Collection**: Automatically handle weekends/holidays using market calendar
+- ⚠️ **Gap Detection**: Identify and prioritize missing data ranges
+
+#### 3. Stock Analysis View (`ui/stock_analysis.rs`)
+**Purpose**: Interactive stock search, selection, and analysis
+
+```rust
+struct StockAnalysisView {
+    search_state: SearchState,
+    selected_stock: Option<StockDetail>,
+    analysis_panels: AnalysisPanels,
+    chart_view: ChartView,
+}
+
+struct SearchState {
+    query: String,
+    search_results: Vec<Stock>,
+    selected_index: usize,
+    search_mode: SearchMode,
+}
+
+enum SearchMode {
+    BySymbol,
+    ByCompanyName,
+    BySector,
+}
+
+struct StockDetail {
+    stock: Stock,
+    price_history: Vec<DailyPrice>,
+    analysis_metrics: StockMetrics,
+    data_coverage: DataCoverage,
+}
+
+struct StockMetrics {
+    pe_ratio_trend: Option<PETrend>,
+    price_performance: PricePerformance,
+    volatility_metrics: VolatilityMetrics,
+}
+
+struct DataCoverage {
+    earliest_date: Option<NaiveDate>,
+    latest_date: Option<NaiveDate>,
+    total_records: usize,
+    missing_ranges: Vec<DateRange>,
+    coverage_percentage: f64,
+}
+```
+
+**Features**:
+- 🔍 **Intelligent Search**: Fuzzy matching by symbol, company name, or sector
+- 📊 **Comprehensive Analysis**: P/E trends, price performance, volatility analysis
+- 📈 **ASCII Charts**: Historical price visualization in terminal
+- 📅 **Data Coverage Analysis**: Visual representation of available vs missing data
+- 🏆 **Top Performers**: P/E decline rankings and performance metrics
+
+#### 4. Data Progress Analyzer (`ui/progress_analyzer.rs`) 
+**Purpose**: Comprehensive progress tracking and gap analysis
+
+```rust
+struct ProgressAnalyzer {
+    overall_progress: OverallProgress,
+    stock_progress_list: Vec<StockProgress>,
+    gap_analysis: GapAnalysis,
+    recommendations: Vec<ActionRecommendation>,
+}
+
+struct OverallProgress {
+    target_start_date: NaiveDate, // Jan 1, 2020
+    total_target_records: usize,   // ~1.5M records
+    current_records: usize,
+    completion_percentage: f64,
+    stocks_completed: usize,       // 100% data from Jan 1, 2020
+    stocks_partial: usize,         // Some data but gaps
+    stocks_missing: usize,         // No data at all
+}
+
+struct StockProgress {
+    stock: Stock,
+    data_range: Option<(NaiveDate, NaiveDate)>,
+    record_count: usize,
+    expected_records: usize,
+    missing_ranges: Vec<DateRange>,
+    priority_score: f64, // Higher = needs attention
+}
+
+struct GapAnalysis {
+    total_missing_days: usize,
+    largest_gaps: Vec<DataGap>,
+    stocks_needing_attention: Vec<String>,
+    estimated_collection_time: std::time::Duration,
+}
+
+struct ActionRecommendation {
+    action_type: ActionType,
+    priority: Priority,
+    description: String,
+    estimated_impact: String,
+}
+
+enum ActionType {
+    CollectMissingData { symbols: Vec<String>, date_range: DateRange },
+    FillDataGaps { symbol: String, gaps: Vec<DateRange> },
+    ValidateDataQuality { symbols: Vec<String> },
+    UpdateRecentData,
+}
+```
+
+**Features**:
+- 📊 **Progress Dashboard**: Visual progress toward Jan 1, 2020 goal
+- 📋 **Stock Priority List**: Ranked by data completeness and importance
+- 🔍 **Gap Analysis**: Detailed missing data identification
+- 💡 **Smart Recommendations**: Actionable next steps for data collection
+- ⏱️ **Time Estimates**: Projected completion times for remaining work
+
+#### Navigation & User Experience
+
+```rust
+enum AppView {
+    Dashboard,
+    DataCollection,
+    StockAnalysis,
+    ProgressAnalyzer,
+    Settings,
+}
+
+struct MainApp {
+    current_view: AppView,
+    database: DatabaseManager,
+    schwab_client: SchwabClient,
+    market_calendar: MarketCalendar,
+    
+    // View components
+    dashboard: Dashboard,
+    data_collection: DataCollectionView,
+    stock_analysis: StockAnalysisView,
+    progress_analyzer: ProgressAnalyzer,
+}
+```
+
+**Navigation Features**:
+- ⌨️ **Keyboard Shortcuts**: Tab (next view), Shift+Tab (prev view), Enter (select), Esc (back)
+- 📱 **Context-Sensitive Help**: F1 for help in current view
+- 🎨 **Visual Indicators**: Progress bars, status colors, real-time updates
+- 🔄 **Background Operations**: Non-blocking data collection with progress updates
+
+#### Integration Points
+
+1. **Data Collection Integration**:
+   - Launch `collect_with_detailed_logs` from within the TUI
+   - Real-time progress updates during collection
+   - Background task monitoring and control
+
+2. **Market Calendar Integration**:
+   - Smart date validation using `MarketCalendar`
+   - Weekend/holiday handling for data requests
+   - Trading day calculations for progress metrics
+
+3. **Database Integration**:
+   - Enhanced `DatabaseManager` with progress analysis methods
+   - Real-time statistics updates
+   - Transaction support for bulk operations
+
+### Phase 3 Implementation Plan: Enhanced UI & Analysis
+1. **Enhanced Terminal UI**: ✅ **DESIGNED** - Comprehensive Ratatui application with multiple views
+2. **Data Progress Tracking**: ✅ **DESIGNED** - Complete progress analysis and gap detection
+3. **Interactive Data Collection**: ✅ **DESIGNED** - User-friendly collection interface
+4. **Advanced Stock Analysis**: ✅ **DESIGNED** - Search, charts, and metrics analysis
+5. **Real-time Monitoring**: ✅ **DESIGNED** - Background operations with live updates
 
 ### Known Challenges & Solutions
 - **Rate Limiting**: Use governor crate for request throttling

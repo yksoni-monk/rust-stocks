@@ -19,7 +19,9 @@ use crate::analysis::{AnalysisEngine, SummaryStats};
 use crate::models::{StockAnalysis, StockDetail, Stock};
 
 pub mod components;
-pub use components::*;
+pub mod dashboard;
+pub mod app;
+// pub use components::*;
 
 /// Main application state
 pub struct StockApp {

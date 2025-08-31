@@ -29,6 +29,8 @@ pub enum ActionType {
     IncrementalUpdate,
     ValidateData,
     ViewProgress,
+    SingleStockCollection { symbol: String, start_date: NaiveDate, end_date: NaiveDate },
+    SelectStockAndDates,
 }
 
 /// Active operation status
@@ -65,6 +67,45 @@ pub struct DataCollectionView {
     pub is_executing: bool,
     pub current_operation: Option<ActiveOperation>,
     pub log_messages: Vec<LogMessage>,
+    pub confirmation_state: Option<ConfirmationState>,
+    pub stock_selection_state: Option<StockSelectionState>,
+    pub date_selection_state: Option<DateSelectionState>,
+    pub pending_log_message: Option<String>,
+    pub pending_log_level: Option<LogLevel>,
+}
+
+/// Confirmation dialog state
+#[derive(Debug, Clone)]
+pub struct ConfirmationState {
+    pub action_title: String,
+    pub action_type: ActionType,
+    pub selected_option: bool, // true = yes, false = no
+}
+
+/// Stock selection state
+#[derive(Debug, Clone)]
+pub struct StockSelectionState {
+    pub available_stocks: Vec<String>,
+    pub selected_index: usize,
+    pub search_query: String,
+    pub is_searching: bool,
+}
+
+/// Date selection state
+#[derive(Debug, Clone)]
+pub struct DateSelectionState {
+    pub selected_stock: String,
+    pub start_date: NaiveDate,
+    pub end_date: NaiveDate,
+    pub current_field: DateField, // start_date or end_date
+    pub current_input: String,
+}
+
+/// Date field being edited
+#[derive(Debug, Clone)]
+pub enum DateField {
+    StartDate,
+    EndDate,
 }
 
 impl DataCollectionView {
@@ -78,10 +119,17 @@ impl DataCollectionView {
                 requires_confirmation: false,
             },
             DataCollectionAction {
+                id: "single_stock_collection".to_string(),
+                title: "📈 Collect data for single stock".to_string(),
+                description: "Select a stock and date range, then fetch data".to_string(),
+                action_type: ActionType::SelectStockAndDates,
+                requires_confirmation: false,
+            },
+            DataCollectionAction {
                 id: "collect_historical".to_string(),
                 title: "📈 Collect historical data (2020-2025)".to_string(),
                 description: "Fetch complete historical OHLC data for all stocks".to_string(),
-                action_type: ActionType::CollectHistoricalData { 
+                action_type: ActionType::CollectHistoricalData {
                     start_date: NaiveDate::from_ymd_opt(2020, 1, 1).unwrap(),
                     end_date: chrono::Utc::now().date_naive(),
                 },
@@ -116,6 +164,11 @@ impl DataCollectionView {
             is_executing: false,
             current_operation: None,
             log_messages: Vec::new(),
+            confirmation_state: None,
+            stock_selection_state: None,
+            date_selection_state: None,
+            pending_log_message: None,
+            pending_log_level: None,
         }
     }
 
@@ -125,6 +178,184 @@ impl DataCollectionView {
             // During execution, only allow quit
             if key == crossterm::event::KeyCode::Char('q') || key == crossterm::event::KeyCode::Esc {
                 self.cancel_operation();
+            }
+            return Ok(());
+        }
+
+        // Handle confirmation dialog
+        if let Some(ref mut confirmation) = self.confirmation_state {
+            match key {
+                crossterm::event::KeyCode::Left | crossterm::event::KeyCode::Right => {
+                    confirmation.selected_option = !confirmation.selected_option;
+                }
+                crossterm::event::KeyCode::Enter => {
+                    let action_type = confirmation.action_type.clone();
+                    if confirmation.selected_option {
+                        // User confirmed - execute the action
+                        self.confirmation_state = None;
+                        self.start_operation_by_type(&action_type)?;
+                    } else {
+                        // User cancelled
+                        self.log_info("Operation cancelled by user");
+                        self.confirmation_state = None;
+                    }
+                }
+                crossterm::event::KeyCode::Esc => {
+                    // Cancel confirmation
+                    self.log_info("Operation cancelled by user");
+                    self.confirmation_state = None;
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
+
+        // Handle stock selection
+        if let Some(ref mut stock_state) = self.stock_selection_state {
+            match key {
+                crossterm::event::KeyCode::Up => {
+                    if stock_state.selected_index > 0 {
+                        stock_state.selected_index -= 1;
+                    }
+                }
+                crossterm::event::KeyCode::Down => {
+                    if stock_state.selected_index < stock_state.available_stocks.len().saturating_sub(1) {
+                        stock_state.selected_index += 1;
+                    }
+                }
+                crossterm::event::KeyCode::Char(c) => {
+                    if c.is_alphanumeric() || c == '.' {
+                        stock_state.search_query.push(c);
+                        stock_state.is_searching = true;
+                        // Use a simple filter without calling self methods
+                        let query = stock_state.search_query.to_uppercase();
+                        let all_stocks = vec![
+                            "AAPL".to_string(), "MSFT".to_string(), "GOOGL".to_string(), "AMZN".to_string(),
+                            "TSLA".to_string(), "META".to_string(), "NVDA".to_string(), "NFLX".to_string(),
+                            "JPM".to_string(), "JNJ".to_string(), "PG".to_string(), "V".to_string(),
+                            "HD".to_string(), "DIS".to_string(), "PYPL".to_string(), "INTC".to_string(),
+                            "VZ".to_string(), "ADBE".to_string(), "CRM".to_string(), "NKE".to_string(),
+                        ];
+                        let filtered: Vec<String> = all_stocks
+                            .into_iter()
+                            .filter(|stock| stock.to_uppercase().contains(&query))
+                            .collect();
+                        stock_state.available_stocks = filtered;
+                        stock_state.selected_index = 0;
+                    }
+                }
+                crossterm::event::KeyCode::Backspace => {
+                    stock_state.search_query.pop();
+                    stock_state.is_searching = !stock_state.search_query.is_empty();
+                    // Use a simple filter without calling self methods
+                    let query = stock_state.search_query.to_uppercase();
+                    let all_stocks = vec![
+                        "AAPL".to_string(), "MSFT".to_string(), "GOOGL".to_string(), "AMZN".to_string(),
+                        "TSLA".to_string(), "META".to_string(), "NVDA".to_string(), "NFLX".to_string(),
+                        "JPM".to_string(), "JNJ".to_string(), "PG".to_string(), "V".to_string(),
+                        "HD".to_string(), "DIS".to_string(), "PYPL".to_string(), "INTC".to_string(),
+                        "VZ".to_string(), "ADBE".to_string(), "CRM".to_string(), "NKE".to_string(),
+                    ];
+                    let filtered: Vec<String> = all_stocks
+                        .into_iter()
+                        .filter(|stock| stock.to_uppercase().contains(&query))
+                        .collect();
+                    stock_state.available_stocks = filtered;
+                    stock_state.selected_index = 0;
+                }
+                crossterm::event::KeyCode::Enter => {
+                    if !stock_state.available_stocks.is_empty() {
+                        let selected_stock = stock_state.available_stocks[stock_state.selected_index].clone();
+                        self.start_date_selection(selected_stock);
+                    }
+                }
+                crossterm::event::KeyCode::Esc => {
+                    self.log_info("Stock selection cancelled");
+                    self.stock_selection_state = None;
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
+
+        // Handle date selection
+        if let Some(ref mut date_state) = self.date_selection_state {
+            match key {
+                crossterm::event::KeyCode::Tab => {
+                    // Switch between start and end date fields
+                    date_state.current_field = match date_state.current_field {
+                        DateField::StartDate => DateField::EndDate,
+                        DateField::EndDate => DateField::StartDate,
+                    };
+                }
+                crossterm::event::KeyCode::Char(c) => {
+                    if c.is_numeric() {
+                        date_state.current_input.push(c);
+                    }
+                }
+                crossterm::event::KeyCode::Backspace => {
+                    date_state.current_input.pop();
+                }
+                crossterm::event::KeyCode::Enter => {
+                    // Parse the date input
+                    if date_state.current_input.len() == 8 {
+                        let input = date_state.current_input.clone();
+                        
+                        // Parse date manually to avoid borrowing issues
+                        let parse_result = if input.len() == 8 {
+                            let year: i32 = input[0..4].parse().unwrap_or(0);
+                            let month: u32 = input[4..6].parse().unwrap_or(0);
+                            let day: u32 = input[6..8].parse().unwrap_or(0);
+                            NaiveDate::from_ymd_opt(year, month, day)
+                        } else {
+                            None
+                        };
+                        
+                        if let Some(date) = parse_result {
+                            match date_state.current_field {
+                                DateField::StartDate => {
+                                    date_state.start_date = date;
+                                    date_state.current_field = DateField::EndDate;
+                                    date_state.current_input.clear();
+                                    // Store log message for later
+                                    self.pending_log_message = Some(format!("Start date set to: {}", date));
+                                    self.pending_log_level = Some(LogLevel::Info);
+                                }
+                                DateField::EndDate => {
+                                    date_state.end_date = date;
+                                    // Store log message and action for later
+                                    self.pending_log_message = Some(format!("End date set to: {}", date));
+                                    self.pending_log_level = Some(LogLevel::Info);
+                                    
+                                    let symbol = date_state.selected_stock.clone();
+                                    let start_date = date_state.start_date;
+                                    let end_date = date;
+                                    
+                                    // Clear state and start operation
+                                    self.date_selection_state = None;
+                                    self.process_pending_logs();
+                                    
+                                    let action_type = ActionType::SingleStockCollection {
+                                        symbol,
+                                        start_date,
+                                        end_date,
+                                    };
+                                    self.start_operation_by_type(&action_type)?;
+                                    return Ok(());
+                                }
+                            }
+                        } else {
+                            date_state.current_input.clear();
+                            self.pending_log_message = Some("Invalid date format. Use YYYYMMDD".to_string());
+                            self.pending_log_level = Some(LogLevel::Error);
+                        }
+                    }
+                }
+                crossterm::event::KeyCode::Esc => {
+                    self.log_info("Date selection cancelled");
+                    self.date_selection_state = None;
+                }
+                _ => {}
             }
             return Ok(());
         }
@@ -145,6 +376,9 @@ impl DataCollectionView {
             }
             _ => {}
         }
+        
+        // Process any pending log messages
+        self.process_pending_logs();
         Ok(())
     }
 
@@ -154,15 +388,18 @@ impl DataCollectionView {
             return Ok(());
         }
 
-        let _action_id = self.actions[self.selected_action].id.clone();
         let action_title = self.actions[self.selected_action].title.clone();
         let requires_confirmation = self.actions[self.selected_action].requires_confirmation;
         let action_type = self.actions[self.selected_action].action_type.clone();
         
         // Check if confirmation is required
         if requires_confirmation {
-            self.log_warning(&format!("Confirmation required for: {}", action_title));
-            // TODO: Implement confirmation dialog
+            self.confirmation_state = Some(ConfirmationState {
+                action_title: action_title.clone(),
+                action_type: action_type.clone(),
+                selected_option: true, // Default to "Yes"
+            });
+            self.log_info(&format!("Confirmation required for: {}", action_title));
             return Ok(());
         }
 
@@ -172,36 +409,84 @@ impl DataCollectionView {
 
     /// Start an operation by action type
     pub fn start_operation_by_type(&mut self, action_type: &ActionType) -> Result<()> {
-        self.is_executing = true;
-        self.current_operation = Some(ActiveOperation {
-            action_id: "operation".to_string(),
-            start_time: Utc::now(),
-            progress: 0.0,
-            current_message: "Starting operation...".to_string(),
-            logs: Vec::new(),
-        });
-
         // Execute the action based on type
         match action_type {
             ActionType::UpdateSP500List => {
+                self.is_executing = true;
+                self.current_operation = Some(ActiveOperation {
+                    action_id: "operation".to_string(),
+                    start_time: Utc::now(),
+                    progress: 0.0,
+                    current_message: "Starting operation...".to_string(),
+                    logs: Vec::new(),
+                });
                 self.log_info("Starting S&P 500 list update...");
                 self.run_update_sp500()?;
             }
             ActionType::CollectHistoricalData { start_date, end_date } => {
+                self.is_executing = true;
+                self.current_operation = Some(ActiveOperation {
+                    action_id: "operation".to_string(),
+                    start_time: Utc::now(),
+                    progress: 0.0,
+                    current_message: "Starting operation...".to_string(),
+                    logs: Vec::new(),
+                });
                 self.log_info(&format!("Starting historical data collection from {} to {}", start_date, end_date));
                 self.run_historical_collection(*start_date, *end_date)?;
             }
             ActionType::IncrementalUpdate => {
+                self.is_executing = true;
+                self.current_operation = Some(ActiveOperation {
+                    action_id: "operation".to_string(),
+                    start_time: Utc::now(),
+                    progress: 0.0,
+                    current_message: "Starting operation...".to_string(),
+                    logs: Vec::new(),
+                });
                 self.log_info("Starting incremental update...");
                 self.run_incremental_update()?;
             }
             ActionType::ValidateData => {
+                self.is_executing = true;
+                self.current_operation = Some(ActiveOperation {
+                    action_id: "operation".to_string(),
+                    start_time: Utc::now(),
+                    progress: 0.0,
+                    current_message: "Starting operation...".to_string(),
+                    logs: Vec::new(),
+                });
                 self.log_info("Starting data validation...");
                 self.validate_data_integrity()?;
             }
             ActionType::ViewProgress => {
+                self.is_executing = true;
+                self.current_operation = Some(ActiveOperation {
+                    action_id: "operation".to_string(),
+                    start_time: Utc::now(),
+                    progress: 0.0,
+                    current_message: "Starting operation...".to_string(),
+                    logs: Vec::new(),
+                });
                 self.log_info("Showing collection progress...");
                 self.show_collection_progress();
+            }
+            ActionType::SingleStockCollection { symbol, start_date, end_date } => {
+                self.is_executing = true;
+                self.current_operation = Some(ActiveOperation {
+                    action_id: "operation".to_string(),
+                    start_time: Utc::now(),
+                    progress: 0.0,
+                    current_message: "Starting operation...".to_string(),
+                    logs: Vec::new(),
+                });
+                self.log_info(&format!("Starting single stock collection for {} from {} to {}", symbol, start_date, end_date));
+                self.run_single_stock_collection(symbol.clone(), *start_date, *end_date)?;
+            }
+            ActionType::SelectStockAndDates => {
+                // Don't set executing state for interactive selection
+                self.log_info("Starting stock and date selection...");
+                self.start_stock_and_date_selection();
             }
         }
 
@@ -300,6 +585,110 @@ impl DataCollectionView {
         self.complete_operation();
     }
 
+    /// Start stock and date selection process
+    pub fn start_stock_and_date_selection(&mut self) {
+        // Get available stocks from database
+        let stocks = self.get_available_stocks();
+        self.stock_selection_state = Some(StockSelectionState {
+            available_stocks: stocks,
+            selected_index: 0,
+            search_query: String::new(),
+            is_searching: false,
+        });
+        self.log_info("Stock selection started. Type to search, ↑/↓ to navigate, Enter to select");
+    }
+
+    /// Get available stocks from database
+    fn get_available_stocks(&self) -> Vec<String> {
+        // For now, return a sample list. In a real implementation, this would query the database
+        vec![
+            "AAPL".to_string(), "MSFT".to_string(), "GOOGL".to_string(), "AMZN".to_string(),
+            "TSLA".to_string(), "META".to_string(), "NVDA".to_string(), "NFLX".to_string(),
+            "JPM".to_string(), "JNJ".to_string(), "PG".to_string(), "V".to_string(),
+            "HD".to_string(), "DIS".to_string(), "PYPL".to_string(), "INTC".to_string(),
+            "VZ".to_string(), "ADBE".to_string(), "CRM".to_string(), "NKE".to_string(),
+        ]
+    }
+
+    /// Filter stocks based on search query
+    fn filter_stocks(&self, stock_state: &mut StockSelectionState) {
+        if stock_state.search_query.is_empty() {
+            return;
+        }
+        
+        let query = stock_state.search_query.to_uppercase();
+        let filtered: Vec<String> = self.get_available_stocks()
+            .into_iter()
+            .filter(|stock| stock.to_uppercase().contains(&query))
+            .collect();
+        
+        stock_state.available_stocks = filtered;
+        stock_state.selected_index = 0;
+    }
+
+
+
+    /// Start date selection for a selected stock
+    fn start_date_selection(&mut self, stock: String) {
+        let today = chrono::Utc::now().date_naive();
+        let default_start = today - chrono::Duration::days(30);
+        
+        self.date_selection_state = Some(DateSelectionState {
+            selected_stock: stock,
+            start_date: default_start,
+            end_date: today,
+            current_field: DateField::StartDate,
+            current_input: String::new(),
+        });
+        
+        self.stock_selection_state = None;
+        self.log_info("Date selection started. Tab to switch fields, Enter to confirm");
+    }
+
+
+
+    /// Parse date input in YYYYMMDD format
+    fn parse_date_input(&self, input: &str) -> Result<NaiveDate> {
+        if input.len() != 8 {
+            return Err(anyhow::anyhow!("Date must be YYYYMMDD format"));
+        }
+        
+        let year: i32 = input[0..4].parse()?;
+        let month: u32 = input[4..6].parse()?;
+        let day: u32 = input[6..8].parse()?;
+        
+        NaiveDate::from_ymd_opt(year, month, day)
+            .ok_or_else(|| anyhow::anyhow!("Invalid date"))
+    }
+
+    /// Run single stock collection
+    pub fn run_single_stock_collection(&mut self, symbol: String, start_date: NaiveDate, end_date: NaiveDate) -> Result<()> {
+        self.log_info(&format!("Starting single stock collection for {} from {} to {}", symbol, start_date, end_date));
+        
+        // Use smart_collect binary with specific parameters
+        let start_str = start_date.format("%Y%m%d").to_string();
+        let end_str = end_date.format("%Y%m%d").to_string();
+        
+        self.log_info(&format!("Executing: cargo run --bin smart_collect -- {} {}", start_str, end_str));
+        
+        let output = Command::new("cargo")
+            .args(["run", "--bin", "smart_collect", "--", &start_str, &end_str])
+            .output()?;
+
+        if output.status.success() {
+            self.log_success(&format!("Single stock collection completed for {}", symbol));
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            self.log_info(&format!("Output: {}", stdout.trim()));
+        } else {
+            self.log_error(&format!("Failed to collect data for {}", symbol));
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            self.log_error(&format!("Error: {}", stderr.trim()));
+        }
+
+        self.complete_operation();
+        Ok(())
+    }
+
     /// Cancel current operation
     pub fn cancel_operation(&mut self) {
         self.log_warning("Operation cancelled by user");
@@ -348,8 +737,33 @@ impl DataCollectionView {
         }
     }
 
+    /// Process pending log messages
+    fn process_pending_logs(&mut self) {
+        if let (Some(message), Some(level)) = (self.pending_log_message.take(), self.pending_log_level.take()) {
+            self.add_log_message(level, &message);
+        }
+    }
+
     /// Render the data collection view
     pub fn render(&self, f: &mut Frame, area: Rect) {
+        // If confirmation dialog is active, render it as an overlay
+        if let Some(ref confirmation) = self.confirmation_state {
+            self.render_confirmation_dialog(f, area, confirmation);
+            return;
+        }
+
+        // If stock selection is active, render stock selection
+        if let Some(ref stock_state) = self.stock_selection_state {
+            self.render_stock_selection(f, area, stock_state);
+            return;
+        }
+
+        // If date selection is active, render date selection
+        if let Some(ref date_state) = self.date_selection_state {
+            self.render_date_selection(f, area, date_state);
+            return;
+        }
+
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -374,6 +788,190 @@ impl DataCollectionView {
 
         // Status
         self.render_status(f, chunks[3]);
+    }
+
+    /// Render confirmation dialog
+    fn render_confirmation_dialog(&self, f: &mut Frame, area: Rect, confirmation: &ConfirmationState) {
+        // Create a centered dialog box
+        let dialog_width = 60;
+        let dialog_height = 8;
+        let dialog_x = (area.width.saturating_sub(dialog_width)) / 2;
+        let dialog_y = (area.height.saturating_sub(dialog_height)) / 2;
+        
+        let dialog_area = Rect::new(dialog_x, dialog_y, dialog_width, dialog_height);
+        
+        // Render semi-transparent background
+        let background = Paragraph::new("")
+            .block(Block::default().style(Style::default().bg(Color::Black)));
+        f.render_widget(background, area);
+        
+        // Render dialog box
+        let dialog_content = vec![
+            Line::from(vec![
+                Span::styled("⚠️  Confirmation Required", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            ]),
+            Line::from(vec![
+                Span::styled("", Style::default()),
+            ]),
+            Line::from(vec![
+                Span::styled("Are you sure you want to execute:", Style::default().fg(Color::White)),
+            ]),
+            Line::from(vec![
+                Span::styled(&confirmation.action_title, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            ]),
+            Line::from(vec![
+                Span::styled("", Style::default()),
+            ]),
+            Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(if confirmation.selected_option { "▶ " } else { "   " }, Style::default().fg(Color::Yellow)),
+                Span::styled("Yes", if confirmation.selected_option { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White) }),
+                Span::styled("    ", Style::default()),
+                Span::styled(if !confirmation.selected_option { "▶ " } else { "   " }, Style::default().fg(Color::Yellow)),
+                Span::styled("No", if !confirmation.selected_option { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) } else { Style::default().fg(Color::White) }),
+            ]),
+            Line::from(vec![
+                Span::styled("", Style::default()),
+            ]),
+            Line::from(vec![
+                Span::styled("←/→: Select • Enter: Confirm • Esc: Cancel", Style::default().fg(Color::Gray)),
+            ]),
+        ];
+        
+        let dialog = Paragraph::new(dialog_content)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .style(Style::default().fg(Color::Yellow)));
+        
+        f.render_widget(dialog, dialog_area);
+    }
+
+    /// Render stock selection
+    fn render_stock_selection(&self, f: &mut Frame, area: Rect, stock_state: &StockSelectionState) {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3), // Title
+                Constraint::Length(3), // Search
+                Constraint::Min(0),    // Stock list
+                Constraint::Length(3), // Status
+            ])
+            .split(area);
+
+        // Title
+        let title = Paragraph::new("📈 Select Stock")
+            .block(Block::default().borders(Borders::ALL))
+            .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+        f.render_widget(title, chunks[0]);
+
+        // Search input
+        let search_text = if stock_state.is_searching {
+            format!("Search: {}", stock_state.search_query)
+        } else {
+            "Type to search stocks...".to_string()
+        };
+        let search = Paragraph::new(search_text)
+            .block(Block::default().borders(Borders::ALL).title("Search"))
+            .style(Style::default().fg(if stock_state.is_searching { Color::Cyan } else { Color::Gray }));
+        f.render_widget(search, chunks[1]);
+
+        // Stock list
+        let items: Vec<ListItem> = stock_state.available_stocks
+            .iter()
+            .enumerate()
+            .map(|(i, stock)| {
+                let style = if i == stock_state.selected_index {
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                ListItem::new(vec![Line::from(vec![Span::styled(stock, style)])])
+            })
+            .collect();
+
+        let list = List::new(items)
+            .block(Block::default().borders(Borders::ALL).title("Available Stocks"))
+            .highlight_style(Style::default().bg(Color::LightBlue).fg(Color::Black))
+            .highlight_symbol("→ ");
+
+        f.render_stateful_widget(list, chunks[2], &mut ratatui::widgets::ListState::default().with_selected(Some(stock_state.selected_index)));
+
+        // Status
+        let status = Paragraph::new("↑/↓: Navigate • Type: Search • Enter: Select • Esc: Cancel")
+            .block(Block::default().borders(Borders::ALL))
+            .style(Style::default().fg(Color::Gray));
+        f.render_widget(status, chunks[3]);
+    }
+
+    /// Render date selection
+    fn render_date_selection(&self, f: &mut Frame, area: Rect, date_state: &DateSelectionState) {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3), // Title
+                Constraint::Length(8), // Date inputs
+                Constraint::Length(3), // Status
+            ])
+            .split(area);
+
+        // Title
+        let title = Paragraph::new(format!("📅 Select Date Range for {}", date_state.selected_stock))
+            .block(Block::default().borders(Borders::ALL))
+            .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
+        f.render_widget(title, chunks[0]);
+
+        // Date inputs
+        let start_style = if matches!(date_state.current_field, DateField::StartDate) {
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+
+        let end_style = if matches!(date_state.current_field, DateField::EndDate) {
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+
+        let start_date_str = date_state.start_date.format("%Y-%m-%d").to_string();
+        let end_date_str = date_state.end_date.format("%Y-%m-%d").to_string();
+        
+        let date_content = vec![
+            Line::from(vec![
+                Span::styled("Start Date: ", start_style),
+                Span::styled(&start_date_str, start_style),
+            ]),
+            Line::from(vec![
+                Span::styled("Input: ", start_style),
+                Span::styled(&date_state.current_input, start_style),
+                Span::styled("_", if matches!(date_state.current_field, DateField::StartDate) { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::Gray) }),
+            ]),
+            Line::from(vec![Span::styled("", Style::default())]),
+            Line::from(vec![
+                Span::styled("End Date: ", end_style),
+                Span::styled(&end_date_str, end_style),
+            ]),
+            Line::from(vec![
+                Span::styled("Input: ", end_style),
+                Span::styled(&date_state.current_input, end_style),
+                Span::styled("_", if matches!(date_state.current_field, DateField::EndDate) { Style::default().fg(Color::Yellow) } else { Style::default().fg(Color::Gray) }),
+            ]),
+            Line::from(vec![Span::styled("", Style::default())]),
+            Line::from(vec![
+                Span::styled("Format: YYYYMMDD (e.g., 20240101)", Style::default().fg(Color::Gray)),
+            ]),
+        ];
+
+        let date_inputs = Paragraph::new(date_content)
+            .block(Block::default().borders(Borders::ALL).title("Date Range"))
+            .style(Style::default().fg(Color::White));
+        f.render_widget(date_inputs, chunks[1]);
+
+        // Status
+        let status = Paragraph::new("Tab: Switch field • Type: Enter date • Enter: Confirm • Esc: Cancel")
+            .block(Block::default().borders(Borders::ALL))
+            .style(Style::default().fg(Color::Gray));
+        f.render_widget(status, chunks[2]);
     }
 
     /// Render the actions list

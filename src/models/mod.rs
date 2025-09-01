@@ -323,3 +323,11 @@ pub struct GapAnalysis {
     pub estimated_collection_time: std::time::Duration,
 }
 
+/// Stock data statistics for UI display
+#[derive(Debug, Clone)]
+pub struct StockDataStats {
+    pub data_points: usize,
+    pub earliest_date: Option<NaiveDate>,
+    pub latest_date: Option<NaiveDate>,
+}
+

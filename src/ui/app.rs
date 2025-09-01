@@ -17,7 +17,7 @@ use std::io;
 use crate::{
     database::DatabaseManager,
     models::Config,
-    ui::{dashboard::Dashboard, data_collection::DataCollectionView},
+    ui::{dashboard::Dashboard, data_collection::DataCollectionView, data_analysis::DataAnalysisView},
 };
 
 pub struct StockTuiApp {
@@ -25,6 +25,7 @@ pub struct StockTuiApp {
     pub should_quit: bool,
     pub dashboard: Dashboard,
     pub data_collection: DataCollectionView,
+    pub data_analysis: DataAnalysisView,
     pub database: DatabaseManager,
 }
 
@@ -33,12 +34,14 @@ impl StockTuiApp {
         let database = DatabaseManager::new(&config.database_path)?;
         let dashboard = Dashboard::new();
         let data_collection = DataCollectionView::new();
+        let data_analysis = DataAnalysisView::new();
 
         Ok(Self {
             selected_tab: 0,
             should_quit: false,
             dashboard,
             data_collection,
+            data_analysis,
             database,
         })
     }
@@ -59,7 +62,7 @@ impl StockTuiApp {
         // Render content based on selected tab
         match self.selected_tab {
             0 => self.data_collection.render(f, chunks[1]),
-            1 => self.render_data_analysis_view(f, chunks[1]),
+            1 => self.data_analysis.render(f, chunks[1]),
             _ => self.data_collection.render(f, chunks[1]),
         }
 
@@ -142,9 +145,11 @@ impl StockTuiApp {
                 self.refresh_data()?;
             }
             _ => {
-                // If we're in data collection view, let it handle other keys
-                if self.selected_tab == 0 {
-                    self.data_collection.handle_key_event(key)?;
+                // Route key events to the appropriate view
+                match self.selected_tab {
+                    0 => self.data_collection.handle_key_event(key)?,
+                    1 => self.data_analysis.handle_key_event(key, &self.database)?,
+                    _ => {}
                 }
             }
         }
@@ -162,6 +167,10 @@ impl StockTuiApp {
     fn refresh_data(&mut self) -> Result<()> {
         // Try to refresh dashboard data, ignore errors
         let _ = self.dashboard.refresh_data(&self.database);
+        
+        // Load available stocks for data analysis
+        let _ = self.data_analysis.load_available_stocks(&self.database);
+        
         Ok(())
     }
 }

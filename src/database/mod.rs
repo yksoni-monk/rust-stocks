@@ -6,7 +6,7 @@ use tracing::info;
 
 use crate::models::{Stock, DailyPrice, StockStatus, DatabaseStats, CollectionProgress, 
                     StockProgress, DataCoverage, OverallProgress, StockCollectionStatus, 
-                    CollectionStatus};
+                    CollectionStatus, StockDataStats};
 
 #[derive(Clone)]
 pub struct DatabaseManager {
@@ -671,6 +671,74 @@ impl DatabaseManager {
         
         match result {
             Ok(date) => Ok(Some(date)),
+            Err(_) => Ok(None),
+        }
+    }
+
+    /// Get stock data statistics
+    pub fn get_stock_data_stats(&self, stock_id: i64) -> Result<StockDataStats> {
+        let conn = self.connection.lock().unwrap();
+        
+        // Get data points count
+        let data_points: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM daily_prices WHERE stock_id = ?",
+            params![stock_id],
+            |row| row.get(0),
+        )?;
+        
+        // Get earliest date
+        let earliest_date: Option<NaiveDate> = conn.query_row(
+            "SELECT MIN(date) FROM daily_prices WHERE stock_id = ?",
+            params![stock_id],
+            |row| {
+                let date_str: Option<String> = row.get(0)?;
+                Ok(date_str.and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok()))
+            },
+        ).ok().flatten();
+        
+        // Get latest date
+        let latest_date: Option<NaiveDate> = conn.query_row(
+            "SELECT MAX(date) FROM daily_prices WHERE stock_id = ?",
+            params![stock_id],
+            |row| {
+                let date_str: Option<String> = row.get(0)?;
+                Ok(date_str.and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok()))
+            },
+        ).ok().flatten();
+        
+        Ok(StockDataStats {
+            data_points: data_points as usize,
+            earliest_date,
+            latest_date,
+        })
+    }
+
+    /// Get P/E ratio for a stock on a specific date
+    pub fn get_pe_ratio_on_date(&self, stock_id: i64, date: NaiveDate) -> Result<Option<f64>> {
+        let conn = self.connection.lock().unwrap();
+        let result = conn.query_row(
+            "SELECT pe_ratio FROM daily_prices WHERE stock_id = ? AND date = ?",
+            params![stock_id, date.format("%Y-%m-%d").to_string()],
+            |row| row.get(0),
+        );
+        
+        match result {
+            Ok(pe_ratio) => Ok(Some(pe_ratio)),
+            Err(_) => Ok(None),
+        }
+    }
+
+    /// Get market cap for a stock on a specific date
+    pub fn get_market_cap_on_date(&self, stock_id: i64, date: NaiveDate) -> Result<Option<f64>> {
+        let conn = self.connection.lock().unwrap();
+        let result = conn.query_row(
+            "SELECT market_cap FROM daily_prices WHERE stock_id = ? AND date = ?",
+            params![stock_id, date.format("%Y-%m-%d").to_string()],
+            |row| row.get(0),
+        );
+        
+        match result {
+            Ok(market_cap) => Ok(Some(market_cap)),
             Err(_) => Ok(None),
         }
     }

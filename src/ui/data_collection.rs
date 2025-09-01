@@ -8,6 +8,8 @@ use ratatui::{
     Frame,
 };
 use std::process::Command;
+use std::sync::mpsc;
+use std::thread;
 
 
 
@@ -68,6 +70,8 @@ pub struct DataCollectionView {
     pub date_selection_state: Option<DateSelectionState>,
     pub pending_log_message: Option<String>,
     pub pending_log_level: Option<LogLevel>,
+    pub log_sender: Option<mpsc::Sender<String>>,
+    pub log_receiver: Option<mpsc::Receiver<String>>,
 }
 
 /// Confirmation dialog state
@@ -139,11 +143,16 @@ impl DataCollectionView {
             date_selection_state: None,
             pending_log_message: None,
             pending_log_level: None,
+            log_sender: None,
+            log_receiver: None,
         }
     }
 
     /// Handle key events
     pub fn handle_key_event(&mut self, key: crossterm::event::KeyCode) -> Result<()> {
+        // Process any incoming log messages from the background thread
+        self.process_incoming_logs();
+        
         if self.is_executing {
             // During execution, only allow quit
             if key == crossterm::event::KeyCode::Char('q') || key == crossterm::event::KeyCode::Esc {
@@ -604,45 +613,84 @@ impl DataCollectionView {
             .ok_or_else(|| anyhow::anyhow!("Invalid date"))
     }
 
-    /// Run single stock collection using batched approach
+    /// Run single stock collection using threaded approach with real-time feedback
     pub fn run_single_stock_collection(&mut self, symbol: String, start_date: NaiveDate, end_date: NaiveDate) -> Result<()> {
-        self.log_info(&format!("Starting batched single stock collection for {} from {} to {}", symbol, start_date, end_date));
+        self.log_info(&format!("Starting threaded batched single stock collection for {} from {} to {}", symbol, start_date, end_date));
         
-        // Create a progress callback that logs to the TUI
-        let _progress_callback = Box::new(|_message: String| {
-            // This will be called from the async function to update the UI
-            // For now, we'll use a simple approach
-        });
+        // Create a channel for real-time log communication
+        let (tx, rx) = mpsc::channel::<String>();
+        self.log_sender = Some(tx.clone());
+        self.log_receiver = Some(rx);
         
-        // For now, let's use the working batched test approach
-        let start_str = start_date.format("%Y%m%d").to_string();
-        let end_str = end_date.format("%Y%m%d").to_string();
+        // Set up database and client
+        let _database = crate::database::DatabaseManager::new("stocks.db")?;
+        let config = crate::models::Config::from_env()?;
+        let _schwab_client = crate::api::SchwabClient::new(&config)?;
         
-        self.log_info(&format!("Executing: cargo run --bin test_batched_stock -- {} {} {}", symbol, start_str, end_str));
-        
-        let output = Command::new("cargo")
-            .args(["run", "--bin", "test_batched_stock", "--", &symbol, &start_str, &end_str])
-            .output()?;
-
-        if output.status.success() {
-            self.log_success(&format!("Batched single stock collection completed for {}", symbol));
-            let stdout = String::from_utf8_lossy(&output.stdout);
+        // Spawn the data collection in a background thread
+        let symbol_clone = symbol.clone();
+        let tx_clone = tx.clone();
+        thread::spawn(move || {
+            // Note: This is a simplified approach. In a real implementation,
+            // we'd need to handle the async nature of the API calls properly.
+            // For now, we'll use the existing binary approach but with real-time output.
             
-            // Parse the output and log the progress
-            for line in stdout.lines() {
-                if line.contains("🔄 Batch") || line.contains("✅ Batch") || line.contains("❌ Batch") {
-                    self.log_info(line);
-                } else if line.contains("🎉") {
-                    self.log_success(line);
+            let start_str = start_date.format("%Y%m%d").to_string();
+            let end_str = end_date.format("%Y%m%d").to_string();
+            
+            // Execute the command and capture output in real-time
+            let mut child = Command::new("cargo")
+                .args(["run", "--bin", "test_batched_stock", "--", &symbol_clone, &start_str, &end_str])
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .expect("Failed to spawn process");
+
+            // Read output in real-time
+            if let Some(stdout) = child.stdout.take() {
+                use std::io::{BufRead, BufReader};
+                let reader = BufReader::new(stdout);
+                
+                for line in reader.lines() {
+                    if let Ok(line) = line {
+                        // Send progress messages through the channel
+                        if line.contains("🔄 Batch") || line.contains("✅ Batch") || line.contains("❌ Batch") ||
+                           line.contains("📊 Test") || line.contains("📈 Test 3") || line.contains("📅 Batch date range") ||
+                           line.contains("📊 Sample data") || line.contains("Total bars fetched") {
+                            let _ = tx_clone.send(line);
+                        }
+                    }
                 }
             }
-        } else {
-            self.log_error(&format!("Failed to collect data for {}", symbol));
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            self.log_error(&format!("Error: {}", stderr.trim()));
-        }
 
-        self.complete_operation();
+            // Wait for the process to complete
+            let status = child.wait().expect("Failed to wait for process");
+            
+            if status.success() {
+                let _ = tx_clone.send(format!("✅ Successfully completed data collection for {}", symbol_clone));
+            } else {
+                let _ = tx_clone.send(format!("❌ Failed to collect data for {}", symbol_clone));
+                if let Some(stderr) = child.stderr {
+                    use std::io::{BufRead, BufReader};
+                    let reader = BufReader::new(stderr);
+                    for line in reader.lines() {
+                        if let Ok(line) = line {
+                            let _ = tx_clone.send(format!("Error: {}", line));
+                        }
+                    }
+                }
+            }
+        });
+        
+        // Set up the operation state
+        self.current_operation = Some(ActiveOperation {
+            action_id: "threaded_collection".to_string(),
+            start_time: Utc::now(),
+            progress: 0.0,
+            current_message: "Starting threaded data collection...".to_string(),
+            logs: Vec::new(),
+        });
+        
         Ok(())
     }
 
@@ -691,6 +739,49 @@ impl DataCollectionView {
         // Keep only last 50 log messages
         if self.log_messages.len() > 50 {
             self.log_messages.remove(0);
+        }
+    }
+
+    /// Process incoming log messages from the background thread
+    fn process_incoming_logs(&mut self) {
+        if let Some(ref mut receiver) = self.log_receiver {
+            // Collect all available messages first to avoid borrowing issues
+            let mut messages = Vec::new();
+            while let Ok(message) = receiver.try_recv() {
+                messages.push(message);
+            }
+            
+            // Then process them all
+            for message in messages {
+                // Parse and log the message based on its content
+                if message.contains("🔄 Batch") {
+                    self.add_log_message(LogLevel::Info, &message);
+                } else if message.contains("✅ Batch") {
+                    self.add_log_message(LogLevel::Success, &message);
+                } else if message.contains("❌ Batch") {
+                    self.add_log_message(LogLevel::Error, &message);
+                } else if message.contains("📊 Test") {
+                    self.add_log_message(LogLevel::Info, &message);
+                } else if message.contains("📈 Test 3") {
+                    self.add_log_message(LogLevel::Info, &message);
+                } else if message.contains("📅 Batch date range") {
+                    self.add_log_message(LogLevel::Info, &message);
+                } else if message.contains("📊 Sample data") {
+                    self.add_log_message(LogLevel::Info, &message);
+                } else if message.contains("Total bars fetched") {
+                    self.add_log_message(LogLevel::Success, &message);
+                } else if message.contains("✅ Successfully completed") {
+                    self.add_log_message(LogLevel::Success, &message);
+                    self.complete_operation();
+                } else if message.contains("❌ Failed to collect") {
+                    self.add_log_message(LogLevel::Error, &message);
+                    self.complete_operation();
+                } else if message.starts_with("Error:") {
+                    self.add_log_message(LogLevel::Error, &message);
+                } else {
+                    self.add_log_message(LogLevel::Info, &message);
+                }
+            }
         }
     }
 

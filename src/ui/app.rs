@@ -85,6 +85,7 @@ impl StockTuiApp {
         f.render_widget(tabs, area);
     }
 
+    #[allow(dead_code)]
     fn render_data_analysis_view(&self, f: &mut Frame, area: Rect) {
         let paragraph = Paragraph::new(vec![
             Line::from("📊 Data Analysis"),

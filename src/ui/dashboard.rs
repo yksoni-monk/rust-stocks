@@ -16,6 +16,7 @@ pub struct Dashboard {
 
 // Simple database stats structure
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct DatabaseStats {
     pub total_stocks: usize,
     pub total_price_records: usize,
@@ -62,6 +63,7 @@ impl Dashboard {
     }
 
     /// Render the dashboard view
+    #[allow(dead_code)]
     pub fn render(&self, f: &mut Frame, area: Rect) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -90,6 +92,7 @@ impl Dashboard {
         self.render_quick_actions(f, main_chunks[1]);
     }
 
+    #[allow(dead_code)]
     fn render_database_stats(&self, f: &mut Frame, area: Rect) {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
@@ -192,6 +195,7 @@ impl Dashboard {
         }
     }
 
+    #[allow(dead_code)]
     fn render_quick_actions(&self, f: &mut Frame, area: Rect) {
         let actions = vec![
             ListItem::new("Tab - Switch to Data Collection view"),

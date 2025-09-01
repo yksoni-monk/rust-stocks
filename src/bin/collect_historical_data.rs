@@ -58,7 +58,7 @@ async fn main() -> Result<()> {
     info!("   This may take 20-30 minutes to complete...");
     
     // Start with a progress check every minute
-    let progress_start = std::time::Instant::now();
+    let _progress_start = std::time::Instant::now();
     
     // Start the historical data backfill
     match data_collector.backfill_historical_data(start_date, Some(end_date)).await {

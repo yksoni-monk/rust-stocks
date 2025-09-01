@@ -18,6 +18,7 @@ use tokio::runtime::Runtime;
 /// Data collection action definition
 #[derive(Debug, Clone)]
 pub struct DataCollectionAction {
+    #[allow(dead_code)]
     pub id: String,
     pub title: String,
     pub description: String,
@@ -36,10 +37,15 @@ pub enum ActionType {
 /// Active operation status
 #[derive(Debug, Clone)]
 pub struct ActiveOperation {
+    #[allow(dead_code)]
     pub action_id: String,
+    #[allow(dead_code)]
     pub start_time: DateTime<Utc>,
+    #[allow(dead_code)]
     pub progress: f64,
+    #[allow(dead_code)]
     pub current_message: String,
+    #[allow(dead_code)]
     pub logs: Vec<String>,
 }
 
@@ -99,7 +105,9 @@ pub struct StockSelectionState {
 #[derive(Debug, Clone)]
 pub struct DateSelectionState {
     pub selected_stock: String,
+    #[allow(dead_code)]
     pub start_date: NaiveDate,
+    #[allow(dead_code)]
     pub end_date: NaiveDate,
     pub selected_field: DateField, // start_date or end_date
     pub start_date_input: String,
@@ -618,6 +626,7 @@ impl DataCollectionView {
     }
 
     /// Filter stocks based on search query
+    #[allow(dead_code)]
     fn filter_stocks(&self, stock_state: &mut StockSelectionState) {
         if stock_state.search_query.is_empty() {
             return;

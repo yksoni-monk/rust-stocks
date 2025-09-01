@@ -47,6 +47,7 @@ pub struct DailyPrice {
 
 /// Stock analysis result for P/E decline ranking
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct StockAnalysis {
     pub stock: Stock,
     pub current_price: f64,
@@ -58,6 +59,7 @@ pub struct StockAnalysis {
 
 /// Detailed stock information for UI display
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct StockDetail {
     pub stock: Stock,
     pub current_price: DailyPrice,
@@ -68,6 +70,7 @@ pub struct StockDetail {
 
 /// Schwab API quote response structure
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct SchwabQuote {
     pub symbol: String,
     #[serde(rename = "lastPrice")]
@@ -103,6 +106,7 @@ pub struct SchwabPriceBar {
 
 /// System metadata for tracking state
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct SystemMetadata {
     pub key: String,
     pub value: String,
@@ -118,6 +122,7 @@ pub struct Config {
     pub schwab_token_path: String,
     pub database_path: String,
     pub rate_limit_per_minute: u32,
+    #[allow(dead_code)]
     pub batch_size: usize,
 }
 
@@ -155,16 +160,19 @@ impl Config {
 
 /// Date range for data analysis
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
 pub struct DateRange {
     pub start: NaiveDate,
     pub end: NaiveDate,
 }
 
 impl DateRange {
+    #[allow(dead_code)]
     pub fn new(start: NaiveDate, end: NaiveDate) -> Self {
         Self { start, end }
     }
     
+    #[allow(dead_code)]
     pub fn days_count(&self) -> i64 {
         (self.end - self.start).num_days() + 1
     }
@@ -172,6 +180,7 @@ impl DateRange {
 
 /// Database statistics for dashboard
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct DatabaseStats {
     pub total_stocks: usize,
     pub total_price_records: usize,
@@ -182,6 +191,7 @@ pub struct DatabaseStats {
 
 /// Collection progress metrics
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct CollectionProgress {
     pub stocks_with_data: usize,
     pub stocks_missing_data: usize,
@@ -192,6 +202,7 @@ pub struct CollectionProgress {
 
 /// Stock collection status for data collection view
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct StockCollectionStatus {
     pub symbol: String,
     pub company_name: String,
@@ -203,6 +214,7 @@ pub struct StockCollectionStatus {
 
 /// Collection status enumeration
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum CollectionStatus {
     NotStarted,
     InProgress { current_date: NaiveDate },
@@ -213,6 +225,7 @@ pub enum CollectionStatus {
 
 /// Collection mode for data collection
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
 pub enum CollectionMode {
     FullHistorical,    // Jan 1, 2020 to today for all stocks
     IncrementalUpdate, // Latest data only
@@ -229,6 +242,7 @@ pub enum CollectionMode {
 
 /// Data coverage analysis for stocks
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct DataCoverage {
     pub earliest_date: Option<NaiveDate>,
     pub latest_date: Option<NaiveDate>,
@@ -239,6 +253,7 @@ pub struct DataCoverage {
 
 /// Stock metrics for analysis
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct StockMetrics {
     pub pe_ratio_trend: Option<PETrend>,
     pub price_performance: PricePerformance,
@@ -247,6 +262,7 @@ pub struct StockMetrics {
 
 /// P/E ratio trend analysis
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct PETrend {
     pub current_pe: Option<f64>,
     pub year_ago_pe: Option<f64>,
@@ -256,6 +272,7 @@ pub struct PETrend {
 
 /// Price performance metrics
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct PricePerformance {
     pub current_price: f64,
     pub year_ago_price: f64,
@@ -266,6 +283,7 @@ pub struct PricePerformance {
 
 /// Volatility metrics
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct VolatilityMetrics {
     pub daily_volatility: f64,
     pub monthly_volatility: f64,
@@ -275,6 +293,7 @@ pub struct VolatilityMetrics {
 
 /// Trend direction enumeration
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
 pub enum TrendDirection {
     Increasing,
     Decreasing,
@@ -284,6 +303,7 @@ pub enum TrendDirection {
 
 /// Overall progress tracking
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct OverallProgress {
     pub target_start_date: NaiveDate, // Jan 1, 2020
     pub total_target_records: usize,   // ~1.5M records
@@ -296,6 +316,7 @@ pub struct OverallProgress {
 
 /// Individual stock progress
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct StockProgress {
     pub stock: Stock,
     pub data_range: Option<(NaiveDate, NaiveDate)>,
@@ -307,6 +328,7 @@ pub struct StockProgress {
 
 /// Data gap information
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct DataGap {
     pub symbol: String,
     pub missing_range: DateRange,
@@ -316,6 +338,7 @@ pub struct DataGap {
 
 /// Gap analysis summary
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct GapAnalysis {
     pub total_missing_days: usize,
     pub largest_gaps: Vec<DataGap>,

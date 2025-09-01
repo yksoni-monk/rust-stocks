@@ -25,6 +25,7 @@ struct TokenResponse {
 /// Token file format (matches Python script output)
 #[derive(Debug, Deserialize)]
 struct TokenFile {
+    #[allow(dead_code)]
     creation_timestamp: i64,
     token: TokenData,
 }
@@ -34,9 +35,13 @@ struct TokenData {
     access_token: String,
     refresh_token: String,
     expires_at: i64,
+    #[allow(dead_code)]
     expires_in: i64,
+    #[allow(dead_code)]
     token_type: String,
+    #[allow(dead_code)]
     scope: String,
+    #[allow(dead_code)]
     id_token: String,
 }
 
@@ -53,6 +58,7 @@ pub struct SchwabClient {
     client: Client,
     api_key: String,
     app_secret: String,
+    #[allow(dead_code)]
     callback_url: String,
     token_path: String,
     rate_limiter: ApiRateLimiter,
@@ -231,6 +237,7 @@ impl SchwabClient {
     }
 
     /// Get fundamental data for a symbol
+    #[allow(dead_code)]
     pub async fn get_fundamentals(&self, symbol: &str) -> Result<HashMap<String, Value>> {
         let url = format!("https://api.schwabapi.com/marketdata/v1/instruments?symbol={}&projection=fundamental", symbol);
         let data = self.make_request(&url).await?;
@@ -250,18 +257,21 @@ impl SchwabClient {
     }
 
     /// Get instrument data by symbol
+    #[allow(dead_code)]
     pub async fn get_instrument(&self, symbol: &str) -> Result<Value> {
         let url = format!("https://api.schwabapi.com/marketdata/v1/instruments?symbol={}&projection=symbol-search", symbol);
         self.make_request(&url).await
     }
 
     /// Get current market hours
+    #[allow(dead_code)]
     pub async fn get_market_hours(&self, market: &str) -> Result<Value> {
         let url = format!("https://api.schwabapi.com/marketdata/v1/markets/{}", market);
         self.make_request(&url).await
     }
     
     /// Get market hours for a specific date
+    #[allow(dead_code)]
     pub async fn get_market_hours_for_date(&self, market: &str, date: &str) -> Result<Value> {
         let url = format!("https://api.schwabapi.com/marketdata/v1/markets?markets={}&date={}", market, date);
         self.make_request(&url).await

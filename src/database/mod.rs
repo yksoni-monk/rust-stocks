@@ -106,6 +106,7 @@ impl DatabaseManager {
     }
 
     /// Insert or update a stock
+    #[allow(dead_code)]
     pub fn upsert_stock(&self, stock: &Stock) -> Result<i64> {
         let conn = self.connection.lock().unwrap();
         
@@ -234,6 +235,7 @@ impl DatabaseManager {
     }
 
     /// Get latest price for a stock
+    #[allow(dead_code)]
     pub fn get_latest_price(&self, stock_id: i64) -> Result<Option<DailyPrice>> {
         let conn = self.connection.lock().unwrap();
         
@@ -320,6 +322,7 @@ impl DatabaseManager {
         }
     }
 
+    #[allow(dead_code)]
     pub fn set_metadata(&self, key: &str, value: &str) -> Result<()> {
         let conn = self.connection.lock().unwrap();
         
@@ -341,11 +344,13 @@ impl DatabaseManager {
     }
 
     /// Set last update date
+    #[allow(dead_code)]
     pub fn set_last_update_date(&self, date: NaiveDate) -> Result<()> {
         self.set_metadata("last_update_date", &date.format("%Y-%m-%d").to_string())
     }
 
     /// Get database statistics
+    #[allow(dead_code)]
     pub fn get_stats(&self) -> Result<(usize, usize, Option<NaiveDate>)> {
         let conn = self.connection.lock().unwrap();
         
@@ -363,6 +368,7 @@ impl DatabaseManager {
     }
 
     /// Clear all stocks from database
+    #[allow(dead_code)]
     pub fn clear_stocks(&self) -> Result<()> {
         let conn = self.connection.lock().unwrap();
         conn.execute("DELETE FROM daily_prices", [])?;
@@ -376,6 +382,7 @@ impl DatabaseManager {
     // ============================================================================
 
     /// Get comprehensive database statistics
+    #[allow(dead_code)]
     pub fn get_database_stats(&self) -> Result<DatabaseStats> {
         let conn = self.connection.lock().unwrap();
         
@@ -419,6 +426,7 @@ impl DatabaseManager {
     }
 
     /// Get collection progress toward target date
+    #[allow(dead_code)]
     pub fn get_collection_progress(&self, target_date: NaiveDate) -> Result<CollectionProgress> {
         let conn = self.connection.lock().unwrap();
         
@@ -457,6 +465,7 @@ impl DatabaseManager {
     }
 
     /// Get overall progress analysis
+    #[allow(dead_code)]
     pub fn get_overall_progress(&self, target_date: NaiveDate) -> Result<OverallProgress> {
         let conn = self.connection.lock().unwrap();
         
@@ -515,6 +524,7 @@ impl DatabaseManager {
     }
 
     /// Get data coverage for a specific stock
+    #[allow(dead_code)]
     pub fn get_stock_data_coverage(&self, stock_id: i64, target_date: NaiveDate) -> Result<DataCoverage> {
         let conn = self.connection.lock().unwrap();
         
@@ -563,6 +573,7 @@ impl DatabaseManager {
     }
 
     /// Get stock progress list for all stocks
+    #[allow(dead_code)]
     pub fn get_all_stock_progress(&self, target_date: NaiveDate) -> Result<Vec<StockProgress>> {
         let stocks = self.get_active_stocks()?;
         let mut progress_list = Vec::new();
@@ -606,6 +617,7 @@ impl DatabaseManager {
     }
 
     /// Get stock collection status for UI display
+    #[allow(dead_code)]
     pub fn get_stock_collection_status(&self, target_date: NaiveDate) -> Result<Vec<StockCollectionStatus>> {
         let stocks = self.get_active_stocks()?;
         let mut status_list = Vec::new();

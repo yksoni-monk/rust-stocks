@@ -7,6 +7,7 @@ use tracing::{info, warn};
 use crate::database::DatabaseManager;
 use crate::models::{Stock, StockAnalysis, StockDetail, DailyPrice};
 
+#[allow(dead_code)]
 pub struct AnalysisEngine {
     database: DatabaseManager,
     fuzzy_matcher: SkimMatcherV2,
@@ -14,6 +15,7 @@ pub struct AnalysisEngine {
 
 impl AnalysisEngine {
     /// Create a new analysis engine
+    #[allow(dead_code)]
     pub fn new(database: DatabaseManager) -> Self {
         Self {
             database,
@@ -22,6 +24,7 @@ impl AnalysisEngine {
     }
 
     /// Get top stocks with maximum P/E ratio decline over the last year
+    #[allow(dead_code)]
     pub async fn get_top_pe_decliners(&self, limit: usize, offset: usize) -> Result<Vec<StockAnalysis>> {
         info!("Calculating P/E decliners with limit={}, offset={}", limit, offset);
         
@@ -52,6 +55,7 @@ impl AnalysisEngine {
     }
 
     /// Calculate P/E analysis for a single stock
+    #[allow(dead_code)]
     async fn calculate_pe_analysis(
         &self, 
         stock_id: i64, 
@@ -101,6 +105,7 @@ impl AnalysisEngine {
     }
 
     /// Get price data nearest to a specific date
+    #[allow(dead_code)]
     fn get_price_near_date(&self, stock_id: i64, target_date: NaiveDate) -> Result<Option<DailyPrice>> {
         // First try exact date
         if let Some(price) = self.database.get_price_on_date(stock_id, target_date)? {
@@ -126,6 +131,7 @@ impl AnalysisEngine {
     }
 
     /// Search for stocks by symbol or company name
+    #[allow(dead_code)]
     pub async fn search_stocks(&self, query: &str) -> Result<Vec<Stock>> {
         info!("Searching stocks with query: '{}'", query);
         
@@ -181,6 +187,7 @@ impl AnalysisEngine {
     }
 
     /// Get detailed information for a specific stock
+    #[allow(dead_code)]
     pub async fn get_stock_details(&self, symbol: &str) -> Result<Option<StockDetail>> {
         info!("Getting stock details for: {}", symbol);
         
@@ -226,6 +233,7 @@ impl AnalysisEngine {
     }
 
     /// Get price history within a date range
+    #[allow(dead_code)]
     fn get_price_history_range(&self, stock_id: i64, from_date: NaiveDate, to_date: NaiveDate) -> Result<Vec<DailyPrice>> {
         // This is a simplified implementation - in a real scenario you'd want a more efficient query
         let mut history = Vec::new();
@@ -242,6 +250,7 @@ impl AnalysisEngine {
     }
 
     /// Get summary statistics
+    #[allow(dead_code)]
     pub async fn get_summary_stats(&self) -> Result<SummaryStats> {
         let (stock_count, price_count, last_update) = self.database.get_stats()?;
         
@@ -262,6 +271,7 @@ impl AnalysisEngine {
 
 /// Summary statistics for the dashboard
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct SummaryStats {
     pub total_stocks: usize,
     pub total_price_records: usize,

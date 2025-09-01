@@ -31,6 +31,7 @@ impl ApiRateLimiter {
 /// Common traits for API clients
 #[async_trait::async_trait]
 pub trait StockDataProvider {
+    #[allow(dead_code)]
     async fn get_quotes(&self, symbols: &[String]) -> Result<Vec<SchwabQuote>>;
     async fn get_price_history(
         &self,

@@ -35,7 +35,9 @@ pub struct StockInfo {
 /// Stock data for a specific date
 #[derive(Debug, Clone)]
 pub struct StockData {
+    #[allow(dead_code)]
     pub symbol: String,
+    #[allow(dead_code)]
     pub company_name: String,
     pub date: NaiveDate,
     pub open: f64,

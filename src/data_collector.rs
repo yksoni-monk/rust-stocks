@@ -12,14 +12,19 @@ use crate::models::{Config, Stock, DailyPrice, SchwabQuote};
 
 /// Data collection system for fetching and storing stock data
 pub struct DataCollector {
+    #[allow(dead_code)]
     schwab_client: Arc<SchwabClient>,
+    #[allow(dead_code)]
     database: Arc<DatabaseManager>,
+    #[allow(dead_code)]
     config: Config,
+    #[allow(dead_code)]
     concurrency_semaphore: Arc<Semaphore>,
 }
 
 impl DataCollector {
     /// Create a new data collector
+    #[allow(dead_code)]
     pub fn new(schwab_client: SchwabClient, database: DatabaseManager, config: Config) -> Self {
         let max_concurrent = std::cmp::min(config.batch_size, 10); // Limit concurrent requests
         
@@ -32,6 +37,7 @@ impl DataCollector {
     }
 
     /// Get all active S&P 500 stocks from database
+    #[allow(dead_code)]
     pub fn get_active_stocks(&self) -> Result<Vec<Stock>> {
         info!("📊 Getting active stocks from database...");
         let stocks = self.database.get_active_stocks()?;
@@ -40,6 +46,7 @@ impl DataCollector {
     }
 
     /// Fetch current quotes for all active stocks
+    #[allow(dead_code)]
     pub async fn fetch_current_quotes(&self) -> Result<usize> {
         info!("📊 Fetching current quotes for all active stocks...");
         
@@ -62,6 +69,7 @@ impl DataCollector {
     }
 
     /// Process quotes and update database
+    #[allow(dead_code)]
     async fn process_quotes(&self, quotes: Vec<SchwabQuote>, stocks: &[Stock]) -> Result<usize> {
         let mut updated_count = 0;
         let today = Utc::now().date_naive();
@@ -106,6 +114,7 @@ impl DataCollector {
     }
 
     /// Perform historical data backfill from a start date
+    #[allow(dead_code)]
     pub async fn backfill_historical_data(&self, from_date: NaiveDate, to_date: Option<NaiveDate>) -> Result<usize> {
         let end_date = to_date.unwrap_or_else(|| Utc::now().date_naive());
         
@@ -229,6 +238,7 @@ impl DataCollector {
     }
 
     /// Perform incremental update (fetch data since last update)
+    #[allow(dead_code)]
     pub async fn incremental_update(&self) -> Result<usize> {
         info!("🔄 Starting incremental data update...");
         
@@ -259,6 +269,7 @@ impl DataCollector {
     }
 
     /// Get collection statistics
+    #[allow(dead_code)]
     pub async fn get_collection_stats(&self) -> Result<CollectionStats> {
         let (stock_count, price_count, last_update) = self.database.get_stats()?;
         
@@ -275,12 +286,14 @@ impl DataCollector {
     }
 
     /// Get the date range of available price data
+    #[allow(dead_code)]
     async fn get_data_date_range(&self) -> Result<(Option<NaiveDate>, Option<NaiveDate>)> {
         // This would require additional database queries - simplified for now
         Ok((None, None))
     }
 
     /// Validate data integrity
+    #[allow(dead_code)]
     pub async fn validate_data_integrity(&self) -> Result<ValidationReport> {
         info!("🔍 Validating data integrity...");
         
@@ -310,6 +323,7 @@ impl DataCollector {
     }
 
     /// Fetch data for a single stock in batches with progress updates
+    #[allow(dead_code)]
     pub async fn fetch_single_stock_batched(
         &self,
         symbol: &str,
@@ -375,6 +389,7 @@ impl DataCollector {
 
 /// Statistics about data collection
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct CollectionStats {
     pub total_stocks: usize,
     pub total_price_records: usize,
@@ -385,6 +400,7 @@ pub struct CollectionStats {
 
 /// Data validation report
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct ValidationReport {
     pub stocks_with_data: usize,
     pub stocks_without_data: usize,
@@ -393,6 +409,7 @@ pub struct ValidationReport {
 }
 
 impl ValidationReport {
+    #[allow(dead_code)]
     fn new() -> Self {
         Self {
             stocks_with_data: 0,

@@ -73,14 +73,21 @@ impl DataAnalysisView {
                 for stock in stocks {
                     // Get data statistics for this stock
                     if let Some(stock_id) = stock.id {
-                        if let Ok(stats) = database.get_stock_data_stats(stock_id) {
-                            stock_infos.push(StockInfo {
-                                symbol: stock.symbol.clone(),
-                                company_name: stock.company_name.clone(),
-                                data_points: stats.data_points,
-                                latest_date: stats.latest_date,
-                                earliest_date: stats.earliest_date,
-                            });
+                        match database.get_stock_data_stats(stock_id) {
+                            Ok(stats) => {
+                                if stats.data_points > 0 {
+                                    stock_infos.push(StockInfo {
+                                        symbol: stock.symbol.clone(),
+                                        company_name: stock.company_name.clone(),
+                                        data_points: stats.data_points,
+                                        latest_date: stats.latest_date,
+                                        earliest_date: stats.earliest_date,
+                                    });
+                                }
+                            }
+                            Err(_) => {
+                                // Ignore errors for individual stocks
+                            }
                         }
                     }
                 }
@@ -134,6 +141,39 @@ impl DataAnalysisView {
                     self.stock_data = None;
                     self.date_input.clear();
                     self.cursor_position = 0;
+                }
+            }
+            KeyCode::Char('b') | KeyCode::Char('B') => {
+                // Back to stock list (alternative to Esc)
+                if self.selected_stock.is_some() {
+                    self.selected_stock = None;
+                    self.stock_data = None;
+                    self.date_input.clear();
+                    self.cursor_position = 0;
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') => {
+                // Next stock (when viewing stock data)
+                if self.selected_stock.is_some() && !self.available_stocks.is_empty() {
+                    self.selected_stock_index = (self.selected_stock_index + 1) % self.available_stocks.len();
+                    self.selected_stock = Some(self.available_stocks[self.selected_stock_index].clone());
+                    self.stock_data = None;
+                    self.date_input = chrono::Utc::now().date_naive().format("%Y-%m-%d").to_string();
+                    self.cursor_position = self.date_input.len();
+                }
+            }
+            KeyCode::Char('p') | KeyCode::Char('P') => {
+                // Previous stock (when viewing stock data)
+                if self.selected_stock.is_some() && !self.available_stocks.is_empty() {
+                    self.selected_stock_index = if self.selected_stock_index == 0 {
+                        self.available_stocks.len() - 1
+                    } else {
+                        self.selected_stock_index - 1
+                    };
+                    self.selected_stock = Some(self.available_stocks[self.selected_stock_index].clone());
+                    self.stock_data = None;
+                    self.date_input = chrono::Utc::now().date_naive().format("%Y-%m-%d").to_string();
+                    self.cursor_position = self.date_input.len();
                 }
             }
             KeyCode::Char(c) => {
@@ -264,9 +304,20 @@ impl DataAnalysisView {
                 .style(Style::default().fg(Color::Gray));
             f.render_widget(empty, chunks[1]);
         } else {
+            // Calculate how many rows fit; each item uses 2 lines + 1 for borders/title
+            let list_height = chunks[1].height as usize;
+            let visible_rows = list_height.saturating_sub(2) / 2; // approximate visible items
+            let visible_rows = visible_rows.max(1);
+
+            // Compute start index so selected item stays in view
+            let selected = self.selected_stock_index.min(self.available_stocks.len().saturating_sub(1));
+            let start_index = if selected >= visible_rows { selected + 1 - visible_rows } else { 0 };
+
             let items: Vec<ListItem> = self.available_stocks
                 .iter()
                 .enumerate()
+                .skip(start_index)
+                .take(visible_rows)
                 .map(|(i, stock)| {
                     let is_selected = i == self.selected_stock_index;
                     let style = if is_selected {
@@ -399,7 +450,7 @@ impl DataAnalysisView {
         }
 
         // Status
-        let status = Paragraph::new("←/→: Navigate • Type: Enter Date • Enter: Fetch Data • Esc: Back to List • Q: Quit")
+        let status = Paragraph::new("←/→: Navigate • Type: Enter Date • Enter: Fetch Data • N/P: Next/Prev Stock • B: Back to List • Q: Quit")
             .block(Block::default().borders(Borders::ALL))
             .style(Style::default().fg(Color::Gray));
         f.render_widget(status, chunks[3]);

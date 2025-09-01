@@ -9,7 +9,9 @@ use ratatui::{
 };
 use std::process::Command;
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::thread;
+use tokio::runtime::Runtime;
 
 
 
@@ -72,6 +74,8 @@ pub struct DataCollectionView {
     pub pending_log_level: Option<LogLevel>,
     pub log_sender: Option<mpsc::Sender<String>>,
     pub log_receiver: Option<mpsc::Receiver<String>>,
+    pub log_scroll_position: usize,
+    pub auto_scroll_logs: bool,
 }
 
 /// Confirmation dialog state
@@ -145,6 +149,8 @@ impl DataCollectionView {
             pending_log_level: None,
             log_sender: None,
             log_receiver: None,
+            log_scroll_position: 0,
+            auto_scroll_logs: true,
         }
     }
 
@@ -391,6 +397,71 @@ impl DataCollectionView {
             crossterm::event::KeyCode::Down => {
                 self.selected_action = (self.selected_action + 1) % self.actions.len();
             }
+                        crossterm::event::KeyCode::Char('l') | crossterm::event::KeyCode::Char('L') => {
+                // Toggle auto-scroll for logs
+                self.auto_scroll_logs = !self.auto_scroll_logs;
+                let status = if self.auto_scroll_logs { "enabled" } else { "disabled" };
+                self.log_info(&format!("Log auto-scroll {}", status));
+            }
+            crossterm::event::KeyCode::PageUp => {
+                // Scroll logs up
+                if self.log_scroll_position > 0 {
+                    self.log_scroll_position = self.log_scroll_position.saturating_sub(10);
+                }
+            }
+            crossterm::event::KeyCode::PageDown => {
+                // Scroll logs down
+                if self.log_messages.len() > 0 {
+                    let max_scroll = self.log_messages.len().saturating_sub(1);
+                    self.log_scroll_position = (self.log_scroll_position + 10).min(max_scroll);
+                }
+            }
+            crossterm::event::KeyCode::Char('u') | crossterm::event::KeyCode::Char('U') => {
+                // Alternative: Scroll logs up (U key)
+                if self.log_scroll_position > 0 {
+                    self.log_scroll_position = self.log_scroll_position.saturating_sub(5);
+                }
+            }
+            crossterm::event::KeyCode::Char('d') | crossterm::event::KeyCode::Char('D') => {
+                // Alternative: Scroll logs down (D key)
+                if self.log_messages.len() > 0 {
+                    let max_scroll = self.log_messages.len().saturating_sub(1);
+                    self.log_scroll_position = (self.log_scroll_position + 5).min(max_scroll);
+                }
+            }
+            crossterm::event::KeyCode::Char('k') | crossterm::event::KeyCode::Char('K') => {
+                // Alternative: Scroll logs up (K key)
+                if self.log_scroll_position > 0 {
+                    self.log_scroll_position = self.log_scroll_position.saturating_sub(1);
+                }
+            }
+            crossterm::event::KeyCode::Char('j') | crossterm::event::KeyCode::Char('J') => {
+                // Alternative: Scroll logs down (J key)
+                if self.log_messages.len() > 0 {
+                    let max_scroll = self.log_messages.len().saturating_sub(1);
+                    self.log_scroll_position = (self.log_scroll_position + 1).min(max_scroll);
+                }
+            }
+            crossterm::event::KeyCode::Home => {
+                // Scroll to top of logs
+                self.log_scroll_position = 0;
+            }
+            crossterm::event::KeyCode::End => {
+                // Scroll to bottom of logs
+                if self.log_messages.len() > 0 {
+                    self.log_scroll_position = self.log_messages.len().saturating_sub(1);
+                }
+            }
+            crossterm::event::KeyCode::Char('t') | crossterm::event::KeyCode::Char('T') => {
+                // Alternative: Scroll to top of logs (T key)
+                self.log_scroll_position = 0;
+            }
+            crossterm::event::KeyCode::Char('b') | crossterm::event::KeyCode::Char('B') => {
+                // Alternative: Scroll to bottom of logs (B key)
+                if self.log_messages.len() > 0 {
+                    self.log_scroll_position = self.log_messages.len().saturating_sub(1);
+                }
+            }
             crossterm::event::KeyCode::Enter => {
                 self.execute_selected_action()?;
             }
@@ -613,75 +684,73 @@ impl DataCollectionView {
             .ok_or_else(|| anyhow::anyhow!("Invalid date"))
     }
 
-    /// Run single stock collection using threaded approach with real-time feedback
+    /// Run single stock collection using a background thread and real async collector (inserts into DB)
     pub fn run_single_stock_collection(&mut self, symbol: String, start_date: NaiveDate, end_date: NaiveDate) -> Result<()> {
-        self.log_info(&format!("Starting threaded batched single stock collection for {} from {} to {}", symbol, start_date, end_date));
-        
-        // Create a channel for real-time log communication
+        self.log_info(&format!("Starting single stock collection for {} from {} to {}", symbol, start_date, end_date));
+
+        // Channel for real-time log updates
         let (tx, rx) = mpsc::channel::<String>();
         self.log_sender = Some(tx.clone());
         self.log_receiver = Some(rx);
-        
-        // Set up database and client
-        let _database = crate::database::DatabaseManager::new("stocks.db")?;
-        let config = crate::models::Config::from_env()?;
-        let _schwab_client = crate::api::SchwabClient::new(&config)?;
-        
-        // Spawn the data collection in a background thread
+
+        // Spawn the data collection in a background thread using a Tokio runtime
         let symbol_clone = symbol.clone();
-        let tx_clone = tx.clone();
         thread::spawn(move || {
-            // Note: This is a simplified approach. In a real implementation,
-            // we'd need to handle the async nature of the API calls properly.
-            // For now, we'll use the existing binary approach but with real-time output.
-            
-            let start_str = start_date.format("%Y%m%d").to_string();
-            let end_str = end_date.format("%Y%m%d").to_string();
-            
-            // Execute the command and capture output in real-time
-            let mut child = Command::new("cargo")
-                .args(["run", "--bin", "test_batched_stock", "--", &symbol_clone, &start_str, &end_str])
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .spawn()
-                .expect("Failed to spawn process");
+            let _ = tx.send(format!("🔄 Preparing to fetch {} from {} to {}", symbol_clone, start_date, end_date));
+            // Build runtime
+            let rt = match Runtime::new() {
+                Ok(rt) => rt,
+                Err(e) => {
+                    let _ = tx.send(format!("❌ Failed to create async runtime: {}", e));
+                    return;
+                }
+            };
 
-            // Read output in real-time
-            if let Some(stdout) = child.stdout.take() {
-                use std::io::{BufRead, BufReader};
-                let reader = BufReader::new(stdout);
-                
-                for line in reader.lines() {
-                    if let Ok(line) = line {
-                        // Send progress messages through the channel
-                        if line.contains("🔄 Batch") || line.contains("✅ Batch") || line.contains("❌ Batch") ||
-                           line.contains("📊 Test") || line.contains("📈 Test 3") || line.contains("📅 Batch date range") ||
-                           line.contains("📊 Sample data") || line.contains("Total bars fetched") {
-                            let _ = tx_clone.send(line);
-                        }
+            // Run async block
+            rt.block_on(async move {
+                // Load config, DB and client
+                let config = match crate::models::Config::from_env() {
+                    Ok(c) => c,
+                    Err(e) => { let _ = tx.send(format!("❌ Config error: {}", e)); return; }
+                };
+                let database = match crate::database::DatabaseManager::new(&config.database_path) {
+                    Ok(db) => db,
+                    Err(e) => { let _ = tx.send(format!("❌ DB init error: {}", e)); return; }
+                };
+                let client = match crate::api::SchwabClient::new(&config) {
+                    Ok(c) => c,
+                    Err(e) => { let _ = tx.send(format!("❌ Client init error: {}", e)); return; }
+                };
+
+                // Find stock by symbol
+                let stock = match database.get_stock_by_symbol(&symbol_clone) {
+                    Ok(Some(s)) => s,
+                    Ok(None) => { let _ = tx.send(format!("❌ Unknown symbol {} in DB", symbol_clone)); return; }
+                    Err(e) => { let _ = tx.send(format!("❌ DB query error: {}", e)); return; }
+                };
+
+                let client_arc = Arc::new(client);
+                let db_arc = Arc::new(database);
+
+                let _ = tx.send(format!("📡 Fetching {} ({} → {})", symbol_clone, start_date, end_date));
+                match crate::data_collector::DataCollector::fetch_stock_history(
+                    client_arc,
+                    db_arc,
+                    stock,
+                    start_date,
+                    end_date,
+                ).await {
+                    Ok(inserted) => {
+                        let _ = tx.send(format!("✅ Inserted {} records for {}", inserted, symbol_clone));
+                        let _ = tx.send("✅ Successfully completed".to_string());
+                    }
+                    Err(e) => {
+                        let _ = tx.send(format!("❌ Failed to collect data for {}: {}", symbol_clone, e));
                     }
                 }
-            }
-
-            // Wait for the process to complete
-            let status = child.wait().expect("Failed to wait for process");
-            
-            if status.success() {
-                let _ = tx_clone.send(format!("✅ Successfully completed data collection for {}", symbol_clone));
-            } else {
-                let _ = tx_clone.send(format!("❌ Failed to collect data for {}", symbol_clone));
-                if let Some(stderr) = child.stderr {
-                    use std::io::{BufRead, BufReader};
-                    let reader = BufReader::new(stderr);
-                    for line in reader.lines() {
-                        if let Ok(line) = line {
-                            let _ = tx_clone.send(format!("Error: {}", line));
-                        }
-                    }
-                }
-            }
+            });
         });
-        
+
         // Set up the operation state
         self.current_operation = Some(ActiveOperation {
             action_id: "threaded_collection".to_string(),
@@ -690,7 +759,7 @@ impl DataCollectionView {
             current_message: "Starting threaded data collection...".to_string(),
             logs: Vec::new(),
         });
-        
+
         Ok(())
     }
 
@@ -739,6 +808,11 @@ impl DataCollectionView {
         // Keep only last 50 log messages
         if self.log_messages.len() > 50 {
             self.log_messages.remove(0);
+        }
+        
+        // Auto-scroll to bottom if enabled
+        if self.auto_scroll_logs && self.log_messages.len() > 0 {
+            self.log_scroll_position = self.log_messages.len().saturating_sub(1);
         }
     }
 
@@ -1079,10 +1153,20 @@ impl DataCollectionView {
 
     /// Render the logs
     fn render_logs(&self, f: &mut Frame, area: Rect) {
+        let available_height = area.height.saturating_sub(2) as usize; // Account for borders
+        
+        // Calculate visible log range based on scroll position
+        let total_logs = self.log_messages.len();
+        let start_index = if total_logs > available_height {
+            self.log_scroll_position.saturating_sub(available_height.saturating_sub(1))
+        } else {
+            0
+        };
+        let end_index = (start_index + available_height).min(total_logs);
         let log_lines: Vec<Line> = self.log_messages
             .iter()
-            .rev() // Show newest first
-            .take(20) // Limit to 20 lines
+            .skip(start_index)
+            .take(end_index - start_index)
             .map(|log| {
                 let timestamp = log.timestamp.format("%H:%M:%S").to_string();
                 let level_style = match log.level {
@@ -1099,10 +1183,20 @@ impl DataCollectionView {
             })
             .collect();
 
+        // Create title with scroll indicator
+        let scroll_info = if total_logs > available_height {
+            format!("Logs ({}/{})", self.log_scroll_position + 1, total_logs)
+        } else {
+            "Logs".to_string()
+        };
+        
+        let auto_scroll_indicator = if self.auto_scroll_logs { " [AUTO]" } else { " [MANUAL]" };
+        let title = format!("{}{}", scroll_info, auto_scroll_indicator);
+
         let logs = Paragraph::new(log_lines)
             .block(Block::default()
                 .borders(Borders::ALL)
-                .title("Logs"))
+                .title(title))
             .wrap(ratatui::widgets::Wrap { trim: true });
 
         f.render_widget(logs, area);
@@ -1123,6 +1217,14 @@ impl DataCollectionView {
                     Span::styled("↑/↓: Navigate • ", Style::default().fg(Color::Gray)),
                     Span::styled("Enter", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
                     Span::styled(": Execute • ", Style::default().fg(Color::Gray)),
+                    Span::styled("L", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    Span::styled(": Toggle Auto-scroll • ", Style::default().fg(Color::Gray)),
+                    Span::styled("U/D", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    Span::styled(": Scroll Logs • ", Style::default().fg(Color::Gray)),
+                    Span::styled("J/K", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    Span::styled(": Fine Scroll • ", Style::default().fg(Color::Gray)),
+                    Span::styled("T/B", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    Span::styled(": Top/Bottom • ", Style::default().fg(Color::Gray)),
                     Span::styled("Q", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
                     Span::styled(": Quit", Style::default().fg(Color::Gray)),
                 ]),

@@ -10,8 +10,7 @@ use ratatui::{
 use std::process::Command;
 use std::sync::mpsc;
 use std::sync::Arc;
-use std::thread;
-use tokio::runtime::Runtime;
+use tokio::sync::broadcast;
 
 
 
@@ -78,6 +77,7 @@ pub struct DataCollectionView {
     pub date_selection_state: Option<DateSelectionState>,
     pub pending_log_message: Option<String>,
     pub pending_log_level: Option<LogLevel>,
+    // Legacy fields - no longer used with broadcast channels
     pub log_sender: Option<mpsc::Sender<String>>,
     pub log_receiver: Option<mpsc::Receiver<String>>,
     pub log_scroll_position: usize,
@@ -163,7 +163,7 @@ impl DataCollectionView {
     }
 
     /// Handle key events
-    pub fn handle_key_event(&mut self, key: crossterm::event::KeyCode) -> Result<()> {
+    pub fn handle_key_event(&mut self, key: crossterm::event::KeyCode, log_sender: broadcast::Sender<crate::ui::app::LogMessage>) -> Result<()> {
         // Process any incoming log messages from the background thread
         self.process_incoming_logs();
         
@@ -186,7 +186,7 @@ impl DataCollectionView {
                     if confirmation.selected_option {
                         // User confirmed - execute the action
                         self.confirmation_state = None;
-                        self.start_operation_by_type(&action_type)?;
+                        self.start_operation_by_type(&action_type, log_sender)?;
                     } else {
                         // User cancelled
                         self.log_info("Operation cancelled by user");
@@ -371,7 +371,7 @@ impl DataCollectionView {
                                     start_date,
                                     end_date,
                                 };
-                                self.start_operation_by_type(&action_type)?;
+                                self.start_operation_by_type(&action_type, log_sender)?;
                                 return Ok(());
                             }
                         }
@@ -471,7 +471,7 @@ impl DataCollectionView {
                 }
             }
             crossterm::event::KeyCode::Enter => {
-                self.execute_selected_action()?;
+                self.execute_selected_action(log_sender)?;
             }
             _ => {}
         }
@@ -482,7 +482,7 @@ impl DataCollectionView {
     }
 
     /// Execute the currently selected action
-    pub fn execute_selected_action(&mut self) -> Result<()> {
+    pub fn execute_selected_action(&mut self, log_sender: broadcast::Sender<crate::ui::app::LogMessage>) -> Result<()> {
         if self.selected_action >= self.actions.len() {
             return Ok(());
         }
@@ -502,12 +502,12 @@ impl DataCollectionView {
             return Ok(());
         }
 
-        self.start_operation_by_type(&action_type)?;
+        self.start_operation_by_type(&action_type, log_sender)?;
         Ok(())
     }
 
     /// Start an operation by action type
-    pub fn start_operation_by_type(&mut self, action_type: &ActionType) -> Result<()> {
+    pub fn start_operation_by_type(&mut self, action_type: &ActionType, log_sender: broadcast::Sender<crate::ui::app::LogMessage>) -> Result<()> {
         // Execute the action based on type
         match action_type {
             ActionType::CollectHistoricalData { start_date, end_date } => {
@@ -532,7 +532,7 @@ impl DataCollectionView {
                     logs: Vec::new(),
                 });
                 self.log_info(&format!("Starting single stock collection for {} from {} to {}", symbol, start_date, end_date));
-                self.run_single_stock_collection(symbol.clone(), *start_date, *end_date)?;
+                self.run_single_stock_collection(symbol.clone(), *start_date, *end_date, log_sender)?;
             }
             ActionType::SelectStockAndDates => {
                 // Don't set executing state for interactive selection
@@ -693,79 +693,151 @@ impl DataCollectionView {
             .ok_or_else(|| anyhow::anyhow!("Invalid date"))
     }
 
-    /// Run single stock collection using a background thread and real async collector (inserts into DB)
-    pub fn run_single_stock_collection(&mut self, symbol: String, start_date: NaiveDate, end_date: NaiveDate) -> Result<()> {
+    /// Run single stock collection using async tasks and broadcast channel
+    pub fn run_single_stock_collection(&mut self, symbol: String, start_date: NaiveDate, end_date: NaiveDate, log_sender: broadcast::Sender<crate::ui::app::LogMessage>) -> Result<()> {
         self.log_info(&format!("Starting single stock collection for {} from {} to {}", symbol, start_date, end_date));
 
-        // Channel for real-time log updates
-        let (tx, rx) = mpsc::channel::<String>();
-        self.log_sender = Some(tx.clone());
-        self.log_receiver = Some(rx);
-
-        // Spawn the data collection in a background thread using a Tokio runtime
+        // Spawn the data collection as an async task
         let symbol_clone = symbol.clone();
-        thread::spawn(move || {
-            let _ = tx.send(format!("🔄 Preparing to fetch {} from {} to {}", symbol_clone, start_date, end_date));
-            // Build runtime
-            let rt = match Runtime::new() {
-                Ok(rt) => rt,
-                Err(e) => {
-                    let _ = tx.send(format!("❌ Failed to create async runtime: {}", e));
+        tokio::spawn(async move {
+            let _ = log_sender.send(crate::ui::app::LogMessage {
+                timestamp: Utc::now(),
+                level: crate::ui::app::LogLevel::Info,
+                message: format!("🔄 Preparing to fetch {} from {} to {}", symbol_clone, start_date, end_date),
+            });
+
+            // Load config, DB and client
+            let config = match crate::models::Config::from_env() {
+                Ok(c) => c,
+                Err(e) => { 
+                    let _ = log_sender.send(crate::ui::app::LogMessage {
+                        timestamp: Utc::now(),
+                        level: crate::ui::app::LogLevel::Error,
+                        message: format!("❌ Config error: {}", e),
+                    });
+                    return;
+                }
+            };
+            let database = match crate::database::DatabaseManager::new(&config.database_path) {
+                Ok(db) => db,
+                Err(e) => { 
+                    let _ = log_sender.send(crate::ui::app::LogMessage {
+                        timestamp: Utc::now(),
+                        level: crate::ui::app::LogLevel::Error,
+                        message: format!("❌ DB init error: {}", e),
+                    });
+                    return;
+                }
+            };
+            let client = match crate::api::SchwabClient::new(&config) {
+                Ok(c) => c,
+                Err(e) => { 
+                    let _ = log_sender.send(crate::ui::app::LogMessage {
+                        timestamp: Utc::now(),
+                        level: crate::ui::app::LogLevel::Error,
+                        message: format!("❌ Client init error: {}", e),
+                    });
                     return;
                 }
             };
 
-            // Run async block
-            rt.block_on(async move {
-                // Load config, DB and client
-                let config = match crate::models::Config::from_env() {
-                    Ok(c) => c,
-                    Err(e) => { let _ = tx.send(format!("❌ Config error: {}", e)); return; }
-                };
-                let database = match crate::database::DatabaseManager::new(&config.database_path) {
-                    Ok(db) => db,
-                    Err(e) => { let _ = tx.send(format!("❌ DB init error: {}", e)); return; }
-                };
-                let client = match crate::api::SchwabClient::new(&config) {
-                    Ok(c) => c,
-                    Err(e) => { let _ = tx.send(format!("❌ Client init error: {}", e)); return; }
-                };
+            // Find stock by symbol
+            let stock = match database.get_stock_by_symbol(&symbol_clone) {
+                Ok(Some(s)) => s,
+                Ok(None) => { 
+                    let _ = log_sender.send(crate::ui::app::LogMessage {
+                        timestamp: Utc::now(),
+                        level: crate::ui::app::LogLevel::Error,
+                        message: format!("❌ Unknown symbol {} in DB", symbol_clone),
+                    });
+                    return;
+                }
+                Err(e) => { 
+                    let _ = log_sender.send(crate::ui::app::LogMessage {
+                        timestamp: Utc::now(),
+                        level: crate::ui::app::LogLevel::Error,
+                        message: format!("❌ DB query error: {}", e),
+                    });
+                    return;
+                }
+            };
 
-                // Find stock by symbol
-                let stock = match database.get_stock_by_symbol(&symbol_clone) {
-                    Ok(Some(s)) => s,
-                    Ok(None) => { let _ = tx.send(format!("❌ Unknown symbol {} in DB", symbol_clone)); return; }
-                    Err(e) => { let _ = tx.send(format!("❌ DB query error: {}", e)); return; }
-                };
+            let client_arc = Arc::new(client);
+            let db_arc = Arc::new(database);
 
-                let client_arc = Arc::new(client);
-                let db_arc = Arc::new(database);
+            let _ = log_sender.send(crate::ui::app::LogMessage {
+                timestamp: Utc::now(),
+                level: crate::ui::app::LogLevel::Info,
+                message: format!("📡 Fetching {} ({} → {})", symbol_clone, start_date, end_date),
+            });
 
-                let _ = tx.send(format!("📡 Fetching {} ({} → {})", symbol_clone, start_date, end_date));
+            // Calculate total days to fetch
+            let total_days = (end_date - start_date).num_days() as usize;
+            let _ = log_sender.send(crate::ui::app::LogMessage {
+                timestamp: Utc::now(),
+                level: crate::ui::app::LogLevel::Info,
+                message: format!("📊 Total days to fetch: {}", total_days),
+            });
+
+            // Fetch data in smaller batches for better progress reporting
+            let batch_size = 30; // Fetch 30 days at a time
+            let mut current_date = start_date;
+            let mut total_inserted = 0;
+            let mut batch_count = 0;
+
+            while current_date <= end_date {
+                batch_count += 1;
+                let batch_end = std::cmp::min(current_date + chrono::Duration::days(batch_size as i64 - 1), end_date);
+
+                let _ = log_sender.send(crate::ui::app::LogMessage {
+                    timestamp: Utc::now(),
+                    level: crate::ui::app::LogLevel::Info,
+                    message: format!("🔄 Batch {}: Fetching {} to {}", batch_count, current_date, batch_end),
+                });
+
                 match crate::data_collector::DataCollector::fetch_stock_history(
-                    client_arc,
-                    db_arc,
-                    stock,
-                    start_date,
-                    end_date,
+                    client_arc.clone(),
+                    db_arc.clone(),
+                    stock.clone(),
+                    current_date,
+                    batch_end,
                 ).await {
                     Ok(inserted) => {
-                        let _ = tx.send(format!("✅ Inserted {} records for {}", inserted, symbol_clone));
-                        let _ = tx.send("✅ Successfully completed".to_string());
+                        total_inserted += inserted;
+                        let _ = log_sender.send(crate::ui::app::LogMessage {
+                            timestamp: Utc::now(),
+                            level: crate::ui::app::LogLevel::Success,
+                            message: format!("✅ Batch {}: Inserted {} records (Total: {})", batch_count, inserted, total_inserted),
+                        });
                     }
                     Err(e) => {
-                        let _ = tx.send(format!("❌ Failed to collect data for {}: {}", symbol_clone, e));
+                        let _ = log_sender.send(crate::ui::app::LogMessage {
+                            timestamp: Utc::now(),
+                            level: crate::ui::app::LogLevel::Error,
+                            message: format!("❌ Batch {}: Failed - {}", batch_count, e),
+                        });
                     }
                 }
+
+                current_date = batch_end + chrono::Duration::days(1);
+
+                // Small delay between batches to avoid rate limiting
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            }
+
+            let _ = log_sender.send(crate::ui::app::LogMessage {
+                timestamp: Utc::now(),
+                level: crate::ui::app::LogLevel::Success,
+                message: format!("✅ Successfully completed: {} total records inserted", total_inserted),
             });
         });
 
         // Set up the operation state
         self.current_operation = Some(ActiveOperation {
-            action_id: "threaded_collection".to_string(),
+            action_id: "async_collection".to_string(),
             start_time: Utc::now(),
             progress: 0.0,
-            current_message: "Starting threaded data collection...".to_string(),
+            current_message: "Starting async data collection...".to_string(),
             logs: Vec::new(),
         });
 
@@ -825,47 +897,36 @@ impl DataCollectionView {
         }
     }
 
-    /// Process incoming log messages from the background thread
-    fn process_incoming_logs(&mut self) {
-        if let Some(ref mut receiver) = self.log_receiver {
-            // Collect all available messages first to avoid borrowing issues
-            let mut messages = Vec::new();
-            while let Ok(message) = receiver.try_recv() {
-                messages.push(message);
-            }
-            
-            // Then process them all
-            for message in messages {
-                // Parse and log the message based on its content
-                if message.contains("🔄 Batch") {
-                    self.add_log_message(LogLevel::Info, &message);
-                } else if message.contains("✅ Batch") {
-                    self.add_log_message(LogLevel::Success, &message);
-                } else if message.contains("❌ Batch") {
-                    self.add_log_message(LogLevel::Error, &message);
-                } else if message.contains("📊 Test") {
-                    self.add_log_message(LogLevel::Info, &message);
-                } else if message.contains("📈 Test 3") {
-                    self.add_log_message(LogLevel::Info, &message);
-                } else if message.contains("📅 Batch date range") {
-                    self.add_log_message(LogLevel::Info, &message);
-                } else if message.contains("📊 Sample data") {
-                    self.add_log_message(LogLevel::Info, &message);
-                } else if message.contains("Total bars fetched") {
-                    self.add_log_message(LogLevel::Success, &message);
-                } else if message.contains("✅ Successfully completed") {
-                    self.add_log_message(LogLevel::Success, &message);
-                    self.complete_operation();
-                } else if message.contains("❌ Failed to collect") {
-                    self.add_log_message(LogLevel::Error, &message);
-                    self.complete_operation();
-                } else if message.starts_with("Error:") {
-                    self.add_log_message(LogLevel::Error, &message);
-                } else {
-                    self.add_log_message(LogLevel::Info, &message);
-                }
-            }
+    /// Add log message from broadcast channel
+    pub fn add_log_message_from_broadcast(&mut self, app_log: crate::ui::app::LogMessage) {
+        let log_message = LogMessage {
+            timestamp: app_log.timestamp,
+            level: match app_log.level {
+                crate::ui::app::LogLevel::Info => LogLevel::Info,
+                crate::ui::app::LogLevel::Success => LogLevel::Success,
+                crate::ui::app::LogLevel::Warning => LogLevel::Warning,
+                crate::ui::app::LogLevel::Error => LogLevel::Error,
+            },
+            message: app_log.message,
+        };
+        
+        self.log_messages.push(log_message);
+        
+        // Keep only last 50 log messages
+        if self.log_messages.len() > 50 {
+            self.log_messages.remove(0);
         }
+        
+        // Auto-scroll to bottom if enabled
+        if self.auto_scroll_logs && self.log_messages.len() > 0 {
+            self.log_scroll_position = self.log_messages.len().saturating_sub(1);
+        }
+    }
+
+    /// Process incoming log messages from the background thread (legacy method - now handled by broadcast)
+    fn process_incoming_logs(&mut self) {
+        // This method is kept for compatibility but no longer needed
+        // Log messages are now processed via broadcast channel in the main app
     }
 
     /// Process pending log messages
@@ -1247,3 +1308,4 @@ impl DataCollectionView {
         f.render_widget(status, area);
     }
 }
+

@@ -13,12 +13,31 @@ use ratatui::{
     Frame, Terminal,
 };
 use std::io;
+use tokio::sync::broadcast;
+use chrono::{DateTime, Utc};
 
 use crate::{
     database::DatabaseManager,
     models::Config,
     ui::{dashboard::Dashboard, data_collection::DataCollectionView, data_analysis::DataAnalysisView},
 };
+
+/// Log message for broadcast channel
+#[derive(Debug, Clone)]
+pub struct LogMessage {
+    pub timestamp: DateTime<Utc>,
+    pub level: LogLevel,
+    pub message: String,
+}
+
+/// Log levels
+#[derive(Debug, Clone)]
+pub enum LogLevel {
+    Info,
+    Success,
+    Warning,
+    Error,
+}
 
 pub struct StockTuiApp {
     pub selected_tab: usize,
@@ -27,14 +46,18 @@ pub struct StockTuiApp {
     pub data_collection: DataCollectionView,
     pub data_analysis: DataAnalysisView,
     pub database: DatabaseManager,
+    pub log_sender: broadcast::Sender<LogMessage>,
+    pub log_receiver: broadcast::Receiver<LogMessage>,
 }
 
 impl StockTuiApp {
-    pub fn new(config: &Config) -> Result<Self> {
-        let database = DatabaseManager::new(&config.database_path)?;
+    pub fn new(_config: &Config, database: DatabaseManager) -> Result<Self> {
         let dashboard = Dashboard::new();
         let data_collection = DataCollectionView::new();
         let data_analysis = DataAnalysisView::new();
+        
+        // Create broadcast channel for logs
+        let (log_sender, log_receiver) = broadcast::channel::<LogMessage>(100);
 
         Ok(Self {
             selected_tab: 0,
@@ -43,10 +66,17 @@ impl StockTuiApp {
             data_collection,
             data_analysis,
             database,
+            log_sender,
+            log_receiver,
         })
     }
 
     pub fn draw(&mut self, f: &mut Frame) {
+        // Process any new log messages from broadcast channel
+        while let Ok(log_msg) = self.log_receiver.try_recv() {
+            self.data_collection.add_log_message_from_broadcast(log_msg);
+        }
+        
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -129,7 +159,7 @@ impl StockTuiApp {
     pub fn handle_key_event(&mut self, key: KeyCode) -> Result<()> {
         // If we're in data collection view and it's executing, let it handle the event
         if self.selected_tab == 0 && self.data_collection.is_executing {
-            return self.data_collection.handle_key_event(key);
+            return self.data_collection.handle_key_event(key, self.log_sender.clone());
         }
 
         match key {
@@ -148,7 +178,7 @@ impl StockTuiApp {
             _ => {
                 // Route key events to the appropriate view
                 match self.selected_tab {
-                    0 => self.data_collection.handle_key_event(key)?,
+                    0 => self.data_collection.handle_key_event(key, self.log_sender.clone())?,
                     1 => self.data_analysis.handle_key_event(key, &self.database)?,
                     _ => {}
                 }
@@ -186,7 +216,8 @@ pub fn run_app() -> Result<()> {
     
     // Load configuration and create app
     let config = Config::from_env()?;
-    let mut app = StockTuiApp::new(&config)?;
+    let database = DatabaseManager::new(&config.database_path)?;
+    let mut app = StockTuiApp::new(&config, database)?;
 
     // Initial data refresh
     let _ = app.refresh_data();
@@ -214,4 +245,40 @@ pub fn run_app() -> Result<()> {
     disable_raw_mode()?;
     execute!(io::stdout(), LeaveAlternateScreen)?;
     result
+}
+
+/// Run the async TUI application
+pub async fn run_app_async(config: Config, database: DatabaseManager) -> Result<()> {
+    let mut app = StockTuiApp::new(&config, database)?;
+    
+    // Enable raw mode
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+    
+    // Main async event loop
+    loop {
+        // Handle terminal events with timeout
+        if crossterm::event::poll(std::time::Duration::from_millis(100))? {
+            if let Event::Key(key_event) = event::read()? {
+                app.handle_key_event(key_event.code)?;
+                
+                if app.should_quit {
+                    break;
+                }
+            }
+        }
+        
+        // Draw the UI
+        terminal.draw(|f| app.draw(f))?;
+    }
+    
+    // Cleanup
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    disable_raw_mode()?;
+    
+    Ok(())
 }

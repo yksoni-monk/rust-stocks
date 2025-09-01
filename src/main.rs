@@ -12,7 +12,8 @@ use tracing_subscriber::{self, FmtSubscriber};
 use crate::database::DatabaseManager;
 use crate::models::Config;
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     // Initialize logging - suppress most logs for TUI
     let subscriber = FmtSubscriber::builder()
         .with_max_level(Level::ERROR)
@@ -34,7 +35,7 @@ fn main() -> Result<()> {
     };
 
     // Initialize database
-    let _database = match DatabaseManager::new(&config.database_path) {
+    let database = match DatabaseManager::new(&config.database_path) {
         Ok(db) => db,
         Err(e) => {
             error!("Failed to initialize database: {}", e);
@@ -43,10 +44,10 @@ fn main() -> Result<()> {
         }
     };
 
-    // Start TUI
+    // Start TUI with async support
     println!("🚀 Starting Stock Analysis TUI...");
     
-    match ui::app::run_app() {
+    match ui::app::run_app_async(config, database).await {
         Ok(_) => {
             println!("Thanks for using Rust Stocks Analysis System!");
         }

@@ -271,6 +271,19 @@ impl DatabaseManager {
         }
     }
 
+    /// Count existing records for a stock in a date range
+    pub fn count_existing_records(&self, stock_id: i64, start_date: NaiveDate, end_date: NaiveDate) -> Result<usize> {
+        let conn = self.connection.lock().unwrap();
+        
+        let count: usize = conn.query_row(
+            "SELECT COUNT(*) FROM daily_prices WHERE stock_id = ?1 AND date BETWEEN ?2 AND ?3",
+            params![stock_id, start_date, end_date],
+            |row| Ok(row.get(0)?)
+        )?;
+
+        Ok(count)
+    }
+
     /// Get price for a specific date
     pub fn get_price_on_date(&self, stock_id: i64, date: NaiveDate) -> Result<Option<DailyPrice>> {
         let conn = self.connection.lock().unwrap();

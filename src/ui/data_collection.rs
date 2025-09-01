@@ -1,5 +1,5 @@
 use anyhow::Result;
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, NaiveDate, Utc, Weekday, Datelike};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -12,7 +12,93 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
+/// Trading week batch definition
+#[derive(Debug, Clone)]
+pub struct TradingWeekBatch {
+    pub batch_number: usize,
+    pub start_date: NaiveDate,
+    pub end_date: NaiveDate,
+    pub description: String,
+}
 
+/// Trading week batch calculator
+pub struct TradingWeekBatchCalculator;
+
+impl TradingWeekBatchCalculator {
+    /// Calculate trading week batches for a given date range
+    pub fn calculate_batches(start_date: NaiveDate, end_date: NaiveDate) -> Vec<TradingWeekBatch> {
+        let mut batches = Vec::new();
+        let mut current_date = start_date;
+        let mut batch_number = 1;
+
+        while current_date <= end_date {
+            // Find the start of the trading week (Monday)
+            let week_start = Self::get_week_start(current_date);
+            
+            // Find the end of the trading week (Friday)
+            let week_end = Self::get_week_end(current_date);
+            
+            // Adjust to user's requested range
+            let batch_start = std::cmp::max(week_start, start_date);
+            let batch_end = std::cmp::min(week_end, end_date);
+            
+            // Skip if batch is empty
+            if batch_start > batch_end {
+                current_date = week_end + chrono::Duration::days(1);
+                continue;
+            }
+
+            let description = format!("Week {}: {} to {}", 
+                batch_number, 
+                batch_start.format("%Y-%m-%d"), 
+                batch_end.format("%Y-%m-%d")
+            );
+
+            batches.push(TradingWeekBatch {
+                batch_number,
+                start_date: batch_start,
+                end_date: batch_end,
+                description,
+            });
+
+            // Move to next week
+            current_date = week_end + chrono::Duration::days(1);
+            batch_number += 1;
+        }
+
+        batches
+    }
+
+    /// Get the start of the trading week (Monday) for a given date
+    fn get_week_start(date: NaiveDate) -> NaiveDate {
+        let weekday = date.weekday();
+        let days_to_monday = match weekday {
+            Weekday::Mon => 0,
+            Weekday::Tue => 1,
+            Weekday::Wed => 2,
+            Weekday::Thu => 3,
+            Weekday::Fri => 4,
+            Weekday::Sat => 5,
+            Weekday::Sun => 6,
+        };
+        date - chrono::Duration::days(days_to_monday as i64)
+    }
+
+    /// Get the end of the trading week (Friday) for a given date
+    fn get_week_end(date: NaiveDate) -> NaiveDate {
+        let weekday = date.weekday();
+        let days_to_friday = match weekday {
+            Weekday::Mon => 4,
+            Weekday::Tue => 3,
+            Weekday::Wed => 2,
+            Weekday::Thu => 1,
+            Weekday::Fri => 0,
+            Weekday::Sat => 6,
+            Weekday::Sun => 5,
+        };
+        date + chrono::Duration::days(days_to_friday as i64)
+    }
+}
 
 /// Data collection action definition
 #[derive(Debug, Clone)]
@@ -771,65 +857,97 @@ impl DataCollectionView {
                 message: format!("📡 Fetching {} ({} → {})", symbol_clone, start_date, end_date),
             });
 
-            // Calculate total days to fetch
-            let total_days = (end_date - start_date).num_days() as usize;
+            // Calculate trading week batches
+            let batches = TradingWeekBatchCalculator::calculate_batches(start_date, end_date);
             let _ = log_sender.send(crate::ui::app::LogMessage {
                 timestamp: Utc::now(),
                 level: crate::ui::app::LogLevel::Info,
-                message: format!("📊 Total days to fetch: {}", total_days),
+                message: format!("📊 Created {} trading week batches", batches.len()),
             });
 
-            // Fetch data in smaller batches for better progress reporting
-            let batch_size = 30; // Fetch 30 days at a time
-            let mut current_date = start_date;
-            let mut total_inserted = 0;
-            let mut batch_count = 0;
-
-            while current_date <= end_date {
-                batch_count += 1;
-                let batch_end = std::cmp::min(current_date + chrono::Duration::days(batch_size as i64 - 1), end_date);
-
+            // Log batch plan
+            for batch in &batches {
                 let _ = log_sender.send(crate::ui::app::LogMessage {
                     timestamp: Utc::now(),
                     level: crate::ui::app::LogLevel::Info,
-                    message: format!("🔄 Batch {}: Fetching {} to {}", batch_count, current_date, batch_end),
+                    message: format!("📅 {}", batch.description),
                 });
+            }
+
+            let mut total_inserted = 0;
+
+            // Process each trading week batch
+            for batch in batches {
+                let _ = log_sender.send(crate::ui::app::LogMessage {
+                    timestamp: Utc::now(),
+                    level: crate::ui::app::LogLevel::Info,
+                    message: format!("🔄 Processing {}", batch.description),
+                });
+
+                // Check existing records for this batch
+                let existing_count = match db_arc.count_existing_records(stock.id.unwrap(), batch.start_date, batch.end_date) {
+                    Ok(count) => count,
+                    Err(_) => 0,
+                };
+
+                if existing_count > 0 {
+                    let _ = log_sender.send(crate::ui::app::LogMessage {
+                        timestamp: Utc::now(),
+                        level: crate::ui::app::LogLevel::Info,
+                        message: format!("ℹ️ Batch {}: Found {} existing records, skipping", batch.batch_number, existing_count),
+                    });
+                    continue;
+                }
 
                 match crate::data_collector::DataCollector::fetch_stock_history(
                     client_arc.clone(),
                     db_arc.clone(),
                     stock.clone(),
-                    current_date,
-                    batch_end,
+                    batch.start_date,
+                    batch.end_date,
                 ).await {
                     Ok(inserted) => {
                         total_inserted += inserted;
-                        let _ = log_sender.send(crate::ui::app::LogMessage {
-                            timestamp: Utc::now(),
-                            level: crate::ui::app::LogLevel::Success,
-                            message: format!("✅ Batch {}: Inserted {} records (Total: {})", batch_count, inserted, total_inserted),
-                        });
+                        if inserted > 0 {
+                            let _ = log_sender.send(crate::ui::app::LogMessage {
+                                timestamp: Utc::now(),
+                                level: crate::ui::app::LogLevel::Success,
+                                message: format!("✅ Batch {}: Inserted {} records (Total: {})", batch.batch_number, inserted, total_inserted),
+                            });
+                        } else {
+                            let _ = log_sender.send(crate::ui::app::LogMessage {
+                                timestamp: Utc::now(),
+                                level: crate::ui::app::LogLevel::Info,
+                                message: format!("ℹ️ Batch {}: No new records (data already exists) (Total: {})", batch.batch_number, total_inserted),
+                            });
+                        }
                     }
                     Err(e) => {
                         let _ = log_sender.send(crate::ui::app::LogMessage {
                             timestamp: Utc::now(),
                             level: crate::ui::app::LogLevel::Error,
-                            message: format!("❌ Batch {}: Failed - {}", batch_count, e),
+                            message: format!("❌ Batch {}: Failed - {}", batch.batch_number, e),
                         });
                     }
                 }
-
-                current_date = batch_end + chrono::Duration::days(1);
 
                 // Small delay between batches to avoid rate limiting
                 tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
             }
 
-            let _ = log_sender.send(crate::ui::app::LogMessage {
-                timestamp: Utc::now(),
-                level: crate::ui::app::LogLevel::Success,
-                message: format!("✅ Successfully completed: {} total records inserted", total_inserted),
-            });
+            if total_inserted > 0 {
+                let _ = log_sender.send(crate::ui::app::LogMessage {
+                    timestamp: Utc::now(),
+                    level: crate::ui::app::LogLevel::Success,
+                    message: format!("✅ Successfully completed: {} new records inserted", total_inserted),
+                });
+            } else {
+                let _ = log_sender.send(crate::ui::app::LogMessage {
+                    timestamp: Utc::now(),
+                    level: crate::ui::app::LogLevel::Info,
+                    message: format!("ℹ️ Completed: No new records inserted (all data already exists)"),
+                });
+            }
         });
 
         // Set up the operation state

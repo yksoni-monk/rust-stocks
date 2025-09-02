@@ -183,18 +183,12 @@ cargo run --bin smart_collect -- 20240115  # Monday → Returns same day data
 
 - **`collect_with_detailed_logs`**: Professional CLI data collection with progress tracking
 - **`smart_collect`**: Smart collection with automatic weekend/holiday handling
+- **`concurrent_fetch_demo`**: Concurrent data fetching with CLI arguments
 - **`update_sp500`**: Update S&P 500 company list with state tracking
 
 ### Testing & Analysis Tools
 
 - **`test_api`**: Test Schwab API connectivity
-- **`fetch_history`**: Single stock historical data fetcher
-
-### Utility Tools
-
-- **`collect_sample_data`**: Test data collection with small sample
-- **`collect_historical_data`**: Legacy concurrent collection (deprecated)
-- **`list_companies`**: List companies in database
 
 ## 📊 Progress Tracking
 

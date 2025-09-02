@@ -15,7 +15,13 @@ reqwest = { version = "0.11", features = ["json"] }
 csv = "1.3"
 
 # Database
-rusqlite = { version = "0.30", features = ["bundled", "chrono"] }
+sqlx = { version = "0.6", features = [
+    "runtime-tokio-rustls",
+    "sqlite",
+    "chrono",
+    "uuid",
+    "migrate"
+] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -68,6 +74,22 @@ assert_matches = "1.5"
 pretty_assertions = "1.4"
 
 # Test binaries
+[[bin]]
+name = "test_concurrent_fetcher_sqlx"
+path = "test_concurrent_fetcher_sqlx.rs"
+
+[[bin]]
+name = "test_data_collector_sqlx"
+path = "test_data_collector_sqlx.rs"
+
+[[bin]]
+name = "test_analysis_sqlx"
+path = "test_analysis_sqlx.rs"
+
+[[bin]]
+name = "test_sqlx_validation"
+path = "test_sqlx_validation.rs"
+
 [[bin]]
 name = "data_collection_test"
 path = "tests/bin/data_collection_test.rs"

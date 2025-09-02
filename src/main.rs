@@ -1,23 +1,25 @@
 mod api;
 mod analysis;
+mod concurrent_fetcher;
 mod data_collector;
-mod database;
 mod models;
+mod database_sqlx;
 mod ui;
+mod utils;
 
 use anyhow::Result;
 use tracing::{error, Level};
 use tracing_subscriber::{self, FmtSubscriber};
 
-use crate::database::DatabaseManager;
+use crate::database_sqlx::DatabaseManagerSqlx;
 use crate::models::Config;
+use crate::ui::app::run_app_async;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize logging - suppress most logs for TUI
+    // Initialize logging
     let subscriber = FmtSubscriber::builder()
-        .with_max_level(Level::ERROR)
-        .with_env_filter("rust_stocks=error")
+        .with_max_level(Level::INFO)
         .finish();
     
     tracing::subscriber::set_global_default(subscriber)
@@ -34,8 +36,8 @@ async fn main() -> Result<()> {
         }
     };
 
-    // Initialize database
-    let database = match DatabaseManager::new(&config.database_path) {
+    // Initialize database with SQLX
+    let database = match DatabaseManagerSqlx::new(&config.database_path).await {
         Ok(db) => db,
         Err(e) => {
             error!("Failed to initialize database: {}", e);
@@ -44,10 +46,11 @@ async fn main() -> Result<()> {
         }
     };
 
-    // Start TUI with async support
-    println!("🚀 Starting Stock Analysis TUI...");
-    
-    match ui::app::run_app_async(config, database).await {
+    println!("🚀 Stock Analysis System - Database initialized successfully!");
+    println!("📊 Starting TUI application...");
+
+    // Run the TUI application
+    match run_app_async(config, database).await {
         Ok(_) => {
             println!("Thanks for using Rust Stocks Analysis System!");
         }

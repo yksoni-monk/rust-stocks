@@ -243,7 +243,7 @@ impl DataCollectionView {
     }
 
     /// Handle key events
-    pub fn handle_key_event(&mut self, key: crossterm::event::KeyCode, log_sender: broadcast::Sender<crate::ui::app::LogMessage>) -> Result<()> {
+    pub async fn handle_key_event(&mut self, key: crossterm::event::KeyCode, log_sender: broadcast::Sender<crate::ui::app::LogMessage>) -> Result<()> {
         // Process any incoming log messages from the background thread
         self.process_incoming_logs();
         
@@ -266,7 +266,7 @@ impl DataCollectionView {
                     if confirmation.selected_option {
                         // User confirmed - execute the action
                         self.confirmation_state = None;
-                        self.start_operation_by_type(&action_type, log_sender)?;
+                        self.start_operation_by_type(&action_type, log_sender).await?;
                     } else {
                         // User cancelled
                         self.log_info("Operation cancelled by user");
@@ -451,7 +451,7 @@ impl DataCollectionView {
                                     start_date,
                                     end_date,
                                 };
-                                self.start_operation_by_type(&action_type, log_sender)?;
+                                self.start_operation_by_type(&action_type, log_sender).await?;
                                 return Ok(());
                             }
                         }
@@ -487,7 +487,7 @@ impl DataCollectionView {
             }
             
             crossterm::event::KeyCode::Enter => {
-                self.execute_selected_action(log_sender)?;
+                self.execute_selected_action(log_sender).await?;
             }
             _ => {}
         }
@@ -498,7 +498,7 @@ impl DataCollectionView {
     }
 
     /// Execute the currently selected action
-    pub fn execute_selected_action(&mut self, log_sender: broadcast::Sender<crate::ui::app::LogMessage>) -> Result<()> {
+    pub async fn execute_selected_action(&mut self, log_sender: broadcast::Sender<crate::ui::app::LogMessage>) -> Result<()> {
         if self.selected_action >= self.actions.len() {
             return Ok(());
         }
@@ -518,12 +518,12 @@ impl DataCollectionView {
             return Ok(());
         }
 
-        self.start_operation_by_type(&action_type, log_sender)?;
+        self.start_operation_by_type(&action_type, log_sender).await?;
         Ok(())
     }
 
     /// Start an operation by action type
-    pub fn start_operation_by_type(&mut self, action_type: &ActionType, log_sender: broadcast::Sender<crate::ui::app::LogMessage>) -> Result<()> {
+    pub async fn start_operation_by_type(&mut self, action_type: &ActionType, log_sender: broadcast::Sender<crate::ui::app::LogMessage>) -> Result<()> {
         // Execute the action based on type
         match action_type {
             ActionType::CollectHistoricalData { start_date, end_date } => {
@@ -553,7 +553,7 @@ impl DataCollectionView {
             ActionType::SelectStockAndDates => {
                 // Don't set executing state for interactive selection
                 self.log_info("Starting stock and date selection...");
-                self.start_stock_and_date_selection();
+                self.start_stock_and_date_selection().await;
             }
         }
 
@@ -593,9 +593,9 @@ impl DataCollectionView {
 
 
     /// Start stock and date selection process
-    pub fn start_stock_and_date_selection(&mut self) {
+    pub async fn start_stock_and_date_selection(&mut self) {
         // Get available stocks from database
-        let stocks = self.get_available_stocks();
+        let stocks = self.get_available_stocks().await;
         self.stock_selection_state = Some(StockSelectionState {
             available_stocks: stocks,
             selected_index: 0,
@@ -606,11 +606,11 @@ impl DataCollectionView {
     }
 
     /// Get available stocks from database
-    fn get_available_stocks(&self) -> Vec<String> {
+    async fn get_available_stocks(&self) -> Vec<String> {
         // Query the database for all active stocks
-        match crate::database::DatabaseManager::new("stocks.db") {
+        match crate::database_sqlx::DatabaseManagerSqlx::new("stocks.db").await {
             Ok(database) => {
-                match database.get_active_stocks() {
+                match database.get_active_stocks().await {
                     Ok(stocks) => {
                         stocks.into_iter()
                             .map(|stock| stock.symbol)
@@ -643,13 +643,13 @@ impl DataCollectionView {
 
     /// Filter stocks based on search query
     #[allow(dead_code)]
-    fn filter_stocks(&self, stock_state: &mut StockSelectionState) {
+    async fn filter_stocks(&self, stock_state: &mut StockSelectionState) {
         if stock_state.search_query.is_empty() {
             return;
         }
         
         let query = stock_state.search_query.to_uppercase();
-        let filtered: Vec<String> = self.get_available_stocks()
+        let filtered: Vec<String> = self.get_available_stocks().await
             .into_iter()
             .filter(|stock| stock.to_uppercase().contains(&query))
             .collect();
@@ -748,7 +748,7 @@ impl DataCollectionView {
                     return;
                 }
             };
-            let database = match crate::database::DatabaseManager::new(&config.database_path) {
+            let database = match crate::database_sqlx::DatabaseManagerSqlx::new(&config.database_path).await {
                 Ok(db) => {
                     let _ = writeln!(log_writer, "[{}] ✅ Database initialized successfully", Utc::now().format("%H:%M:%S"));
                     db
@@ -782,7 +782,7 @@ impl DataCollectionView {
             };
 
             // Find stock by symbol
-            let stock = match database.get_stock_by_symbol(&symbol_clone) {
+            let stock = match database.get_stock_by_symbol(&symbol_clone).await {
                 Ok(Some(s)) => {
                     let _ = writeln!(log_writer, "[{}] ✅ Found stock: {} ({})", Utc::now().format("%H:%M:%S"), s.symbol, s.company_name);
                     s
@@ -860,9 +860,7 @@ impl DataCollectionView {
                     let stock_id = stock.id.unwrap();
                     let start_date = batch.start_date;
                     let end_date = batch.end_date;
-                    tokio::task::spawn_blocking(move || {
-                        db_arc.count_existing_records(stock_id, start_date, end_date)
-                    }).await.unwrap_or(Ok(0)).unwrap_or(0)
+                    db_arc.count_existing_records(stock_id, start_date, end_date).await.unwrap_or(0)
                 };
                 let _ = writeln!(log_writer, "[{}] 📊 Found {} existing records for batch {}", Utc::now().format("%H:%M:%S"), existing_count, batch.batch_number);
 

@@ -11,7 +11,7 @@ use tracing::{info, warn, error};
 
 use crate::{
     api::schwab_client::SchwabClient,
-    database::DatabaseManager,
+    database_sqlx::DatabaseManagerSqlx,
     models::{Stock, Config},
     data_collector::DataCollector,
 };
@@ -62,14 +62,14 @@ pub struct FetchResult {
 
 /// Main function to fetch stock data concurrently
 pub async fn fetch_stocks_concurrently(
-    database: Arc<DatabaseManager>,
+    database: Arc<DatabaseManagerSqlx>,
     config: ConcurrentFetchConfig,
 ) -> Result<FetchResult> {
     info!("🚀 Starting concurrent fetch with {} threads", config.num_threads);
     info!("📅 Date range: {} to {}", config.date_range.start_date, config.date_range.end_date);
 
     // Get all active stocks ordered by symbol
-    let stocks = database.get_active_stocks()?;
+    let stocks = database.get_active_stocks().await?;
     let total_stocks = stocks.len();
     info!("📊 Found {} active stocks to process", total_stocks);
 
@@ -149,7 +149,7 @@ pub async fn fetch_stocks_concurrently(
 async fn worker_thread(
     thread_id: usize,
     stock_queue: Arc<Mutex<Vec<Stock>>>,
-    database: Arc<DatabaseManager>,
+    database: Arc<DatabaseManagerSqlx>,
     progress_sender: Arc<broadcast::Sender<FetchProgress>>,
     counters: Arc<Mutex<FetchCounters>>,
     config: ConcurrentFetchConfig,
@@ -184,7 +184,7 @@ async fn worker_thread(
             stock_id, 
             config.date_range.start_date, 
             config.date_range.end_date
-        )?;
+        ).await?;
 
         if existing_count > 0 {
             // Data already exists, skip
@@ -239,7 +239,7 @@ async fn worker_thread(
 /// Fetch data for a single stock with retry logic using existing batching function
 async fn fetch_stock_data(
     api_client: &SchwabClient,
-    database: &DatabaseManager,
+    database: &DatabaseManagerSqlx,
     stock: &Stock,
     config: &ConcurrentFetchConfig,
 ) -> Result<usize> {

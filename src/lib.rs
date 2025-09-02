@@ -2,10 +2,12 @@ pub mod api;
 pub mod analysis;
 pub mod concurrent_fetcher;
 pub mod data_collector;
-pub mod database;
 pub mod models;
+pub mod database_sqlx;
 pub mod ui;
 pub mod utils;
+// Remaining modules temporarily disabled during SQLX migration
+// pub mod database;
 
 #[cfg(test)]
 mod tests {

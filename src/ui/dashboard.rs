@@ -8,7 +8,7 @@ use ratatui::{
 use chrono::NaiveDate;
 use anyhow::Result;
 
-use crate::database::DatabaseManager;
+use crate::database_sqlx::DatabaseManagerSqlx;
 
 pub struct Dashboard {
     pub database_stats: Option<DatabaseStats>,
@@ -33,12 +33,14 @@ impl Dashboard {
     }
 
     /// Refresh data from database
-    pub fn refresh_data(&mut self, database: &DatabaseManager) -> Result<()> {
+    pub async fn refresh_data(&mut self, database: &DatabaseManagerSqlx) -> Result<()> {
         // Get basic database stats
-        let total_stocks = database.get_active_stocks()?.len();
+        let stocks = database.get_active_stocks().await?;
+        let total_stocks = stocks.len();
         
-        // Get total price records
-        let total_price_records = database.get_total_price_records()?;
+        // Get total price records from stats
+        let stats = database.get_stats().await?;
+        let total_price_records = stats.get("total_prices").unwrap_or(&0).clone() as usize;
         
         // Calculate coverage percentage (simplified)
         let data_coverage_percentage = if total_stocks > 0 {
@@ -47,9 +49,9 @@ impl Dashboard {
             0.0
         };
         
-        // Get date ranges
-        let oldest_data_date = database.get_oldest_data_date()?;
-        let last_update_date = database.get_last_update_date()?;
+        // Get date ranges (simplified for now)
+        let oldest_data_date = None; // TODO: Add this to database stats
+        let last_update_date = None; // TODO: Add this to database stats
         
         self.database_stats = Some(DatabaseStats {
             total_stocks,

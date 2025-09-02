@@ -4,19 +4,19 @@ use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
 use tracing::{info, warn};
 
-use crate::database::DatabaseManager;
+use crate::database_sqlx::DatabaseManagerSqlx;
 use crate::models::{Stock, StockAnalysis, StockDetail, DailyPrice};
 
 #[allow(dead_code)]
 pub struct AnalysisEngine {
-    database: DatabaseManager,
+    database: DatabaseManagerSqlx,
     fuzzy_matcher: SkimMatcherV2,
 }
 
 impl AnalysisEngine {
     /// Create a new analysis engine
     #[allow(dead_code)]
-    pub fn new(database: DatabaseManager) -> Self {
+    pub fn new(database: DatabaseManagerSqlx) -> Self {
         Self {
             database,
             fuzzy_matcher: SkimMatcherV2::default(),
@@ -28,7 +28,7 @@ impl AnalysisEngine {
     pub async fn get_top_pe_decliners(&self, limit: usize, offset: usize) -> Result<Vec<StockAnalysis>> {
         info!("Calculating P/E decliners with limit={}, offset={}", limit, offset);
         
-        let stocks = self.database.get_active_stocks()?;
+        let stocks = self.database.get_active_stocks().await?;
         let mut analyses = Vec::new();
 
         let one_year_ago = Utc::now().date_naive() - Duration::days(365);
@@ -63,7 +63,7 @@ impl AnalysisEngine {
         one_year_ago: NaiveDate
     ) -> Result<Option<StockAnalysis>> {
         // Get current price data
-        let current_price_data = match self.database.get_latest_price(stock_id)? {
+        let current_price_data = match self.database.get_latest_price(stock_id).await? {
             Some(price) => price,
             None => {
                 warn!("No current price data for stock: {}", stock.symbol);
@@ -72,7 +72,7 @@ impl AnalysisEngine {
         };
 
         // Get price data from one year ago (or closest available)
-        let year_ago_price_data = self.get_price_near_date(stock_id, one_year_ago)?;
+        let year_ago_price_data = self.get_price_near_date(stock_id, one_year_ago).await?;
         
         let year_ago_price_data = match year_ago_price_data {
             Some(price) => price,
@@ -104,11 +104,11 @@ impl AnalysisEngine {
         }))
     }
 
-    /// Get price data nearest to a specific date
+    /// Get price data near a specific date
     #[allow(dead_code)]
-    fn get_price_near_date(&self, stock_id: i64, target_date: NaiveDate) -> Result<Option<DailyPrice>> {
+    async fn get_price_near_date(&self, stock_id: i64, target_date: NaiveDate) -> Result<Option<DailyPrice>> {
         // First try exact date
-        if let Some(price) = self.database.get_price_on_date(stock_id, target_date)? {
+        if let Some(price) = self.database.get_price_on_date(stock_id, target_date).await? {
             return Ok(Some(price));
         }
 
@@ -116,13 +116,13 @@ impl AnalysisEngine {
         for days_offset in 1..=30 {
             // Try earlier dates first
             let earlier_date = target_date - Duration::days(days_offset);
-            if let Some(price) = self.database.get_price_on_date(stock_id, earlier_date)? {
+            if let Some(price) = self.database.get_price_on_date(stock_id, earlier_date).await? {
                 return Ok(Some(price));
             }
 
             // Then try later dates
             let later_date = target_date + Duration::days(days_offset);
-            if let Some(price) = self.database.get_price_on_date(stock_id, later_date)? {
+            if let Some(price) = self.database.get_price_on_date(stock_id, later_date).await? {
                 return Ok(Some(price));
             }
         }
@@ -135,7 +135,7 @@ impl AnalysisEngine {
     pub async fn search_stocks(&self, query: &str) -> Result<Vec<Stock>> {
         info!("Searching stocks with query: '{}'", query);
         
-        let all_stocks = self.database.get_active_stocks()?;
+        let all_stocks = self.database.get_active_stocks().await?;
         let query_lower = query.to_lowercase();
         
         let mut results = Vec::new();
@@ -191,7 +191,7 @@ impl AnalysisEngine {
     pub async fn get_stock_details(&self, symbol: &str) -> Result<Option<StockDetail>> {
         info!("Getting stock details for: {}", symbol);
         
-        let stock = match self.database.get_stock_by_symbol(symbol)? {
+        let stock = match self.database.get_stock_by_symbol(symbol).await? {
             Some(stock) => stock,
             None => return Ok(None),
         };
@@ -202,14 +202,14 @@ impl AnalysisEngine {
         };
 
         // Get current price
-        let current_price = match self.database.get_latest_price(stock_id)? {
+        let current_price = match self.database.get_latest_price(stock_id).await? {
             Some(price) => price,
             None => return Ok(None),
         };
 
         // Get price history for the last year
         let one_year_ago = Utc::now().date_naive() - Duration::days(365);
-        let price_history = self.get_price_history_range(stock_id, one_year_ago, Utc::now().date_naive())?;
+        let price_history = self.get_price_history_range(stock_id, one_year_ago, Utc::now().date_naive()).await?;
 
         // Extract P/E trend data
         let pe_trend: Vec<(NaiveDate, f64)> = price_history
@@ -234,13 +234,13 @@ impl AnalysisEngine {
 
     /// Get price history within a date range
     #[allow(dead_code)]
-    fn get_price_history_range(&self, stock_id: i64, from_date: NaiveDate, to_date: NaiveDate) -> Result<Vec<DailyPrice>> {
+    async fn get_price_history_range(&self, stock_id: i64, from_date: NaiveDate, to_date: NaiveDate) -> Result<Vec<DailyPrice>> {
         // This is a simplified implementation - in a real scenario you'd want a more efficient query
         let mut history = Vec::new();
         let mut current_date = from_date;
 
         while current_date <= to_date {
-            if let Some(price) = self.database.get_price_on_date(stock_id, current_date)? {
+            if let Some(price) = self.database.get_price_on_date(stock_id, current_date).await? {
                 history.push(price);
             }
             current_date = current_date + Duration::days(1);
@@ -252,7 +252,7 @@ impl AnalysisEngine {
     /// Get summary statistics
     #[allow(dead_code)]
     pub async fn get_summary_stats(&self) -> Result<SummaryStats> {
-        let (stock_count, price_count, last_update) = self.database.get_stats()?;
+        let stats = self.database.get_stats().await?;
         
         // Get top P/E decliner
         let top_decliners = self.get_top_pe_decliners(1, 0).await?;
@@ -261,9 +261,9 @@ impl AnalysisEngine {
         });
 
         Ok(SummaryStats {
-            total_stocks: stock_count,
-            total_price_records: price_count,
-            last_update_date: last_update,
+            total_stocks: stats.get("total_stocks").unwrap_or(&0).clone() as usize,
+            total_price_records: stats.get("total_prices").unwrap_or(&0).clone() as usize,
+            last_update_date: None, // TODO: Add this to database stats
             top_pe_decliner,
         })
     }
@@ -282,14 +282,14 @@ pub struct SummaryStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::database::DatabaseManager;
+    use crate::database_sqlx::DatabaseManagerSqlx;
     use tempfile::tempdir;
 
     #[tokio::test]
     async fn test_search_stocks() {
         let temp_dir = tempdir().unwrap();
         let db_path = temp_dir.path().join("test.db");
-        let db = DatabaseManager::new(db_path.to_str().unwrap()).unwrap();
+        let db = DatabaseManagerSqlx::new(db_path.to_str().unwrap()).await.unwrap();
         
         // Insert test stock
         let stock = Stock {
@@ -304,7 +304,7 @@ mod tests {
             last_updated: None,
         };
         
-        db.upsert_stock(&stock).unwrap();
+        db.upsert_stock(&stock).await.unwrap();
         
         let analysis_engine = AnalysisEngine::new(db);
         

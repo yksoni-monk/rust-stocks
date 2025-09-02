@@ -48,3 +48,43 @@ impl MarketCalendar {
         date + chrono::Duration::days(days_to_friday as i64)
     }
 }
+
+/// Trading week batch calculator for data collection
+pub struct TradingWeekBatchCalculator;
+
+impl TradingWeekBatchCalculator {
+    /// Calculate trading week batches between two dates
+    pub fn calculate_batches(from_date: NaiveDate, to_date: NaiveDate) -> Vec<TradingWeekBatch> {
+        let mut batches = Vec::new();
+        let mut current_date = from_date;
+        let mut batch_number = 1;
+
+        while current_date <= to_date {
+            let week_start = MarketCalendar::get_week_start(current_date);
+            let week_end = MarketCalendar::get_week_end(current_date);
+            
+            // Ensure we don't go beyond the to_date
+            let batch_end = if week_end > to_date { to_date } else { week_end };
+            
+            batches.push(TradingWeekBatch {
+                batch_number,
+                start_date: current_date,
+                end_date: batch_end,
+            });
+            
+            // Move to next week
+            current_date = week_end + chrono::Duration::days(1);
+            batch_number += 1;
+        }
+
+        batches
+    }
+}
+
+/// Represents a trading week batch for data collection
+#[derive(Debug, Clone)]
+pub struct TradingWeekBatch {
+    pub batch_number: usize,
+    pub start_date: NaiveDate,
+    pub end_date: NaiveDate,
+}

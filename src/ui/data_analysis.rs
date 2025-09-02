@@ -8,7 +8,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, Paragraph},
     Frame,
 };
-use crate::database::DatabaseManager;
+use crate::database_sqlx::DatabaseManagerSqlx;
 
 /// Data analysis view state
 pub struct DataAnalysisView {
@@ -64,18 +64,18 @@ impl DataAnalysisView {
     }
 
     /// Load available stocks from database
-    pub fn load_available_stocks(&mut self, database: &DatabaseManager) -> Result<()> {
+    pub async fn load_available_stocks(&mut self, database: &DatabaseManagerSqlx) -> Result<()> {
         self.is_loading = true;
         self.error_message = None;
         
-        match database.get_active_stocks() {
+        match database.get_active_stocks().await {
             Ok(stocks) => {
                 let mut stock_infos = Vec::new();
                 
                 for stock in stocks {
                     // Get data statistics for this stock
                     if let Some(stock_id) = stock.id {
-                        match database.get_stock_data_stats(stock_id) {
+                        match database.get_stock_data_stats(stock_id).await {
                             Ok(stats) => {
                                 if stats.data_points > 0 {
                                     stock_infos.push(StockInfo {
@@ -108,7 +108,7 @@ impl DataAnalysisView {
     }
 
     /// Handle key events
-    pub fn handle_key_event(&mut self, key: KeyCode, database: &DatabaseManager) -> Result<()> {
+    pub async fn handle_key_event(&mut self, key: KeyCode, database: &DatabaseManagerSqlx) -> Result<()> {
         match key {
             KeyCode::Up => {
                 if self.selected_stock.is_none() && !self.available_stocks.is_empty() {
@@ -134,7 +134,7 @@ impl DataAnalysisView {
                     self.cursor_position = self.date_input.len();
                 } else if self.selected_stock.is_some() {
                     // Fetch data for the selected date
-                    self.fetch_stock_data(database)?;
+                    self.fetch_stock_data(database).await?;
                 }
             }
             KeyCode::Esc => {
@@ -215,7 +215,7 @@ impl DataAnalysisView {
     }
 
     /// Fetch stock data for a specific date
-    fn fetch_stock_data(&mut self, database: &DatabaseManager) -> Result<()> {
+    async fn fetch_stock_data(&mut self, database: &DatabaseManagerSqlx) -> Result<()> {
         if let Some(stock) = &self.selected_stock {
             match NaiveDate::parse_from_str(&self.date_input, "%Y-%m-%d") {
                 Ok(date) => {
@@ -223,13 +223,13 @@ impl DataAnalysisView {
                     self.error_message = None;
                     
                     // Get stock ID
-                    if let Ok(Some(db_stock)) = database.get_stock_by_symbol(&stock.symbol) {
+                    if let Ok(Some(db_stock)) = database.get_stock_by_symbol(&stock.symbol).await {
                         if let Some(stock_id) = db_stock.id {
                             // Get price data
-                            if let Ok(Some(price_data)) = database.get_price_on_date(stock_id, date) {
-                                // Get fundamentals data (P/E ratio, market cap)
-                                let pe_ratio = database.get_pe_ratio_on_date(stock_id, date).ok().flatten();
-                                let market_cap = database.get_market_cap_on_date(stock_id, date).ok().flatten();
+                            if let Ok(Some(price_data)) = database.get_price_on_date(stock_id, date).await {
+                                // Get fundamentals data (P/E ratio, market cap) - TODO: Implement in SQLX
+                                let pe_ratio = None; // database.get_pe_ratio_on_date(stock_id, date).ok().flatten();
+                                let market_cap = None; // database.get_market_cap_on_date(stock_id, date).ok().flatten();
                                 
                                 self.stock_data = Some(StockData {
                                     symbol: stock.symbol.clone(),

@@ -7,16 +7,16 @@ use tokio::sync::Semaphore;
 use tracing::{info, warn, error, debug};
 
 use crate::api::{SchwabClient, StockDataProvider};
-use crate::database::DatabaseManager;
+use crate::database_sqlx::DatabaseManagerSqlx;
 use crate::models::{Config, Stock, DailyPrice, SchwabQuote};
-use crate::ui::data_collection::TradingWeekBatchCalculator;
+use crate::utils::TradingWeekBatchCalculator;
 
 /// Data collection system for fetching and storing stock data
 pub struct DataCollector {
     #[allow(dead_code)]
     schwab_client: Arc<SchwabClient>,
     #[allow(dead_code)]
-    database: Arc<DatabaseManager>,
+    database: Arc<DatabaseManagerSqlx>,
     #[allow(dead_code)]
     config: Config,
     #[allow(dead_code)]
@@ -26,7 +26,7 @@ pub struct DataCollector {
 impl DataCollector {
     /// Create a new data collector
     #[allow(dead_code)]
-    pub fn new(schwab_client: SchwabClient, database: DatabaseManager, config: Config) -> Self {
+    pub fn new(schwab_client: SchwabClient, database: DatabaseManagerSqlx, config: Config) -> Self {
         let max_concurrent = std::cmp::min(config.batch_size, 10); // Limit concurrent requests
         
         Self {
@@ -39,9 +39,9 @@ impl DataCollector {
 
     /// Get all active S&P 500 stocks from database
     #[allow(dead_code)]
-    pub fn get_active_stocks(&self) -> Result<Vec<Stock>> {
+    pub async fn get_active_stocks(&self) -> Result<Vec<Stock>> {
         info!("📊 Getting active stocks from database...");
-        let stocks = self.database.get_active_stocks()?;
+        let stocks = self.database.get_active_stocks().await?;
         info!("✅ Found {} active stocks in database", stocks.len());
         Ok(stocks)
     }
@@ -51,7 +51,7 @@ impl DataCollector {
     pub async fn fetch_current_quotes(&self) -> Result<usize> {
         info!("📊 Fetching current quotes for all active stocks...");
         
-        let stocks = self.database.get_active_stocks()?;
+        let stocks = self.database.get_active_stocks().await?;
         let symbols: Vec<String> = stocks.iter().map(|s| s.symbol.clone()).collect();
         
         let mut updated_count = 0;
@@ -84,7 +84,7 @@ impl DataCollector {
         for quote in quotes {
             if let Some(&stock_id) = stock_lookup.get(&quote.symbol) {
                 // Check if we already have data for today
-                if self.database.get_price_on_date(stock_id, today)?.is_some() {
+                if self.database.get_price_on_date(stock_id, today).await?.is_some() {
                     debug!("Skipping {}: already have data for {}", quote.symbol, today);
                     continue;
                 }
@@ -103,7 +103,7 @@ impl DataCollector {
                     dividend_yield: quote.dividend_yield,
                 };
 
-                self.database.insert_daily_price(&daily_price)?;
+                self.database.insert_daily_price(&daily_price).await?;
                 updated_count += 1;
                 debug!("Updated price for {}: ${:.2}", quote.symbol, daily_price.close_price);
             } else {
@@ -121,7 +121,7 @@ impl DataCollector {
         
         info!("📈 Starting historical data backfill from {} to {}", from_date, end_date);
         
-        let stocks = self.database.get_active_stocks()?;
+        let stocks = self.database.get_active_stocks().await?;
         let total_stocks = stocks.len();
         
         info!("Processing {} stocks concurrently with max 10 parallel requests...", total_stocks);
@@ -180,7 +180,7 @@ impl DataCollector {
               total_records, success_count, error_count);
         
         // Update last sync date
-        self.database.set_last_update_date(end_date)?;
+        self.database.set_metadata("last_update_date", &end_date.to_string()).await?;
         
         Ok(total_records)
     }
@@ -188,7 +188,7 @@ impl DataCollector {
     /// Fetch historical data for a single stock
     pub async fn fetch_stock_history(
         client: Arc<SchwabClient>,
-        database: Arc<DatabaseManager>,
+        database: Arc<DatabaseManagerSqlx>,
         stock: Stock,
         from_date: NaiveDate,
         to_date: NaiveDate,
@@ -208,15 +208,8 @@ impl DataCollector {
                 .ok_or_else(|| anyhow::anyhow!("Invalid timestamp: {}", bar.datetime))?
                 .date_naive();
             
-            // Skip if we already have data for this date (spawn on blocking thread)
-            let has_existing = {
-                let database = database.clone();
-                let stock_id = stock_id;
-                let date = date;
-                tokio::task::spawn_blocking(move || {
-                    database.get_price_on_date(stock_id, date)
-                }).await??
-            };
+            // Skip if we already have data for this date
+            let has_existing = database.get_price_on_date(stock_id, date).await?;
             
             if has_existing.is_some() {
                 continue;
@@ -236,12 +229,8 @@ impl DataCollector {
                 dividend_yield: None,
             };
 
-            // Insert on blocking thread
-            let database = database.clone();
-            let daily_price = daily_price;
-            tokio::task::spawn_blocking(move || {
-                database.insert_daily_price(&daily_price)
-            }).await??;
+            // Insert the price data
+            database.insert_daily_price(&daily_price).await?;
             
             inserted_count += 1;
         }
@@ -258,7 +247,7 @@ impl DataCollector {
     /// Fetch historical data for a single stock using weekly batches (takes reference)
     pub async fn fetch_stock_history_with_batching_ref(
         client: &SchwabClient,
-        database: &DatabaseManager,
+        database: &DatabaseManagerSqlx,
         stock: Stock,
         from_date: NaiveDate,
         to_date: NaiveDate,
@@ -278,7 +267,7 @@ impl DataCollector {
             debug!("Processing batch {} for {}: {} to {}", batch.batch_number, stock.symbol, batch.start_date, batch.end_date);
             
             // Check existing records for this batch
-            let existing_count = database.count_existing_records(stock_id, batch.start_date, batch.end_date)?;
+            let existing_count = database.count_existing_records(stock_id, batch.start_date, batch.end_date).await?;
             
             if existing_count > 0 {
                 debug!("Batch {} for {}: Found {} existing records, skipping", batch.batch_number, stock.symbol, existing_count);
@@ -296,7 +285,7 @@ impl DataCollector {
                             .date_naive();
                         
                         // Skip if we already have data for this date
-                        if database.get_price_on_date(stock_id, date)?.is_some() {
+                        if database.get_price_on_date(stock_id, date).await?.is_some() {
                             continue;
                         }
                         
@@ -314,7 +303,7 @@ impl DataCollector {
                             dividend_yield: None,
                         };
                         
-                        database.insert_daily_price(&daily_price)?;
+                        database.insert_daily_price(&daily_price).await?;
                         records_inserted += 1;
                     }
                     
@@ -346,11 +335,12 @@ impl DataCollector {
     pub async fn incremental_update(&self) -> Result<usize> {
         info!("🔄 Starting incremental data update...");
         
-        let last_update = self.database.get_last_update_date()?;
+        let last_update = self.database.get_metadata("last_update_date").await?;
         let today = Utc::now().date_naive();
         
         let from_date = match last_update {
-            Some(date) => {
+            Some(date_str) => {
+                let date = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")?;
                 if date >= today {
                     info!("✅ Data is already up to date (last update: {})", date);
                     return Ok(0);
@@ -375,15 +365,15 @@ impl DataCollector {
     /// Get collection statistics
     #[allow(dead_code)]
     pub async fn get_collection_stats(&self) -> Result<CollectionStats> {
-        let (stock_count, price_count, last_update) = self.database.get_stats()?;
+        let stats = self.database.get_stats().await?;
         
         // Calculate date range of available data
         let (earliest_date, latest_date) = self.get_data_date_range().await?;
         
         Ok(CollectionStats {
-            total_stocks: stock_count,
-            total_price_records: price_count,
-            last_update_date: last_update,
+            total_stocks: stats.get("total_stocks").unwrap_or(&0).clone() as usize,
+            total_price_records: stats.get("total_prices").unwrap_or(&0).clone() as usize,
+            last_update_date: None, // TODO: Add this to database stats
             earliest_data_date: earliest_date,
             latest_data_date: latest_date,
         })
@@ -401,13 +391,13 @@ impl DataCollector {
     pub async fn validate_data_integrity(&self) -> Result<ValidationReport> {
         info!("🔍 Validating data integrity...");
         
-        let stocks = self.database.get_active_stocks()?;
+        let stocks = self.database.get_active_stocks().await?;
         let mut validation_report = ValidationReport::new();
         
         for stock in stocks {
             if let Some(stock_id) = stock.id {
                 // Check for data gaps
-                let latest_price = self.database.get_latest_price(stock_id)?;
+                let latest_price = self.database.get_latest_price(stock_id).await?;
                 
                 if let Some(price) = latest_price {
                     validation_report.stocks_with_data += 1;

@@ -17,7 +17,7 @@ use tokio::sync::broadcast;
 use chrono::{DateTime, Utc};
 
 use crate::{
-    database::DatabaseManager,
+    database_sqlx::DatabaseManagerSqlx,
     models::Config,
     ui::{dashboard::Dashboard, data_collection::DataCollectionView, data_analysis::DataAnalysisView},
 };
@@ -45,13 +45,13 @@ pub struct StockTuiApp {
     pub dashboard: Dashboard,
     pub data_collection: DataCollectionView,
     pub data_analysis: DataAnalysisView,
-    pub database: DatabaseManager,
+    pub database: DatabaseManagerSqlx,
     pub log_sender: broadcast::Sender<LogMessage>,
     pub log_receiver: broadcast::Receiver<LogMessage>,
 }
 
 impl StockTuiApp {
-    pub fn new(_config: &Config, database: DatabaseManager) -> Result<Self> {
+    pub fn new(_config: &Config, database: DatabaseManagerSqlx) -> Result<Self> {
         let dashboard = Dashboard::new();
         let data_collection = DataCollectionView::new();
         let data_analysis = DataAnalysisView::new();
@@ -156,10 +156,10 @@ impl StockTuiApp {
         f.render_widget(paragraph, area);
     }
 
-    pub fn handle_key_event(&mut self, key: KeyCode) -> Result<()> {
+    pub async fn handle_key_event(&mut self, key: KeyCode) -> Result<()> {
         // If we're in data collection view and it's executing, let it handle the event
         if self.selected_tab == 0 && self.data_collection.is_executing {
-            return self.data_collection.handle_key_event(key, self.log_sender.clone());
+            return self.data_collection.handle_key_event(key, self.log_sender.clone()).await;
         }
 
         match key {
@@ -178,8 +178,8 @@ impl StockTuiApp {
             _ => {
                 // Route key events to the appropriate view
                 match self.selected_tab {
-                    0 => self.data_collection.handle_key_event(key, self.log_sender.clone())?,
-                    1 => self.data_analysis.handle_key_event(key, &self.database)?,
+                    0 => self.data_collection.handle_key_event(key, self.log_sender.clone()).await?,
+                    1 => self.data_analysis.handle_key_event(key, &self.database).await?,
                     _ => {}
                 }
             }
@@ -209,7 +209,7 @@ impl StockTuiApp {
 
 
 /// Run the async TUI application
-pub async fn run_app_async(config: Config, database: DatabaseManager) -> Result<()> {
+pub async fn run_app_async(config: Config, database: DatabaseManagerSqlx) -> Result<()> {
     let mut app = StockTuiApp::new(&config, database)?;
     
     // Enable raw mode
@@ -225,7 +225,7 @@ pub async fn run_app_async(config: Config, database: DatabaseManager) -> Result<
         // Handle terminal events with timeout
         if crossterm::event::poll(std::time::Duration::from_millis(100))? {
             if let Event::Key(key_event) = event::read()? {
-                app.handle_key_event(key_event.code)?;
+                app.handle_key_event(key_event.code).await?;
                 
                 if app.should_quit {
                     break;

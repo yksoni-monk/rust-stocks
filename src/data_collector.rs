@@ -9,6 +9,7 @@ use tracing::{info, warn, error, debug};
 use crate::api::{SchwabClient, StockDataProvider};
 use crate::database::DatabaseManager;
 use crate::models::{Config, Stock, DailyPrice, SchwabQuote};
+use crate::ui::data_collection::TradingWeekBatchCalculator;
 
 /// Data collection system for fetching and storing stock data
 pub struct DataCollector {
@@ -235,6 +236,94 @@ impl DataCollector {
         }
         
         Ok(inserted_count)
+    }
+
+
+
+    /// Fetch historical data for a single stock using weekly batches (takes reference)
+    pub async fn fetch_stock_history_with_batching_ref(
+        client: &SchwabClient,
+        database: &DatabaseManager,
+        stock: Stock,
+        from_date: NaiveDate,
+        to_date: NaiveDate,
+    ) -> Result<usize> {
+        let stock_id = stock.id.ok_or_else(|| anyhow::anyhow!("Stock has no ID: {}", stock.symbol))?;
+        
+        debug!("Fetching history for {}: {} to {} using weekly batches", stock.symbol, from_date, to_date);
+        
+        // Calculate trading week batches
+        let batches = TradingWeekBatchCalculator::calculate_batches(from_date, to_date);
+        debug!("Created {} trading week batches for {}", batches.len(), stock.symbol);
+        
+        let mut total_inserted = 0;
+
+        // Process each trading week batch
+        for batch in batches {
+            debug!("Processing batch {} for {}: {} to {}", batch.batch_number, stock.symbol, batch.start_date, batch.end_date);
+            
+            // Check existing records for this batch
+            let existing_count = database.count_existing_records(stock_id, batch.start_date, batch.end_date)?;
+            
+            if existing_count > 0 {
+                debug!("Batch {} for {}: Found {} existing records, skipping", batch.batch_number, stock.symbol, existing_count);
+                continue;
+            }
+
+            // Fetch data for this batch using the existing function
+            match client.get_price_history(&stock.symbol, batch.start_date, batch.end_date).await {
+                Ok(price_bars) => {
+                    let mut records_inserted = 0;
+                    for bar in price_bars {
+                        // Convert timestamp to date
+                        let date = chrono::DateTime::from_timestamp(bar.datetime / 1000, 0)
+                            .ok_or_else(|| anyhow::anyhow!("Invalid timestamp: {}", bar.datetime))?
+                            .date_naive();
+                        
+                        // Skip if we already have data for this date
+                        if database.get_price_on_date(stock_id, date)?.is_some() {
+                            continue;
+                        }
+                        
+                        let daily_price = DailyPrice {
+                            id: None,
+                            stock_id,
+                            date,
+                            open_price: bar.open,
+                            high_price: bar.high,
+                            low_price: bar.low,
+                            close_price: bar.close,
+                            volume: Some(bar.volume),
+                            pe_ratio: None, // Historical P/E not available in price history
+                            market_cap: None,
+                            dividend_yield: None,
+                        };
+                        
+                        database.insert_daily_price(&daily_price)?;
+                        records_inserted += 1;
+                    }
+                    
+                    total_inserted += records_inserted;
+                    if records_inserted > 0 {
+                        info!("✅ Batch {} for {}: Inserted {} records (Total: {})", batch.batch_number, stock.symbol, records_inserted, total_inserted);
+                    } else {
+                        debug!("ℹ️ Batch {} for {}: No new records (Total: {})", batch.batch_number, stock.symbol, total_inserted);
+                    }
+                }
+                Err(e) => {
+                    warn!("❌ Batch {} for {}: Failed - {}", batch.batch_number, stock.symbol, e);
+                }
+            }
+
+            // Small delay between batches to avoid rate limiting
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        }
+
+        if total_inserted > 0 {
+            info!("✅ {}: Added {} historical records using batching", stock.symbol, total_inserted);
+        }
+        
+        Ok(total_inserted)
     }
 
     /// Perform incremental update (fetch data since last update)

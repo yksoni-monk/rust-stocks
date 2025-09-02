@@ -70,6 +70,12 @@ The system now supports high-performance concurrent data fetching using multiple
 ```bash
 # Demo the concurrent fetcher with real API calls
 cargo run --bin concurrent_fetch_demo
+
+# With custom date range and configuration
+cargo run --bin concurrent_fetch_demo -- --start-date 20240101 --end-date 20240131 --threads 5 --retries 2
+
+# Help
+cargo run --bin concurrent_fetch_demo -- --help
 ```
 
 **Features:**
@@ -79,6 +85,8 @@ cargo run --bin concurrent_fetch_demo
 - 📈 **Real-time Progress**: Detailed logging of each thread's progress
 - 🛡️ **Thread Safety**: Safe concurrent database operations
 - ⚡ **Rate Limiting**: Per-thread API rate limiting to avoid violations
+- 📅 **Weekly Batching**: Same trading week batching as single stock fetcher
+- 🎯 **CLI Interface**: Command-line arguments for date range and configuration
 
 **Configuration:**
 ```rust

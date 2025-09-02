@@ -10,9 +10,10 @@ use tokio::sync::broadcast;
 use tracing::{info, warn, error};
 
 use crate::{
-    api::{schwab_client::SchwabClient, StockDataProvider},
+    api::schwab_client::SchwabClient,
     database::DatabaseManager,
-    models::{Stock, DailyPrice, Config},
+    models::{Stock, Config},
+    data_collector::DataCollector,
 };
 
 /// Configuration for concurrent fetching
@@ -217,55 +218,25 @@ async fn worker_thread(
     Ok(())
 }
 
-/// Fetch data for a single stock with retry logic
+/// Fetch data for a single stock with retry logic using existing batching function
 async fn fetch_stock_data(
     api_client: &SchwabClient,
     database: &DatabaseManager,
     stock: &Stock,
     config: &ConcurrentFetchConfig,
 ) -> Result<usize> {
-    let stock_id = stock.id.unwrap();
     let mut attempts = 0;
     let mut last_error = None;
 
     while attempts < config.retry_attempts {
-        match api_client.get_price_history(
-            &stock.symbol,
+        match DataCollector::fetch_stock_history_with_batching_ref(
+            api_client,
+            database,
+            stock.clone(),
             config.date_range.start_date,
             config.date_range.end_date,
         ).await {
-            Ok(price_bars) => {
-                // Insert fetched data into database
-                let mut records_inserted = 0;
-                for bar in price_bars {
-                    // Convert timestamp to date
-                    let date = chrono::DateTime::from_timestamp(bar.datetime / 1000, 0)
-                        .ok_or_else(|| anyhow::anyhow!("Invalid timestamp: {}", bar.datetime))?
-                        .date_naive();
-                    
-                    // Skip if we already have data for this date
-                    if database.get_price_on_date(stock_id, date)?.is_some() {
-                        continue;
-                    }
-                    
-                    let daily_price = DailyPrice {
-                        id: None,
-                        stock_id,
-                        date,
-                        open_price: bar.open,
-                        high_price: bar.high,
-                        low_price: bar.low,
-                        close_price: bar.close,
-                        volume: Some(bar.volume),
-                        pe_ratio: None, // Historical P/E not available in price history
-                        market_cap: None,
-                        dividend_yield: None,
-                    };
-                    
-                    database.insert_daily_price(&daily_price)?;
-                    records_inserted += 1;
-                }
-                
+            Ok(records_inserted) => {
                 return Ok(records_inserted);
             }
             Err(e) => {

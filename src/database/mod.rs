@@ -375,7 +375,19 @@ impl DatabaseManager {
             Ok(row.get(0)?)
         })?;
 
-        let last_update = self.get_last_update_date()?;
+        // Get last update date directly from the same connection to avoid recursive locking
+        let last_update: Option<NaiveDate> = {
+            let mut stmt = conn.prepare("SELECT value FROM metadata WHERE key = 'last_update_date'")?;
+            let value = stmt.query_row([], |row| {
+                Ok(row.get::<_, String>(0)?)
+            });
+
+            match value {
+                Ok(date_str) => Some(NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")?),
+                Err(rusqlite::Error::QueryReturnedNoRows) => None,
+                Err(e) => return Err(e.into()),
+            }
+        };
 
         Ok((stock_count, price_count, last_update))
     }
@@ -429,11 +441,25 @@ impl DatabaseManager {
             0.0
         };
 
+        // Get last update date directly from the same connection to avoid recursive locking
+        let last_update_date: Option<NaiveDate> = {
+            let mut stmt = conn.prepare("SELECT value FROM metadata WHERE key = 'last_update_date'")?;
+            let value = stmt.query_row([], |row| {
+                Ok(row.get::<_, String>(0)?)
+            });
+
+            match value {
+                Ok(date_str) => Some(NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")?),
+                Err(rusqlite::Error::QueryReturnedNoRows) => None,
+                Err(e) => return Err(e.into()),
+            }
+        };
+
         Ok(DatabaseStats {
             total_stocks,
             total_price_records,
             data_coverage_percentage,
-            last_update_date: self.get_last_update_date()?,
+            last_update_date,
             oldest_data_date,
         })
     }

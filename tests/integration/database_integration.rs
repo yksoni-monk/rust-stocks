@@ -6,12 +6,15 @@ use chrono::{NaiveDate, Utc};
 use crate::common::database::{DatabaseTestHelper, utils};
 use crate::common::{test_data, logging};
 
-#[test]
-fn test_full_data_collection_workflow() {
+#[tokio::test]
+async fn test_full_data_collection_workflow() {
     logging::init_test_logging();
     logging::log_test_step("Testing full data collection workflow");
     
-    let helper = DatabaseTestHelper::new().expect("Failed to create test database");
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        async {
+            let helper = DatabaseTestHelper::new().expect("Failed to create test database");
     
     // Step 1: Insert multiple stocks
     let stocks = vec![
@@ -109,15 +112,25 @@ fn test_full_data_collection_workflow() {
         assert_eq!(market_cap.unwrap(), 1_000_000_000.0 + 30.0 * 10_000_000.0);
     }
     
-    logging::log_test_step("Full data collection workflow completed successfully");
+            logging::log_test_step("Full data collection workflow completed successfully");
+        }
+    ).await;
+    
+    match result {
+        Ok(_) => logging::log_test_step("Full data collection workflow test completed within timeout"),
+        Err(_) => panic!("Full data collection workflow test timed out after 60 seconds"),
+    }
 }
 
-#[test]
-fn test_batch_processing_simulation() {
+#[tokio::test]
+async fn test_batch_processing_simulation() {
     logging::init_test_logging();
     logging::log_test_step("Testing batch processing simulation");
     
-    let helper = DatabaseTestHelper::new().expect("Failed to create test database");
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        async {
+            let helper = DatabaseTestHelper::new().expect("Failed to create test database");
     
     // Simulate the trading week batch processing
     let start_date = NaiveDate::from_ymd_opt(2024, 8, 6).unwrap(); // Wednesday
@@ -178,15 +191,25 @@ fn test_batch_processing_simulation() {
         assert!(price.is_some(), "Should have price for mid date in batch {}", batch_num + 1);
     }
     
-    logging::log_test_step("Batch processing simulation completed successfully");
+            logging::log_test_step("Batch processing simulation completed successfully");
+        }
+    ).await;
+    
+    match result {
+        Ok(_) => logging::log_test_step("Batch processing simulation test completed within timeout"),
+        Err(_) => panic!("Batch processing simulation test timed out after 60 seconds"),
+    }
 }
 
-#[test]
-fn test_error_recovery_scenarios() {
+#[tokio::test]
+async fn test_error_recovery_scenarios() {
     logging::init_test_logging();
     logging::log_test_step("Testing error recovery scenarios");
     
-    let helper = DatabaseTestHelper::new().expect("Failed to create test database");
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        async {
+            let helper = DatabaseTestHelper::new().expect("Failed to create test database");
     
     // Test scenario: Insert data, then simulate partial failure and recovery
     
@@ -241,5 +264,12 @@ fn test_error_recovery_scenarios() {
         assert!(price.is_some(), "Should have price for all dates");
     }
     
-    logging::log_test_step("Error recovery scenarios completed successfully");
+            logging::log_test_step("Error recovery scenarios completed successfully");
+        }
+    ).await;
+    
+    match result {
+        Ok(_) => logging::log_test_step("Error recovery scenarios test completed within timeout"),
+        Err(_) => panic!("Error recovery scenarios test timed out after 60 seconds"),
+    }
 }

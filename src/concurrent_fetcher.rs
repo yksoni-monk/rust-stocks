@@ -1,0 +1,346 @@
+//! Concurrent stock data fetching module
+//! 
+//! This module provides functionality to fetch stock data from multiple stocks
+//! concurrently using a configurable number of worker threads.
+
+use anyhow::Result;
+use chrono::NaiveDate;
+use std::sync::{Arc, Mutex};
+use tokio::sync::broadcast;
+use tracing::{info, warn, error};
+
+use crate::{
+    api::{schwab_client::SchwabClient, StockDataProvider},
+    database::DatabaseManager,
+    models::{Stock, DailyPrice, Config},
+};
+
+/// Configuration for concurrent fetching
+#[derive(Debug, Clone)]
+pub struct ConcurrentFetchConfig {
+    pub date_range: DateRange,
+    pub num_threads: usize,
+    pub retry_attempts: u32,
+}
+
+/// Date range for fetching data
+#[derive(Debug, Clone)]
+pub struct DateRange {
+    pub start_date: NaiveDate,
+    pub end_date: NaiveDate,
+}
+
+/// Progress update from worker threads
+#[derive(Debug, Clone)]
+pub struct FetchProgress {
+    pub thread_id: usize,
+    pub stock_symbol: String,
+    pub status: FetchStatus,
+    pub message: String,
+}
+
+/// Status of a fetch operation
+#[derive(Debug, Clone)]
+pub enum FetchStatus {
+    Started,
+    Skipped, // Data already exists
+    Completed,
+    Failed(String),
+}
+
+/// Result of concurrent fetching operation
+#[derive(Debug)]
+pub struct FetchResult {
+    pub total_stocks: usize,
+    pub processed_stocks: usize,
+    pub skipped_stocks: usize,
+    pub failed_stocks: usize,
+    pub total_records_fetched: usize,
+}
+
+/// Main function to fetch stock data concurrently
+pub async fn fetch_stocks_concurrently(
+    database: Arc<DatabaseManager>,
+    config: ConcurrentFetchConfig,
+) -> Result<FetchResult> {
+    info!("🚀 Starting concurrent fetch with {} threads", config.num_threads);
+    info!("📅 Date range: {} to {}", config.date_range.start_date, config.date_range.end_date);
+
+    // Get all active stocks ordered by symbol
+    let stocks = database.get_active_stocks()?;
+    info!("📊 Found {} active stocks to process", stocks.len());
+
+    // Create thread-safe stock queue
+    let stock_queue = Arc::new(Mutex::new(stocks));
+    
+    // Create progress tracking channel
+    let (progress_sender, _progress_receiver) = broadcast::channel(100);
+    let progress_sender = Arc::new(progress_sender);
+
+    // Create shared counters for result tracking
+    let counters = Arc::new(Mutex::new(FetchCounters::new()));
+
+    // Spawn worker threads
+    let mut handles = Vec::new();
+    
+    for thread_id in 0..config.num_threads {
+        let stock_queue = Arc::clone(&stock_queue);
+        let database = Arc::clone(&database);
+        let progress_sender = Arc::clone(&progress_sender);
+        let counters = Arc::clone(&counters);
+        let config = config.clone();
+
+        let handle = tokio::spawn(async move {
+            worker_thread(
+                thread_id,
+                stock_queue,
+                database,
+                progress_sender,
+                counters,
+                config,
+            ).await
+        });
+        
+        handles.push(handle);
+    }
+
+    // Wait for all threads to complete
+    for handle in handles {
+        handle.await??;
+    }
+
+    // Get final results
+    let final_counters = counters.lock().unwrap();
+    let result = FetchResult {
+        total_stocks: final_counters.total_stocks,
+        processed_stocks: final_counters.processed_stocks,
+        skipped_stocks: final_counters.skipped_stocks,
+        failed_stocks: final_counters.failed_stocks,
+        total_records_fetched: final_counters.total_records_fetched,
+    };
+
+    info!("✅ Concurrent fetch completed");
+    info!("📊 Results: {} processed, {} skipped, {} failed, {} records fetched", 
+          result.processed_stocks, result.skipped_stocks, result.failed_stocks, result.total_records_fetched);
+
+    Ok(result)
+}
+
+/// Worker thread function
+async fn worker_thread(
+    thread_id: usize,
+    stock_queue: Arc<Mutex<Vec<Stock>>>,
+    database: Arc<DatabaseManager>,
+    progress_sender: Arc<broadcast::Sender<FetchProgress>>,
+    counters: Arc<Mutex<FetchCounters>>,
+    config: ConcurrentFetchConfig,
+) -> Result<()> {
+    // Create API client for this thread
+    let api_config = Config::from_env()?;
+    let api_client = SchwabClient::new(&api_config)?;
+    
+    loop {
+        // Get next stock from queue
+        let stock = {
+            let mut queue = stock_queue.lock().unwrap();
+            if queue.is_empty() {
+                break; // No more stocks to process
+            }
+            queue.remove(0)
+        };
+
+        let stock_symbol = stock.symbol.clone();
+        let stock_id = stock.id.unwrap();
+
+        // Send progress update
+        let _ = progress_sender.send(FetchProgress {
+            thread_id,
+            stock_symbol: stock_symbol.clone(),
+            status: FetchStatus::Started,
+            message: format!("Thread {}: Starting {}", thread_id, stock_symbol),
+        });
+
+        // Check if data already exists for this date range
+        let existing_count = database.count_existing_records(
+            stock_id, 
+            config.date_range.start_date, 
+            config.date_range.end_date
+        )?;
+
+        if existing_count > 0 {
+            // Data already exists, skip
+            let _ = progress_sender.send(FetchProgress {
+                thread_id,
+                stock_symbol: stock_symbol.clone(),
+                status: FetchStatus::Skipped,
+                message: format!("Thread {}: Skipping {} ({} records already exist)", 
+                               thread_id, stock_symbol, existing_count),
+            });
+
+            let mut counters = counters.lock().unwrap();
+            counters.skipped_stocks += 1;
+            continue;
+        }
+
+        // Fetch data for this stock
+        match fetch_stock_data(&api_client, &database, &stock, &config).await {
+            Ok(records_fetched) => {
+                let _ = progress_sender.send(FetchProgress {
+                    thread_id,
+                    stock_symbol: stock_symbol.clone(),
+                    status: FetchStatus::Completed,
+                    message: format!("Thread {}: Completed {} ({} records fetched)", 
+                                   thread_id, stock_symbol, records_fetched),
+                });
+
+                let mut counters = counters.lock().unwrap();
+                counters.processed_stocks += 1;
+                counters.total_records_fetched += records_fetched;
+            }
+            Err(e) => {
+                let error_msg = format!("Thread {}: Failed {} - {}", thread_id, stock_symbol, e);
+                error!("{}", error_msg);
+                
+                let _ = progress_sender.send(FetchProgress {
+                    thread_id,
+                    stock_symbol: stock_symbol.clone(),
+                    status: FetchStatus::Failed(e.to_string()),
+                    message: error_msg,
+                });
+
+                let mut counters = counters.lock().unwrap();
+                counters.failed_stocks += 1;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Fetch data for a single stock with retry logic
+async fn fetch_stock_data(
+    api_client: &SchwabClient,
+    database: &DatabaseManager,
+    stock: &Stock,
+    config: &ConcurrentFetchConfig,
+) -> Result<usize> {
+    let stock_id = stock.id.unwrap();
+    let mut attempts = 0;
+    let mut last_error = None;
+
+    while attempts < config.retry_attempts {
+        match api_client.get_price_history(
+            &stock.symbol,
+            config.date_range.start_date,
+            config.date_range.end_date,
+        ).await {
+            Ok(price_bars) => {
+                // Insert fetched data into database
+                let mut records_inserted = 0;
+                for bar in price_bars {
+                    // Convert timestamp to date
+                    let date = chrono::DateTime::from_timestamp(bar.datetime / 1000, 0)
+                        .ok_or_else(|| anyhow::anyhow!("Invalid timestamp: {}", bar.datetime))?
+                        .date_naive();
+                    
+                    // Skip if we already have data for this date
+                    if database.get_price_on_date(stock_id, date)?.is_some() {
+                        continue;
+                    }
+                    
+                    let daily_price = DailyPrice {
+                        id: None,
+                        stock_id,
+                        date,
+                        open_price: bar.open,
+                        high_price: bar.high,
+                        low_price: bar.low,
+                        close_price: bar.close,
+                        volume: Some(bar.volume),
+                        pe_ratio: None, // Historical P/E not available in price history
+                        market_cap: None,
+                        dividend_yield: None,
+                    };
+                    
+                    database.insert_daily_price(&daily_price)?;
+                    records_inserted += 1;
+                }
+                
+                return Ok(records_inserted);
+            }
+            Err(e) => {
+                attempts += 1;
+                let error_msg = e.to_string();
+                last_error = Some(e);
+                
+                if attempts < config.retry_attempts {
+                    warn!("Attempt {} failed for {}: {}. Retrying...", 
+                          attempts, stock.symbol, error_msg);
+                    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                }
+            }
+        }
+    }
+
+    // All attempts failed
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("Unknown error")))
+}
+
+/// Internal counters for tracking progress
+#[derive(Debug)]
+struct FetchCounters {
+    total_stocks: usize,
+    processed_stocks: usize,
+    skipped_stocks: usize,
+    failed_stocks: usize,
+    total_records_fetched: usize,
+}
+
+impl FetchCounters {
+    fn new() -> Self {
+        Self {
+            total_stocks: 0,
+            processed_stocks: 0,
+            skipped_stocks: 0,
+            failed_stocks: 0,
+            total_records_fetched: 0,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::NaiveDate;
+
+    #[tokio::test]
+    async fn test_concurrent_fetch_config() {
+        let config = ConcurrentFetchConfig {
+            date_range: DateRange {
+                start_date: NaiveDate::from_ymd_opt(2020, 1, 1).unwrap(),
+                end_date: NaiveDate::from_ymd_opt(2025, 8, 31).unwrap(),
+            },
+            num_threads: 10,
+            retry_attempts: 3,
+        };
+
+        assert_eq!(config.num_threads, 10);
+        assert_eq!(config.retry_attempts, 3);
+        assert_eq!(config.date_range.start_date, NaiveDate::from_ymd_opt(2020, 1, 1).unwrap());
+        assert_eq!(config.date_range.end_date, NaiveDate::from_ymd_opt(2025, 8, 31).unwrap());
+    }
+
+    #[test]
+    fn test_fetch_progress() {
+        let progress = FetchProgress {
+            thread_id: 1,
+            stock_symbol: "AAPL".to_string(),
+            status: FetchStatus::Started,
+            message: "Thread 1: Starting AAPL".to_string(),
+        };
+
+        assert_eq!(progress.thread_id, 1);
+        assert_eq!(progress.stock_symbol, "AAPL");
+        assert!(matches!(progress.status, FetchStatus::Started));
+    }
+}

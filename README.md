@@ -63,6 +63,35 @@ cargo run --bin update_sp500
 
 ## 📊 Data Collection
 
+### Concurrent Data Fetching (NEW!)
+
+The system now supports high-performance concurrent data fetching using multiple worker threads:
+
+```bash
+# Demo the concurrent fetcher with real API calls
+cargo run --bin concurrent_fetch_demo
+```
+
+**Features:**
+- 🚀 **Multi-threaded Processing**: Configurable number of worker threads
+- 📊 **Smart Data Checking**: Automatically skips existing data
+- 🔄 **Retry Logic**: Configurable retry attempts with exponential backoff
+- 📈 **Real-time Progress**: Detailed logging of each thread's progress
+- 🛡️ **Thread Safety**: Safe concurrent database operations
+- ⚡ **Rate Limiting**: Per-thread API rate limiting to avoid violations
+
+**Configuration:**
+```rust
+let config = ConcurrentFetchConfig {
+    date_range: DateRange {
+        start_date: NaiveDate::from_ymd_opt(2020, 1, 1).unwrap(),
+        end_date: NaiveDate::from_ymd_opt(2025, 8, 31).unwrap(),
+    },
+    num_threads: 10,        // Number of concurrent threads
+    retry_attempts: 3,      // Retry attempts per stock
+};
+```
+
 ### Historical Data Collection with Detailed Logging
 
 The main data collection tool provides professional CLI with comprehensive validation:

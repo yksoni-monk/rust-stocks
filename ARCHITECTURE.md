@@ -67,8 +67,112 @@ A high-performance Rust-based stock analysis system that fetches, stores, and an
 │                        ↓                     ↓               │
 │              [Data Collector] ←→ [Market Calendar]          │
 │                        ↓                     ↓               │
-│                    [Schwab API Client]                       │
+│              [Concurrent Fetcher] ←→ [Schwab API Client]    │
 └──────────────────────────────────────────────────────────────┘
+```
+
+### Concurrent Data Fetching Architecture
+
+#### Overview
+The system now supports concurrent fetching of stock data using multiple worker threads. Each thread processes one stock at a time, with thread-safe coordination to avoid conflicts.
+
+#### Core Components
+
+1. **Concurrent Fetcher** (`src/concurrent_fetcher.rs`)
+   - Main orchestrator for parallel stock data fetching
+   - Uses `tokio::sync::mpsc` for thread communication
+   - Uses `std::sync::Arc<Mutex<Vec<Stock>>>` for thread-safe stock queue
+   - Manages worker thread pool and progress tracking
+
+2. **Stock Queue Manager** (built into Concurrent Fetcher)
+   - Thread-safe queue of stocks to process
+   - Each thread claims next available stock from ordered list
+   - Uses existing `get_active_stocks()` ordered by symbol
+   - Prevents multiple threads from working on same stock
+
+3. **Worker Thread Function**
+   - Each thread processes one stock at a time
+   - Uses existing `count_existing_records()` to check data existence
+   - Uses existing `SchwabClient` for API calls
+   - Uses existing `ApiRateLimiter` per thread (simplest approach)
+   - Implements retry logic with configurable attempts
+
+4. **Progress Tracking**
+   - Uses `tokio::sync::broadcast` for real-time progress updates
+   - Each thread reports: "Thread X: Processing SYMBOL", "Thread X: Completed SYMBOL"
+   - Supports error reporting and skip notifications
+
+#### Data Structures
+
+```rust
+pub struct ConcurrentFetchConfig {
+    pub date_range: DateRange,
+    pub num_threads: usize,
+    pub retry_attempts: u32,
+}
+
+pub struct DateRange {
+    pub start_date: NaiveDate,
+    pub end_date: NaiveDate,
+}
+
+pub struct FetchProgress {
+    pub thread_id: usize,
+    pub stock_symbol: String,
+    pub status: FetchStatus,
+    pub message: String,
+}
+
+pub enum FetchStatus {
+    Started,
+    Skipped, // Data already exists
+    Completed,
+    Failed(String),
+}
+```
+
+#### Thread Safety Design
+
+1. **Database Operations**: 
+   - Database operations are already thread-safe (uses `Arc<Mutex<Connection>>`)
+   - Each thread gets its own `SchwabClient` with its own `ApiRateLimiter`
+   - Stock queue uses `Arc<Mutex<Vec<Stock>>>` for thread-safe access
+
+2. **Rate Limiting**: 
+   - Each thread has its own `ApiRateLimiter` instance
+   - No global coordination needed (simplest approach)
+   - Prevents API rate limit violations
+
+3. **Error Handling**:
+   - Retry logic built into `SchwabClient` (already exists)
+   - Thread reports error and moves to next stock
+   - Configurable retry attempts per stock
+
+4. **Progress Tracking**:
+   - Uses `tokio::sync::broadcast` channel
+   - Main thread can listen to progress updates
+   - Real-time status reporting
+
+#### Function Signature
+```rust
+pub async fn fetch_stocks_concurrently(
+    database: Arc<DatabaseManager>,
+    config: ConcurrentFetchConfig,
+) -> Result<FetchResult>
+```
+
+#### Usage Example
+```rust
+let config = ConcurrentFetchConfig {
+    date_range: DateRange {
+        start_date: NaiveDate::from_ymd_opt(2020, 1, 1).unwrap(),
+        end_date: NaiveDate::from_ymd_opt(2025, 8, 31).unwrap(),
+    },
+    num_threads: 10,
+    retry_attempts: 3,
+};
+
+let result = fetch_stocks_concurrently(database, config).await?;
 ```
 
 ### Core Modules

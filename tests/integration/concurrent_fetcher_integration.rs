@@ -30,6 +30,7 @@ async fn test_concurrent_fetch_integration() {
         },
         num_threads: 10,
         retry_attempts: 3,
+        max_stocks: Some(10), // Limit to 10 stocks for faster testing
     };
 
     log_test_data("Test config", &fetch_config);
@@ -79,6 +80,7 @@ async fn test_concurrent_fetch_with_small_date_range() {
         },
         num_threads: 5, // Fewer threads for smaller test
         retry_attempts: 2,
+        max_stocks: Some(5), // Limit to 5 stocks for faster testing
     };
 
     log_test_data("Small range test config", &fetch_config);
@@ -121,6 +123,7 @@ async fn test_concurrent_fetch_error_handling() {
         },
         num_threads: 3,
         retry_attempts: 1, // Minimal retries for faster test
+        max_stocks: Some(3), // Limit to 3 stocks for faster testing
     };
 
     log_test_data("Error handling test config", &fetch_config);
@@ -177,6 +180,7 @@ fn test_concurrent_fetch_config_validation() {
         },
         num_threads: 10,
         retry_attempts: 3,
+        max_stocks: None, // No limit for config validation test
     };
 
     assert_eq!(config.num_threads, 10, "Thread count should match");

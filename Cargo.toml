@@ -73,9 +73,9 @@ name = "data_collection_test"
 path = "tests/bin/data_collection_test.rs"
 
 [[bin]]
-name = "test_api"
-path = "tests/bin/test_api.rs"
+name = "api_connectivity_test"
+path = "tests/bin/api_connectivity_test.rs"
 
 [[bin]]
 name = "update_sp500"
-path = "tests/bin/update_sp500.rs"
+path = "tools/update_sp500.rs"

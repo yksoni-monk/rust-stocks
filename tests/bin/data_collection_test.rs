@@ -76,6 +76,16 @@ enum Commands {
         #[arg(long, short = 'r', default_value_t = 3)]
         retries: u32,
     },
+    
+    /// Single stock testing
+    Single {
+        /// Stock symbol
+        symbol: String,
+        /// Start date in YYYYMMDD format
+        start_date: String,
+        /// End date in YYYYMMDD format
+        end_date: String,
+    },
 }
 
 #[tokio::main]
@@ -98,6 +108,9 @@ async fn main() -> Result<()> {
         }
         Commands::Concurrent { start_date, end_date, threads, retries } => {
             concurrent_collection(start_date.as_deref(), end_date.as_deref(), threads, retries).await?;
+        }
+        Commands::Single { symbol, start_date, end_date } => {
+            single_stock_test(&symbol, &start_date, &end_date).await?;
         }
     }
 
@@ -264,6 +277,7 @@ async fn concurrent_collection(start_str: Option<&str>, end_str: Option<&str>, t
         },
         num_threads: threads,
         retry_attempts: retries,
+        max_stocks: None, // No limit for production use
     };
 
     let result = fetch_stocks_concurrently(database, fetch_config).await?;
@@ -276,6 +290,72 @@ async fn concurrent_collection(start_str: Option<&str>, end_str: Option<&str>, t
     info!("   - Records fetched: {}", result.total_records_fetched);
 
     info!("🎉 Concurrent fetching completed!");
+    Ok(())
+}
+
+async fn single_stock_test(symbol: &str, start_str: &str, end_str: &str) -> Result<()> {
+    info!("📈 Single Stock Data Collection Test");
+    info!("====================================");
+    info!("Symbol: {}", symbol);
+    info!("Date range: {} to {}", start_str, end_str);
+
+    // Parse dates
+    let start_date = parse_date_simple(start_str)?;
+    let end_date = parse_date_simple(end_str)?;
+
+    info!("Parsed dates: {} to {}", start_date, end_date);
+
+    // Setup
+    let config = Config::from_env()?;
+    let database = DatabaseManager::new(&config.database_path)?;
+    let client = SchwabClient::new(&config)?;
+
+    info!("✅ Setup complete");
+
+    // Check if stock exists in database
+    info!("📊 Checking stock in database...");
+    match database.get_stock_by_symbol(symbol)? {
+        Some(stock) => {
+            info!("✅ Stock found in database: {} ({})", stock.symbol, stock.company_name);
+        }
+        None => {
+            info!("⚠️  Stock not found in database, will try to fetch from API");
+        }
+    }
+
+    // Check database stats
+    info!("📊 Database statistics...");
+    let (total_stocks, total_prices, last_update) = database.get_stats()?;
+    info!("Total stocks: {}", total_stocks);
+    info!("Total price records: {}", total_prices);
+    info!("Last update: {:?}", last_update);
+
+    // Fetch price history
+    info!("📈 Fetching price history for {} from {} to {}", symbol, start_date, end_date);
+    
+    match client.get_price_history(symbol, start_date, end_date).await {
+        Ok(bars) => {
+            info!("✅ Successfully fetched {} price bars", bars.len());
+            
+            if !bars.is_empty() {
+                info!("📊 Sample data:");
+                info!("  First bar: Open=${:.2}, High=${:.2}, Low=${:.2}, Close=${:.2}, Volume={}", 
+                     bars[0].open, bars[0].high, bars[0].low, bars[0].close, bars[0].volume);
+                
+                if bars.len() > 1 {
+                    let last_bar = &bars[bars.len() - 1];
+                    info!("  Last bar: Open=${:.2}, High=${:.2}, Low=${:.2}, Close=${:.2}, Volume={}", 
+                         last_bar.open, last_bar.high, last_bar.low, last_bar.close, last_bar.volume);
+                }
+            }
+        }
+        Err(e) => {
+            error!("❌ Failed to fetch price history: {}", e);
+            return Err(e);
+        }
+    }
+
+    info!("🎉 Single stock test completed successfully!");
     Ok(())
 }
 

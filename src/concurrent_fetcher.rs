@@ -22,6 +22,7 @@ pub struct ConcurrentFetchConfig {
     pub date_range: DateRange,
     pub num_threads: usize,
     pub retry_attempts: u32,
+    pub max_stocks: Option<usize>, // Optional limit for testing
 }
 
 /// Date range for fetching data
@@ -69,7 +70,18 @@ pub async fn fetch_stocks_concurrently(
 
     // Get all active stocks ordered by symbol
     let stocks = database.get_active_stocks()?;
-    info!("📊 Found {} active stocks to process", stocks.len());
+    let total_stocks = stocks.len();
+    info!("📊 Found {} active stocks to process", total_stocks);
+
+    // Apply stock limit if specified (for testing)
+    let stocks = if let Some(max_stocks) = config.max_stocks {
+        let limited_stocks = stocks.into_iter().take(max_stocks).collect::<Vec<_>>();
+        info!("🔢 Limiting to {} stocks for testing", limited_stocks.len());
+        limited_stocks
+    } else {
+        stocks
+    };
+    let actual_total = stocks.len();
 
     // Create thread-safe stock queue
     let stock_queue = Arc::new(Mutex::new(stocks));
@@ -80,6 +92,12 @@ pub async fn fetch_stocks_concurrently(
 
     // Create shared counters for result tracking
     let counters = Arc::new(Mutex::new(FetchCounters::new()));
+    
+    // Set the total number of stocks
+    {
+        let mut counters = counters.lock().unwrap();
+        counters.total_stocks = actual_total;
+    }
 
     // Spawn worker threads
     let mut handles = Vec::new();
@@ -293,10 +311,12 @@ mod tests {
             },
             num_threads: 10,
             retry_attempts: 3,
+            max_stocks: Some(5),
         };
 
         assert_eq!(config.num_threads, 10);
         assert_eq!(config.retry_attempts, 3);
+        assert_eq!(config.max_stocks, Some(5));
         assert_eq!(config.date_range.start_date, NaiveDate::from_ymd_opt(2020, 1, 1).unwrap());
         assert_eq!(config.date_range.end_date, NaiveDate::from_ymd_opt(2025, 8, 31).unwrap());
     }

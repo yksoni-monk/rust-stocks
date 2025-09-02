@@ -118,6 +118,13 @@ cargo run --bin data_collection_test --help
   cargo run  # Runs this automatically
   ```
 
+### Utility Tools
+
+- **`update_sp500`**: Update S&P 500 company list with state tracking
+  ```bash
+  cargo run --bin update_sp500
+  ```
+
 ### Test Tools (Development/Testing)
 
 - **`data_collection_test`**: Comprehensive data collection testing with subcommands:
@@ -130,9 +137,24 @@ cargo run --bin data_collection_test --help
   
   # Concurrent collection demo
   cargo run --bin data_collection_test concurrent -s 20240101 --threads 5
+  
+  # Single stock testing
+  cargo run --bin data_collection_test single AAPL 20240101 20240131
   ```
-- **`test_api`**: Test Schwab API connectivity
-- **`update_sp500`**: Update S&P 500 company list with state tracking
+- **`api_connectivity_test`**: API connectivity testing with subcommands:
+  ```bash
+  # Test authentication
+  cargo run --bin api_connectivity_test auth
+  
+  # Test quote fetching
+  cargo run --bin api_connectivity_test quotes
+  
+  # Test price history
+  cargo run --bin api_connectivity_test history AAPL 20240101 20240131
+  
+  # Run all tests
+  cargo run --bin api_connectivity_test all
+  ```
 
 ## 📊 Progress Tracking
 

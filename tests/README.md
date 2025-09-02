@@ -1,7 +1,17 @@
 # Testing Architecture for Rust Stocks TUI
 
 ## Overview
-This document outlines the testing strategy for the Rust Stocks TUI application, categorizing actions into programmatically testable and manually testable components.
+This document outlines the testing strategy for the Rust Stocks TUI application, categorizing tests into unit tests, integration tests, and manual testing.
+
+## Current Test Structure Analysis
+
+### ❌ **Current Issues**
+1. **API Testing Duplication**: 4 different binaries all testing API connectivity
+2. **Batch Definition Inconsistency**: `test_batched_stock.rs` uses 20-day batches vs trading week batches elsewhere
+3. **Missing Unit Tests**: No proper unit tests for business logic
+4. **All Manual Testing**: All current tests are manual integration tests
+
+### ✅ **Proposed Structure**
 
 ## Action Categorization
 
@@ -81,7 +91,7 @@ This document outlines the testing strategy for the Rust Stocks TUI application,
 - **Log Parsing**: Parse logs to verify behavior
 - **Error Context**: Detailed error information in logs
 
-## Test Structure
+## Consolidated Test Structure
 
 ```
 tests/
@@ -97,11 +107,42 @@ tests/
 │   ├── business_logic/      # Business logic tests
 │   ├── api_client/          # API client tests
 │   └── data_processing/     # Data processing tests
-└── integration/             # Integration tests
-    ├── mod.rs
-    ├── database_integration.rs
-    └── api_integration.rs
+├── integration/             # Integration tests
+│   ├── mod.rs
+│   ├── database_integration.rs
+│   └── api_integration.rs
+└── bin/                     # Manual testing binaries (consolidated)
+    ├── data_collection_test.rs    # Comprehensive data collection testing
+    ├── api_connectivity_test.rs   # API connectivity testing
+    └── update_sp500.rs            # Database maintenance
 ```
+
+## Consolidated Test Binaries
+
+### **Manual Testing Tools** (Keep only these)
+
+#### **`data_collection_test.rs`** - Comprehensive Data Collection Testing
+- **`quick <date>`** - Quick test with 10 stocks
+- **`detailed -s <start> -e <end>`** - Full production-like collection
+- **`concurrent -s <start> --threads <n>`** - Multi-threaded collection demo
+- **`single <symbol> <start> <end>`** - Single stock testing
+
+#### **`api_connectivity_test.rs`** - API Connectivity Testing
+- Test API authentication
+- Test quote fetching
+- Test price history fetching
+- Test error handling
+
+#### **`update_sp500.rs`** - Database Maintenance
+- Update S&P 500 list
+- Database statistics
+- Data validation
+
+### **Removed Binaries** (Duplicated functionality)
+- ❌ `simple_test.rs` - Duplicated by `data_collection_test quick`
+- ❌ `test_api.rs` - Duplicated by `api_connectivity_test`
+- ❌ `test_single_stock.rs` - Duplicated by `data_collection_test single`
+- ❌ `test_batched_stock.rs` - Wrong batch definition, duplicated functionality
 
 ## Testing Tools & Crates
 
@@ -125,22 +166,23 @@ tests/
 
 ## Implementation Plan
 
-### Phase 1: Infrastructure Setup
-1. Create test directory structure
-2. Set up common test utilities
-3. Create database test helpers
-4. Set up API mocking framework
+### Phase 1: Test Consolidation (Current)
+1. ✅ Consolidate duplicate binary tests
+2. ✅ Remove `test_batched_stock.rs` (wrong batch definition)
+3. ✅ Update test plan documentation
+4. ✅ Fix batch definition consistency
 
-### Phase 2: Unit Tests
-1. Database operation tests
-2. Business logic tests (trading week batches)
-3. Data processing tests
-4. Configuration tests
+### Phase 2: Unit Test Implementation
+1. Create proper unit tests for business logic
+2. Implement API client mocking
+3. Add database operation unit tests
+4. Add configuration unit tests
 
-### Phase 3: Integration Tests
-1. Database integration tests
-2. API integration tests (with mocks)
-3. Component interaction tests
+### Phase 3: Integration Test Enhancement
+1. Enhance existing integration tests
+2. Add component interaction tests
+3. Add error scenario tests
+4. Add performance tests
 
 ### Phase 4: Test Coverage & Quality
 1. Add comprehensive error scenario tests

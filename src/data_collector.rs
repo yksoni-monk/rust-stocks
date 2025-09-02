@@ -208,8 +208,17 @@ impl DataCollector {
                 .ok_or_else(|| anyhow::anyhow!("Invalid timestamp: {}", bar.datetime))?
                 .date_naive();
             
-            // Skip if we already have data for this date
-            if database.get_price_on_date(stock_id, date)?.is_some() {
+            // Skip if we already have data for this date (spawn on blocking thread)
+            let has_existing = {
+                let database = database.clone();
+                let stock_id = stock_id;
+                let date = date;
+                tokio::task::spawn_blocking(move || {
+                    database.get_price_on_date(stock_id, date)
+                }).await??
+            };
+            
+            if has_existing.is_some() {
                 continue;
             }
             
@@ -227,7 +236,13 @@ impl DataCollector {
                 dividend_yield: None,
             };
 
-            database.insert_daily_price(&daily_price)?;
+            // Insert on blocking thread
+            let database = database.clone();
+            let daily_price = daily_price;
+            tokio::task::spawn_blocking(move || {
+                database.insert_daily_price(&daily_price)
+            }).await??;
+            
             inserted_count += 1;
         }
 

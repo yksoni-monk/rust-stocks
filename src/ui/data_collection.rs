@@ -8,6 +8,7 @@ use ratatui::{
     Frame,
 };
 use std::process::Command;
+use std::io::Write;
 
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -712,67 +713,98 @@ impl DataCollectionView {
     pub fn run_single_stock_collection(&mut self, symbol: String, start_date: NaiveDate, end_date: NaiveDate, log_sender: broadcast::Sender<crate::ui::app::LogMessage>) -> Result<()> {
         self.log_info(&format!("Starting single stock collection for {} from {} to {}", symbol, start_date, end_date));
 
+        // Create log file for debugging
+        let log_file_path = format!("debug_collection_{}_{}_{}.log", symbol, start_date, end_date);
+        
         // Spawn the data collection as an async task
         let symbol_clone = symbol.clone();
         tokio::spawn(async move {
+            // Create log file inside the async task
+            let log_file = std::fs::File::create(&log_file_path).unwrap_or_else(|_| std::fs::File::create("debug_collection.log").unwrap());
+            let mut log_writer = std::io::BufWriter::new(log_file);
+
+            let log_message = format!("🔄 Preparing to fetch {} from {} to {}", symbol_clone, start_date, end_date);
             let _ = log_sender.send(crate::ui::app::LogMessage {
                 timestamp: Utc::now(),
                 level: crate::ui::app::LogLevel::Info,
-                message: format!("🔄 Preparing to fetch {} from {} to {}", symbol_clone, start_date, end_date),
+                message: log_message.clone(),
             });
+            let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
 
             // Load config, DB and client
             let config = match crate::models::Config::from_env() {
-                Ok(c) => c,
+                Ok(c) => {
+                    let _ = writeln!(log_writer, "[{}] ✅ Config loaded successfully", Utc::now().format("%H:%M:%S"));
+                    c
+                },
                 Err(e) => { 
+                    let error_msg = format!("❌ Config error: {}", e);
                     let _ = log_sender.send(crate::ui::app::LogMessage {
                         timestamp: Utc::now(),
                         level: crate::ui::app::LogLevel::Error,
-                        message: format!("❌ Config error: {}", e),
+                        message: error_msg.clone(),
                     });
+                    let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), error_msg);
                     return;
                 }
             };
             let database = match crate::database::DatabaseManager::new(&config.database_path) {
-                Ok(db) => db,
+                Ok(db) => {
+                    let _ = writeln!(log_writer, "[{}] ✅ Database initialized successfully", Utc::now().format("%H:%M:%S"));
+                    db
+                },
                 Err(e) => { 
+                    let error_msg = format!("❌ DB init error: {}", e);
                     let _ = log_sender.send(crate::ui::app::LogMessage {
                         timestamp: Utc::now(),
                         level: crate::ui::app::LogLevel::Error,
-                        message: format!("❌ DB init error: {}", e),
+                        message: error_msg.clone(),
                     });
+                    let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), error_msg);
                     return;
                 }
             };
             let client = match crate::api::SchwabClient::new(&config) {
-                Ok(c) => c,
+                Ok(c) => {
+                    let _ = writeln!(log_writer, "[{}] ✅ Schwab client initialized successfully", Utc::now().format("%H:%M:%S"));
+                    c
+                },
                 Err(e) => { 
+                    let error_msg = format!("❌ Client init error: {}", e);
                     let _ = log_sender.send(crate::ui::app::LogMessage {
                         timestamp: Utc::now(),
                         level: crate::ui::app::LogLevel::Error,
-                        message: format!("❌ Client init error: {}", e),
+                        message: error_msg.clone(),
                     });
+                    let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), error_msg);
                     return;
                 }
             };
 
             // Find stock by symbol
             let stock = match database.get_stock_by_symbol(&symbol_clone) {
-                Ok(Some(s)) => s,
+                Ok(Some(s)) => {
+                    let _ = writeln!(log_writer, "[{}] ✅ Found stock: {} ({})", Utc::now().format("%H:%M:%S"), s.symbol, s.company_name);
+                    s
+                },
                 Ok(None) => { 
+                    let error_msg = format!("❌ Unknown symbol {} in DB", symbol_clone);
                     let _ = log_sender.send(crate::ui::app::LogMessage {
                         timestamp: Utc::now(),
                         level: crate::ui::app::LogLevel::Error,
-                        message: format!("❌ Unknown symbol {} in DB", symbol_clone),
+                        message: error_msg.clone(),
                     });
+                    let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), error_msg);
                     return;
                 }
                 Err(e) => { 
+                    let error_msg = format!("❌ DB query error: {}", e);
                     let _ = log_sender.send(crate::ui::app::LogMessage {
                         timestamp: Utc::now(),
                         level: crate::ui::app::LogLevel::Error,
-                        message: format!("❌ DB query error: {}", e),
+                        message: error_msg.clone(),
                     });
+                    let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), error_msg);
                     return;
                 }
             };
@@ -780,54 +812,72 @@ impl DataCollectionView {
             let client_arc = Arc::new(client);
             let db_arc = Arc::new(database);
 
+            let log_message = format!("📡 Fetching {} ({} → {})", symbol_clone, start_date, end_date);
             let _ = log_sender.send(crate::ui::app::LogMessage {
                 timestamp: Utc::now(),
                 level: crate::ui::app::LogLevel::Info,
-                message: format!("📡 Fetching {} ({} → {})", symbol_clone, start_date, end_date),
+                message: log_message.clone(),
             });
+            let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
 
             // Calculate trading week batches
             let batches = TradingWeekBatchCalculator::calculate_batches(start_date, end_date);
+            let log_message = format!("📊 Created {} trading week batches", batches.len());
             let _ = log_sender.send(crate::ui::app::LogMessage {
                 timestamp: Utc::now(),
                 level: crate::ui::app::LogLevel::Info,
-                message: format!("📊 Created {} trading week batches", batches.len()),
+                message: log_message.clone(),
             });
+            let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
 
             // Log batch plan
             for batch in &batches {
+                let log_message = format!("📅 {}", batch.description);
                 let _ = log_sender.send(crate::ui::app::LogMessage {
                     timestamp: Utc::now(),
                     level: crate::ui::app::LogLevel::Info,
-                    message: format!("📅 {}", batch.description),
+                    message: log_message.clone(),
                 });
+                let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
             }
 
             let mut total_inserted = 0;
 
             // Process each trading week batch
             for batch in batches {
+                let log_message = format!("🔄 Processing {}", batch.description);
                 let _ = log_sender.send(crate::ui::app::LogMessage {
                     timestamp: Utc::now(),
                     level: crate::ui::app::LogLevel::Info,
-                    message: format!("🔄 Processing {}", batch.description),
+                    message: log_message.clone(),
                 });
+                let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
 
                 // Check existing records for this batch
-                let existing_count = match db_arc.count_existing_records(stock.id.unwrap(), batch.start_date, batch.end_date) {
-                    Ok(count) => count,
-                    Err(_) => 0,
+                let _ = writeln!(log_writer, "[{}] 🔍 Checking existing records for batch {}", Utc::now().format("%H:%M:%S"), batch.batch_number);
+                let existing_count = {
+                    let db_arc = db_arc.clone();
+                    let stock_id = stock.id.unwrap();
+                    let start_date = batch.start_date;
+                    let end_date = batch.end_date;
+                    tokio::task::spawn_blocking(move || {
+                        db_arc.count_existing_records(stock_id, start_date, end_date)
+                    }).await.unwrap_or(Ok(0)).unwrap_or(0)
                 };
+                let _ = writeln!(log_writer, "[{}] 📊 Found {} existing records for batch {}", Utc::now().format("%H:%M:%S"), existing_count, batch.batch_number);
 
                 if existing_count > 0 {
+                    let log_message = format!("ℹ️ Batch {}: Found {} existing records, skipping", batch.batch_number, existing_count);
                     let _ = log_sender.send(crate::ui::app::LogMessage {
                         timestamp: Utc::now(),
                         level: crate::ui::app::LogLevel::Info,
-                        message: format!("ℹ️ Batch {}: Found {} existing records, skipping", batch.batch_number, existing_count),
+                        message: log_message.clone(),
                     });
+                    let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
                     continue;
                 }
 
+                let _ = writeln!(log_writer, "[{}] 🚀 Starting fetch_stock_history for batch {}", Utc::now().format("%H:%M:%S"), batch.batch_number);
                 match crate::data_collector::DataCollector::fetch_stock_history(
                     client_arc.clone(),
                     db_arc.clone(),
@@ -837,45 +887,58 @@ impl DataCollectionView {
                 ).await {
                     Ok(inserted) => {
                         total_inserted += inserted;
+                        let _ = writeln!(log_writer, "[{}] ✅ fetch_stock_history completed for batch {}: {} records", Utc::now().format("%H:%M:%S"), batch.batch_number, inserted);
                         if inserted > 0 {
+                            let log_message = format!("✅ Batch {}: Inserted {} records (Total: {})", batch.batch_number, inserted, total_inserted);
                             let _ = log_sender.send(crate::ui::app::LogMessage {
                                 timestamp: Utc::now(),
                                 level: crate::ui::app::LogLevel::Success,
-                                message: format!("✅ Batch {}: Inserted {} records (Total: {})", batch.batch_number, inserted, total_inserted),
+                                message: log_message.clone(),
                             });
+                            let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
                         } else {
+                            let log_message = format!("ℹ️ Batch {}: No new records (data already exists) (Total: {})", batch.batch_number, total_inserted);
                             let _ = log_sender.send(crate::ui::app::LogMessage {
                                 timestamp: Utc::now(),
                                 level: crate::ui::app::LogLevel::Info,
-                                message: format!("ℹ️ Batch {}: No new records (data already exists) (Total: {})", batch.batch_number, total_inserted),
+                                message: log_message.clone(),
                             });
+                            let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
                         }
                     }
                     Err(e) => {
+                        let error_msg = format!("❌ Batch {}: Failed - {}", batch.batch_number, e);
                         let _ = log_sender.send(crate::ui::app::LogMessage {
                             timestamp: Utc::now(),
                             level: crate::ui::app::LogLevel::Error,
-                            message: format!("❌ Batch {}: Failed - {}", batch.batch_number, e),
+                            message: error_msg.clone(),
                         });
+                        let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), error_msg);
                     }
                 }
 
+                let _ = writeln!(log_writer, "[{}] ⏱️ Waiting 500ms before next batch", Utc::now().format("%H:%M:%S"));
                 // Small delay between batches to avoid rate limiting
                 tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
             }
 
+            let _ = writeln!(log_writer, "[{}] 🏁 All batches processed. Total inserted: {}", Utc::now().format("%H:%M:%S"), total_inserted);
             if total_inserted > 0 {
+                let log_message = format!("✅ Successfully completed: {} new records inserted", total_inserted);
                 let _ = log_sender.send(crate::ui::app::LogMessage {
                     timestamp: Utc::now(),
                     level: crate::ui::app::LogLevel::Success,
-                    message: format!("✅ Successfully completed: {} new records inserted", total_inserted),
+                    message: log_message.clone(),
                 });
+                let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
             } else {
+                let log_message = format!("ℹ️ Completed: No new records inserted (all data already exists)");
                 let _ = log_sender.send(crate::ui::app::LogMessage {
                     timestamp: Utc::now(),
                     level: crate::ui::app::LogLevel::Info,
-                    message: format!("ℹ️ Completed: No new records inserted (all data already exists)"),
+                    message: log_message.clone(),
                 });
+                let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
             }
         });
 
@@ -1262,7 +1325,7 @@ impl DataCollectionView {
 
     /// Render the logs
     fn render_logs(&self, f: &mut Frame, area: Rect) {
-        let log_lines: Vec<Line> = self.log_messages
+        let log_items: Vec<ListItem> = self.log_messages
             .iter()
             .map(|log| {
                 let timestamp = log.timestamp.format("%H:%M:%S").to_string();
@@ -1273,20 +1336,28 @@ impl DataCollectionView {
                     LogLevel::Error => Style::default().fg(Color::Red),
                 };
                 
-                Line::from(vec![
-                    Span::styled(format!("[{}] ", timestamp), Style::default().fg(Color::Gray)),
-                    Span::styled(&log.message, level_style),
+                ListItem::new(vec![
+                    Line::from(vec![
+                        Span::styled(format!("[{}] ", timestamp), Style::default().fg(Color::Gray)),
+                        Span::styled(&log.message, level_style),
+                    ])
                 ])
             })
             .collect();
 
-        let logs = Paragraph::new(log_lines)
+        let logs = List::new(log_items)
             .block(Block::default()
                 .borders(Borders::ALL)
                 .title("Logs"))
-            .wrap(ratatui::widgets::Wrap { trim: true });
+            .style(Style::default().fg(Color::White));
 
-        f.render_widget(logs, area);
+        // Auto-scroll to the bottom (latest logs)
+        let mut list_state = ratatui::widgets::ListState::default();
+        if !self.log_messages.is_empty() {
+            list_state.select(Some(self.log_messages.len() - 1));
+        }
+
+        f.render_stateful_widget(logs, area, &mut list_state);
     }
 
     /// Render the status

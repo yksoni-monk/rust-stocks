@@ -1,9 +1,8 @@
 //! Database integration tests
 
-use test_log::test;
 use pretty_assertions::assert_eq;
-use chrono::{NaiveDate, Utc};
-use crate::common::database::{DatabaseTestHelper, utils};
+use chrono::NaiveDate;
+use crate::common::database::DatabaseTestHelper;
 use crate::common::{test_data, logging};
 
 #[tokio::test]
@@ -37,7 +36,7 @@ async fn test_full_data_collection_workflow() {
     let dates = test_data::create_test_date_range(start_date, 60); // 60 days of data
     
     let mut total_prices = 0;
-    for (i, stock) in stocks.iter().enumerate() {
+    for (i, _stock) in stocks.iter().enumerate() {
         let stock_id = stock_ids[i];
         
         for (j, date) in dates.iter().enumerate() {
@@ -55,7 +54,7 @@ async fn test_full_data_collection_workflow() {
             total_prices += 1;
         }
         
-        logging::log_test_data("Inserted price data", &(stock.symbol.clone(), dates.len()));
+        logging::log_test_data("Inserted price data", &(stocks[i].symbol.clone(), dates.len()));
     }
     
     // Step 3: Verify database state
@@ -64,7 +63,7 @@ async fn test_full_data_collection_workflow() {
     assert_eq!(price_count, total_prices, "Should have correct number of prices");
     
     // Step 4: Test data retrieval scenarios
-    for (i, stock) in stocks.iter().enumerate() {
+    for (i, _stock) in stocks.iter().enumerate() {
         let stock_id = stock_ids[i];
         
         // Test getting latest price
@@ -92,13 +91,13 @@ async fn test_full_data_collection_workflow() {
         assert_eq!(stats.latest_date, Some(*dates.last().unwrap()));
         assert_eq!(stats.earliest_date, Some(*dates.first().unwrap()));
         
-        logging::log_test_data("Stock verification", &(stock.symbol.clone(), stats.data_points));
+        logging::log_test_data("Stock verification", &(stocks[i].symbol.clone(), stats.data_points));
     }
     
     // Step 5: Test data analysis scenarios
     let analysis_date = dates[30];
     
-    for (i, stock) in stocks.iter().enumerate() {
+    for (i, _stock) in stocks.iter().enumerate() {
         let stock_id = stock_ids[i];
         
         // Test P/E ratio retrieval
@@ -133,9 +132,6 @@ async fn test_batch_processing_simulation() {
             let helper = DatabaseTestHelper::new().expect("Failed to create test database");
     
     // Simulate the trading week batch processing
-    let start_date = NaiveDate::from_ymd_opt(2024, 8, 6).unwrap(); // Wednesday
-    let end_date = NaiveDate::from_ymd_opt(2024, 8, 19).unwrap();   // Tuesday
-    
     // Create batches (simulating the trading week logic)
     let batches = vec![
         (NaiveDate::from_ymd_opt(2024, 8, 4).unwrap(), NaiveDate::from_ymd_opt(2024, 8, 8).unwrap()),  // Week 1

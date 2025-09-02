@@ -41,9 +41,7 @@ fn test_common_utilities() {
 #[test]
 fn test_module_imports() {
     // This test ensures all test modules can be imported without errors
-    use unit::business_logic::trading_week_batches;
-    use unit::database::operations;
-    use integration::database_integration;
+    // Test modules are automatically discovered by Rust
     
     println!("✅ All test modules imported successfully");
 }

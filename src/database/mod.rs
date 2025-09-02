@@ -116,24 +116,56 @@ impl DatabaseManager {
             StockStatus::Suspended => "suspended",
         };
 
-        conn.execute(
-            "INSERT OR REPLACE INTO stocks (
-                symbol, company_name, sector, industry, market_cap, status,
-                first_trading_date, last_updated
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                stock.symbol,
-                stock.company_name,
-                stock.sector,
-                stock.industry,
-                stock.market_cap,
-                status_str,
-                stock.first_trading_date,
-                stock.last_updated
-            ],
-        )?;
+        // Check if stock already exists by symbol
+        let existing_stock = conn.query_row(
+            "SELECT id FROM stocks WHERE symbol = ?1",
+            params![stock.symbol],
+            |row| Ok(row.get::<_, i64>(0)?)
+        );
 
-        Ok(conn.last_insert_rowid())
+        match existing_stock {
+            Ok(existing_id) => {
+                // Stock exists, update it
+                conn.execute(
+                    "UPDATE stocks SET 
+                        company_name = ?2, sector = ?3, industry = ?4, market_cap = ?5, 
+                        status = ?6, first_trading_date = ?7, last_updated = ?8
+                     WHERE id = ?1",
+                    params![
+                        existing_id,
+                        stock.company_name,
+                        stock.sector,
+                        stock.industry,
+                        stock.market_cap,
+                        status_str,
+                        stock.first_trading_date,
+                        stock.last_updated
+                    ],
+                )?;
+                Ok(existing_id)
+            },
+            Err(rusqlite::Error::QueryReturnedNoRows) => {
+                // Stock doesn't exist, insert new one
+                conn.execute(
+                    "INSERT INTO stocks (
+                        symbol, company_name, sector, industry, market_cap, status,
+                        first_trading_date, last_updated
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    params![
+                        stock.symbol,
+                        stock.company_name,
+                        stock.sector,
+                        stock.industry,
+                        stock.market_cap,
+                        status_str,
+                        stock.first_trading_date,
+                        stock.last_updated
+                    ],
+                )?;
+                Ok(conn.last_insert_rowid())
+            },
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// Get stock by symbol

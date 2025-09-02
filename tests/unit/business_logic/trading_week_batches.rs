@@ -2,7 +2,7 @@
 
 use test_log::test;
 use pretty_assertions::assert_eq;
-use chrono::{NaiveDate, Weekday};
+use chrono::NaiveDate;
 use rust_stocks::ui::data_collection::TradingWeekBatchCalculator;
 
 #[test]

@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 /// Test environment setup
 pub struct TestEnv {
-    pub temp_dir: TempDir,
+    _temp_dir: TempDir, // Keep for cleanup
     pub db_path: PathBuf,
 }
 
@@ -22,7 +22,7 @@ impl TestEnv {
         let db_path = temp_dir.path().join("test_stocks.db");
         
         Ok(Self {
-            temp_dir,
+            _temp_dir: temp_dir,
             db_path,
         })
     }
@@ -80,7 +80,7 @@ pub mod test_data {
 
 /// Logging utilities for tests
 pub mod logging {
-    use tracing::{info, error, debug};
+    use tracing::{info, debug};
     use std::sync::Once;
 
     static INIT: Once = Once::new();
@@ -105,14 +105,7 @@ pub mod logging {
         info!("🧪 Test Step: {}", step);
     }
 
-    /// Log test assertion
-    pub fn log_assertion(description: &str, result: bool) {
-        if result {
-            debug!("✅ Assertion: {}", description);
-        } else {
-            error!("❌ Assertion Failed: {}", description);
-        }
-    }
+    // Log assertion function removed to reduce warnings
 
     /// Log test data
     pub fn log_test_data<T: std::fmt::Debug>(label: &str, data: &T) {

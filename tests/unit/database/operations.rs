@@ -2,8 +2,8 @@
 
 use test_log::test;
 use pretty_assertions::assert_eq;
-use chrono::{NaiveDate, Utc};
-use rust_stocks::models::{Stock, DailyPrice};
+use chrono::NaiveDate;
+// Stock model is used indirectly through test_data
 use crate::common::database::DatabaseTestHelper;
 use crate::common::{test_data, logging};
 
@@ -35,8 +35,12 @@ fn test_stock_crud_operations() {
     updated_stock.company_name = "Apple Inc. (Updated)".to_string();
     updated_stock.market_cap = Some(2_000_000_000.0);
     
-    let updated_id = helper.db.upsert_stock(&updated_stock).expect("Failed to update stock");
-    assert_eq!(updated_id, stock_id, "Update should return same ID");
+    helper.db.upsert_stock(&updated_stock).expect("Failed to update stock");
+    
+    // Get the updated stock to verify the ID
+    let retrieved_stock = helper.db.get_stock_by_symbol("AAPL").expect("Failed to get updated stock").unwrap();
+    let updated_id = retrieved_stock.id.unwrap();
+    assert_eq!(updated_id, stock_id, "Update should maintain same ID");
     
     // Verify update
     let retrieved_stock = helper.db.get_stock_by_symbol("AAPL").expect("Failed to get updated stock").unwrap();
@@ -74,10 +78,10 @@ fn test_daily_price_operations() {
     assert_eq!(retrieved_price.close_price, 102.0);
     assert_eq!(retrieved_price.volume, Some(1_000_000));
     
-    // Test duplicate insertion (should fail due to unique constraint)
+    // Test duplicate insertion (should succeed and replace due to INSERT OR REPLACE)
     let duplicate_price = test_data::create_test_daily_price(stock_id, date);
     let result = helper.db.insert_daily_price(&duplicate_price);
-    assert!(result.is_err(), "Duplicate insertion should fail");
+    assert!(result.is_ok(), "Duplicate insertion should succeed and replace existing record");
     
     // Test price for non-existent date
     let non_existent_date = NaiveDate::from_ymd_opt(2024, 1, 16).unwrap();

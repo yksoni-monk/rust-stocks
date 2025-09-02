@@ -66,3 +66,16 @@ test-log = "0.2"
 wiremock = "0.5"
 assert_matches = "1.5"
 pretty_assertions = "1.4"
+
+# Test binaries
+[[bin]]
+name = "data_collection_test"
+path = "tests/bin/data_collection_test.rs"
+
+[[bin]]
+name = "test_api"
+path = "tests/bin/test_api.rs"
+
+[[bin]]
+name = "update_sp500"
+path = "tests/bin/update_sp500.rs"

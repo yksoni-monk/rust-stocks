@@ -63,19 +63,16 @@ cargo run --bin update_sp500
 
 ## 📊 Data Collection
 
-### Concurrent Data Fetching (NEW!)
+### Concurrent Data Fetching
 
-The system now supports high-performance concurrent data fetching using multiple worker threads:
+The system supports high-performance concurrent data fetching using multiple worker threads:
 
 ```bash
-# Demo the concurrent fetcher with real API calls
-cargo run --bin concurrent_fetch_demo
+# Test concurrent fetching
+cargo run --bin data_collection_test concurrent -s 20240101 --threads 5
 
-# With custom date range and configuration
-cargo run --bin concurrent_fetch_demo -- --start-date 20240101 --end-date 20240131 --threads 5 --retries 2
-
-# Help
-cargo run --bin concurrent_fetch_demo -- --help
+# With custom configuration
+cargo run --bin data_collection_test concurrent -s 20240101 -e 20240131 --threads 10 --retries 3
 ```
 
 **Features:**
@@ -86,89 +83,31 @@ cargo run --bin concurrent_fetch_demo -- --help
 - 🛡️ **Thread Safety**: Safe concurrent database operations
 - ⚡ **Rate Limiting**: Per-thread API rate limiting to avoid violations
 - 📅 **Weekly Batching**: Same trading week batching as single stock fetcher
-- 🎯 **CLI Interface**: Command-line arguments for date range and configuration
 
-**Configuration:**
-```rust
-let config = ConcurrentFetchConfig {
-    date_range: DateRange {
-        start_date: NaiveDate::from_ymd_opt(2020, 1, 1).unwrap(),
-        end_date: NaiveDate::from_ymd_opt(2025, 8, 31).unwrap(),
-    },
-    num_threads: 10,        // Number of concurrent threads
-    retry_attempts: 3,      // Retry attempts per stock
-};
-```
+### Data Collection Testing
 
-### Historical Data Collection with Detailed Logging
-
-The main data collection tool provides professional CLI with comprehensive validation:
-
-⚠️ **IMPORTANT:** Always use `--` to separate cargo arguments from binary arguments!
+The system provides comprehensive testing tools for data collection:
 
 ```bash
-# Basic usage - collect 2023 data
-cargo run --bin collect_with_detailed_logs -- --start-date 20230101 --end-date 20231231
+# Quick test with 10 stocks
+cargo run --bin data_collection_test quick 20240101
 
-# Short form arguments  
-cargo run --bin collect_with_detailed_logs -- -s 20240101 -e 20241231
+# Detailed collection with full logging
+cargo run --bin data_collection_test detailed -s 20240101 -e 20240131
 
-# Start date only (end date defaults to today)
-cargo run --bin collect_with_detailed_logs -- --start-date 20230101
-
-# Custom batch processing
-cargo run --bin collect_with_detailed_logs -- -s 20220101 -e 20221231 --batch-size 10 --batch-delay 5
+# Concurrent collection demo
+cargo run --bin data_collection_test concurrent -s 20240101 --threads 5
 
 # Get help
-cargo run --bin collect_with_detailed_logs -- --help
+cargo run --bin data_collection_test --help
 ```
 
-### CLI Arguments
-
-| Argument | Short | Required | Default | Description |
-|----------|-------|----------|---------|-------------|
-| `--start-date` | `-s` | ✅ Yes | - | Start date in YYYYMMDD format |
-| `--end-date` | `-e` | ❌ No | Today | End date in YYYYMMDD format |
-| `--batch-size` | `-b` | ❌ No | 5 | Stocks per batch (1-50) |
-| `--batch-delay` | `-d` | ❌ No | 3 | Seconds between batches (1-60) |
-| `--help` | `-h` | ❌ No | - | Show help information |
-
-### Example Usage Scenarios
-
-```bash
-# Collect recent data (fast)  
-cargo run --bin collect_with_detailed_logs -- -s 20240101
-
-# Collect specific year with fast processing
-cargo run --bin collect_with_detailed_logs -- -s 20230101 -e 20231231 -b 10 -d 1
-
-# Collect quarter data with detailed logging
-cargo run --bin collect_with_detailed_logs -- -s 20240101 -e 20240331 -b 3 -d 5
-
-# Large historical collection (2020-2024)  
-cargo run --bin collect_with_detailed_logs -- -s 20200101 -e 20241231 -b 5 -d 3
-```
-
-### Smart Market Calendar Collection
-
-For automatic weekend and holiday handling, use the smart collection tool:
-
-```bash
-# Automatically handles weekends - Saturday returns Friday's data
-cargo run --bin smart_collect -- 20250810  # Saturday → Returns Friday 2025-08-08 data
-
-# Date ranges with automatic trading day adjustment  
-cargo run --bin smart_collect -- 20240101 20240131  # Adjusts to trading days only
-
-# Single trading day (no adjustment needed)
-cargo run --bin smart_collect -- 20240115  # Monday → Returns same day data
-```
-
-**Smart Calendar Features:**
-- 🗓️ **Weekend Handling**: Saturday/Sunday requests automatically return Friday data
-- 📅 **Holiday Detection**: Uses Schwab API to detect market holidays  
-- 🔄 **Automatic Adjustment**: Shows original vs adjusted date ranges
-- ✨ **Seamless Experience**: No more "no data found" errors for weekends
+**Features:**
+- 🧪 **Quick Testing**: Test with 10 stocks for fast validation
+- 📊 **Detailed Collection**: Full production-like collection with logging
+- 🚀 **Concurrent Demo**: Multi-threaded collection testing
+- 🗓️ **Smart Calendar**: Automatic weekend adjustment
+- 📈 **Progress Tracking**: Real-time progress and error reporting
 
 ## 🛠️ Available Tools
 
@@ -179,16 +118,21 @@ cargo run --bin smart_collect -- 20240115  # Monday → Returns same day data
   cargo run  # Runs this automatically
   ```
 
-### Data Collection Tools
+### Test Tools (Development/Testing)
 
-- **`collect_with_detailed_logs`**: Professional CLI data collection with progress tracking
-- **`smart_collect`**: Smart collection with automatic weekend/holiday handling
-- **`concurrent_fetch_demo`**: Concurrent data fetching with CLI arguments
-- **`update_sp500`**: Update S&P 500 company list with state tracking
-
-### Testing & Analysis Tools
-
+- **`data_collection_test`**: Comprehensive data collection testing with subcommands:
+  ```bash
+  # Quick test with 10 stocks
+  cargo run --bin data_collection_test quick 20240101
+  
+  # Detailed collection with full logging
+  cargo run --bin data_collection_test detailed -s 20240101 -e 20240131
+  
+  # Concurrent collection demo
+  cargo run --bin data_collection_test concurrent -s 20240101 --threads 5
+  ```
 - **`test_api`**: Test Schwab API connectivity
+- **`update_sp500`**: Update S&P 500 company list with state tracking
 
 ## 📊 Progress Tracking
 

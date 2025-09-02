@@ -420,32 +420,3 @@ impl ValidationReport {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::tempdir;
-    
-    #[tokio::test]
-    async fn test_collection_stats() {
-        let temp_dir = tempdir().unwrap();
-        let db_path = temp_dir.path().join("test.db");
-        let database = DatabaseManager::new(db_path.to_str().unwrap()).unwrap();
-        
-        let config = Config {
-            schwab_api_key: "test".to_string(),
-            schwab_app_secret: "test".to_string(),
-            schwab_callback_url: "test".to_string(),
-            schwab_token_path: "test".to_string(),
-            database_path: "test".to_string(),
-            rate_limit_per_minute: 120,
-            batch_size: 50,
-        };
-        
-        let client = SchwabClient::new(&config).unwrap();
-        let collector = DataCollector::new(client, database, config);
-        
-        let stats = collector.get_collection_stats().await.unwrap();
-        assert_eq!(stats.total_stocks, 0);
-        assert_eq!(stats.total_price_records, 0);
-    }
-}

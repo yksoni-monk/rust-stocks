@@ -28,23 +28,23 @@ impl TradingWeekBatchCalculator {
     /// Calculate trading week batches for a given date range
     pub fn calculate_batches(start_date: NaiveDate, end_date: NaiveDate) -> Vec<TradingWeekBatch> {
         let mut batches = Vec::new();
-        let mut current_date = start_date;
         let mut batch_number = 1;
-
-        while current_date <= end_date {
-            // Find the start of the trading week (Monday)
-            let week_start = Self::get_week_start(current_date);
-            
-            // Find the end of the trading week (Friday)
-            let week_end = Self::get_week_end(current_date);
+        
+        // Start with the first trading week that contains the start date
+        let mut current_week_start = Self::get_week_start(start_date);
+        
+        while current_week_start <= end_date {
+            // Find the end of the current trading week (Friday)
+            let current_week_end = Self::get_week_end(current_week_start);
             
             // Adjust to user's requested range
-            let batch_start = std::cmp::max(week_start, start_date);
-            let batch_end = std::cmp::min(week_end, end_date);
+            let batch_start = std::cmp::max(current_week_start, start_date);
+            let batch_end = std::cmp::min(current_week_end, end_date);
             
             // Skip if batch is empty
             if batch_start > batch_end {
-                current_date = week_end + chrono::Duration::days(1);
+                // Move to next week
+                current_week_start = current_week_end + chrono::Duration::days(1);
                 continue;
             }
 
@@ -61,8 +61,8 @@ impl TradingWeekBatchCalculator {
                 description,
             });
 
-            // Move to next week
-            current_date = week_end + chrono::Duration::days(1);
+            // Move to next week (Monday of next week)
+            current_week_start = current_week_end + chrono::Duration::days(1);
             batch_number += 1;
         }
 
@@ -70,7 +70,7 @@ impl TradingWeekBatchCalculator {
     }
 
     /// Get the start of the trading week (Monday) for a given date
-    fn get_week_start(date: NaiveDate) -> NaiveDate {
+    pub fn get_week_start(date: NaiveDate) -> NaiveDate {
         let weekday = date.weekday();
         let days_to_monday = match weekday {
             Weekday::Mon => 0,
@@ -85,7 +85,7 @@ impl TradingWeekBatchCalculator {
     }
 
     /// Get the end of the trading week (Friday) for a given date
-    fn get_week_end(date: NaiveDate) -> NaiveDate {
+    pub fn get_week_end(date: NaiveDate) -> NaiveDate {
         let weekday = date.weekday();
         let days_to_friday = match weekday {
             Weekday::Mon => 4,

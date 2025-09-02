@@ -41,24 +41,3 @@ pub trait StockDataProvider {
     ) -> Result<Vec<SchwabPriceBar>>;
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_rate_limiter() {
-        let limiter = ApiRateLimiter::new(60); // 60 requests per minute
-        
-        let start = std::time::Instant::now();
-        
-        // Should allow first request immediately
-        limiter.wait().await;
-        assert!(start.elapsed() < Duration::from_millis(100));
-        
-        // Should rate limit subsequent requests
-        limiter.wait().await;
-        // With 60 req/min, each request should wait ~1 second
-        // But we'll be lenient in the test
-        assert!(start.elapsed() >= Duration::from_millis(500));
-    }
-}

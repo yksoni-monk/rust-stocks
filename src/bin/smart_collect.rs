@@ -1,11 +1,12 @@
 use anyhow::Result;
-use chrono::{NaiveDate, Datelike};
+use chrono::NaiveDate;
 use std::env;
 
 use rust_stocks::api::{SchwabClient, StockDataProvider};
 use rust_stocks::database::DatabaseManager;
 use rust_stocks::data_collector::DataCollector;
 use rust_stocks::models::Config;
+use rust_stocks::utils::MarketCalendar;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -27,9 +28,9 @@ async fn main() -> Result<()> {
     let start_date = parse_date(start_str)?;
     let end_date = parse_date(end_str)?;
 
-    // Simple weekend adjustment
-    let adjusted_start = adjust_for_weekend(start_date);
-    let adjusted_end = adjust_for_weekend(end_date);
+    // Weekend adjustment using shared utility
+    let adjusted_start = MarketCalendar::adjust_for_weekend(start_date);
+    let adjusted_end = MarketCalendar::adjust_for_weekend(end_date);
 
     if adjusted_start != start_date || adjusted_end != end_date {
         println!("📅 Date range adjusted for weekends:");
@@ -96,10 +97,3 @@ fn parse_date(date_str: &str) -> Result<NaiveDate> {
         .ok_or_else(|| anyhow::anyhow!("Invalid date"))
 }
 
-fn adjust_for_weekend(date: NaiveDate) -> NaiveDate {
-    match date.weekday() {
-        chrono::Weekday::Sat => date - chrono::Duration::days(1), // Saturday -> Friday
-        chrono::Weekday::Sun => date - chrono::Duration::days(2), // Sunday -> Friday
-        _ => date, // Weekdays stay the same
-    }
-}

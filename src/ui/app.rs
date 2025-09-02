@@ -206,46 +206,7 @@ impl StockTuiApp {
     }
 }
 
-/// Run the main TUI application
-pub fn run_app() -> Result<()> {
-    // Setup terminal
-    enable_raw_mode()?;
-    execute!(io::stdout(), EnterAlternateScreen)?;
-    let backend = CrosstermBackend::new(io::stdout());
-    let mut terminal = Terminal::new(backend)?;
-    
-    // Load configuration and create app
-    let config = Config::from_env()?;
-    let database = DatabaseManager::new(&config.database_path)?;
-    let mut app = StockTuiApp::new(&config, database)?;
 
-    // Initial data refresh
-    let _ = app.refresh_data();
-
-    // Main application loop
-    let result = loop {
-        // Draw the UI
-        if let Err(e) = terminal.draw(|f| app.draw(f)) {
-            break Err(e.into());
-        }
-
-        // Handle events
-        if let Ok(Event::Key(key)) = event::read() {
-            if let Err(e) = app.handle_key_event(key.code) {
-                break Err(e);
-            }
-
-            if app.should_quit {
-                break Ok(());
-            }
-        }
-    };
-
-    // Cleanup terminal
-    disable_raw_mode()?;
-    execute!(io::stdout(), LeaveAlternateScreen)?;
-    result
-}
 
 /// Run the async TUI application
 pub async fn run_app_async(config: Config, database: DatabaseManager) -> Result<()> {

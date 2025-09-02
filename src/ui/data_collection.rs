@@ -1,5 +1,5 @@
 use anyhow::Result;
-use chrono::{DateTime, NaiveDate, Utc, Weekday, Datelike};
+use chrono::{DateTime, NaiveDate, Utc, Datelike};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -8,9 +8,10 @@ use ratatui::{
     Frame,
 };
 use std::process::Command;
-use std::sync::mpsc;
+
 use std::sync::Arc;
 use tokio::sync::broadcast;
+
 
 /// Trading week batch definition
 #[derive(Debug, Clone)]
@@ -73,13 +74,13 @@ impl TradingWeekBatchCalculator {
     pub fn get_week_start(date: NaiveDate) -> NaiveDate {
         let weekday = date.weekday();
         let days_to_monday = match weekday {
-            Weekday::Mon => 0,
-            Weekday::Tue => 1,
-            Weekday::Wed => 2,
-            Weekday::Thu => 3,
-            Weekday::Fri => 4,
-            Weekday::Sat => 5,
-            Weekday::Sun => 6,
+            chrono::Weekday::Mon => 0,
+            chrono::Weekday::Tue => 1,
+            chrono::Weekday::Wed => 2,
+            chrono::Weekday::Thu => 3,
+            chrono::Weekday::Fri => 4,
+            chrono::Weekday::Sat => 5,
+            chrono::Weekday::Sun => 6,
         };
         date - chrono::Duration::days(days_to_monday as i64)
     }
@@ -88,13 +89,13 @@ impl TradingWeekBatchCalculator {
     pub fn get_week_end(date: NaiveDate) -> NaiveDate {
         let weekday = date.weekday();
         let days_to_friday = match weekday {
-            Weekday::Mon => 4,
-            Weekday::Tue => 3,
-            Weekday::Wed => 2,
-            Weekday::Thu => 1,
-            Weekday::Fri => 0,
-            Weekday::Sat => 6,
-            Weekday::Sun => 5,
+            chrono::Weekday::Mon => 4,
+            chrono::Weekday::Tue => 3,
+            chrono::Weekday::Wed => 2,
+            chrono::Weekday::Thu => 1,
+            chrono::Weekday::Fri => 0,
+            chrono::Weekday::Sat => 6,
+            chrono::Weekday::Sun => 5,
         };
         date + chrono::Duration::days(days_to_friday as i64)
     }
@@ -163,11 +164,7 @@ pub struct DataCollectionView {
     pub date_selection_state: Option<DateSelectionState>,
     pub pending_log_message: Option<String>,
     pub pending_log_level: Option<LogLevel>,
-    // Legacy fields - no longer used with broadcast channels
-    pub log_sender: Option<mpsc::Sender<String>>,
-    pub log_receiver: Option<mpsc::Receiver<String>>,
-    pub log_scroll_position: usize,
-    pub auto_scroll_logs: bool,
+
 }
 
 /// Confirmation dialog state
@@ -241,10 +238,6 @@ impl DataCollectionView {
             date_selection_state: None,
             pending_log_message: None,
             pending_log_level: None,
-            log_sender: None,
-            log_receiver: None,
-            log_scroll_position: 0,
-            auto_scroll_logs: true,
         }
     }
 
@@ -491,71 +484,7 @@ impl DataCollectionView {
             crossterm::event::KeyCode::Down => {
                 self.selected_action = (self.selected_action + 1) % self.actions.len();
             }
-                        crossterm::event::KeyCode::Char('l') | crossterm::event::KeyCode::Char('L') => {
-                // Toggle auto-scroll for logs
-                self.auto_scroll_logs = !self.auto_scroll_logs;
-                let status = if self.auto_scroll_logs { "enabled" } else { "disabled" };
-                self.log_info(&format!("Log auto-scroll {}", status));
-            }
-            crossterm::event::KeyCode::PageUp => {
-                // Scroll logs up
-                if self.log_scroll_position > 0 {
-                    self.log_scroll_position = self.log_scroll_position.saturating_sub(10);
-                }
-            }
-            crossterm::event::KeyCode::PageDown => {
-                // Scroll logs down
-                if self.log_messages.len() > 0 {
-                    let max_scroll = self.log_messages.len().saturating_sub(1);
-                    self.log_scroll_position = (self.log_scroll_position + 10).min(max_scroll);
-                }
-            }
-            crossterm::event::KeyCode::Char('u') | crossterm::event::KeyCode::Char('U') => {
-                // Alternative: Scroll logs up (U key)
-                if self.log_scroll_position > 0 {
-                    self.log_scroll_position = self.log_scroll_position.saturating_sub(5);
-                }
-            }
-            crossterm::event::KeyCode::Char('d') | crossterm::event::KeyCode::Char('D') => {
-                // Alternative: Scroll logs down (D key)
-                if self.log_messages.len() > 0 {
-                    let max_scroll = self.log_messages.len().saturating_sub(1);
-                    self.log_scroll_position = (self.log_scroll_position + 5).min(max_scroll);
-                }
-            }
-            crossterm::event::KeyCode::Char('k') | crossterm::event::KeyCode::Char('K') => {
-                // Alternative: Scroll logs up (K key)
-                if self.log_scroll_position > 0 {
-                    self.log_scroll_position = self.log_scroll_position.saturating_sub(1);
-                }
-            }
-            crossterm::event::KeyCode::Char('j') | crossterm::event::KeyCode::Char('J') => {
-                // Alternative: Scroll logs down (J key)
-                if self.log_messages.len() > 0 {
-                    let max_scroll = self.log_messages.len().saturating_sub(1);
-                    self.log_scroll_position = (self.log_scroll_position + 1).min(max_scroll);
-                }
-            }
-            crossterm::event::KeyCode::Home => {
-                // Scroll to top of logs
-                self.log_scroll_position = 0;
-            }
-            crossterm::event::KeyCode::End => {
-                // Scroll to bottom of logs
-                if self.log_messages.len() > 0 {
-                    self.log_scroll_position = self.log_messages.len().saturating_sub(1);
-                }
-            }
-            crossterm::event::KeyCode::Char('t') | crossterm::event::KeyCode::Char('T') => {
-                // Alternative: Scroll to top of logs (T key)
-                self.log_scroll_position = 0;
-            }
-            crossterm::event::KeyCode::Char('b') | crossterm::event::KeyCode::Char('B') => {
-                // Alternative: Scroll to bottom of logs (B key)
-                if self.log_messages.len() > 0 {
-                    self.log_scroll_position = self.log_messages.len().saturating_sub(1);
-                }
-            }
+            
             crossterm::event::KeyCode::Enter => {
                 self.execute_selected_action(log_sender)?;
             }
@@ -1009,10 +938,6 @@ impl DataCollectionView {
             self.log_messages.remove(0);
         }
         
-        // Auto-scroll to bottom if enabled
-        if self.auto_scroll_logs && self.log_messages.len() > 0 {
-            self.log_scroll_position = self.log_messages.len().saturating_sub(1);
-        }
     }
 
     /// Add log message from broadcast channel
@@ -1035,10 +960,6 @@ impl DataCollectionView {
             self.log_messages.remove(0);
         }
         
-        // Auto-scroll to bottom if enabled
-        if self.auto_scroll_logs && self.log_messages.len() > 0 {
-            self.log_scroll_position = self.log_messages.len().saturating_sub(1);
-        }
     }
 
     /// Process incoming log messages from the background thread (legacy method - now handled by broadcast)
@@ -1341,20 +1262,8 @@ impl DataCollectionView {
 
     /// Render the logs
     fn render_logs(&self, f: &mut Frame, area: Rect) {
-        let available_height = area.height.saturating_sub(2) as usize; // Account for borders
-        
-        // Calculate visible log range based on scroll position
-        let total_logs = self.log_messages.len();
-        let start_index = if total_logs > available_height {
-            self.log_scroll_position.saturating_sub(available_height.saturating_sub(1))
-        } else {
-            0
-        };
-        let end_index = (start_index + available_height).min(total_logs);
         let log_lines: Vec<Line> = self.log_messages
             .iter()
-            .skip(start_index)
-            .take(end_index - start_index)
             .map(|log| {
                 let timestamp = log.timestamp.format("%H:%M:%S").to_string();
                 let level_style = match log.level {
@@ -1371,20 +1280,10 @@ impl DataCollectionView {
             })
             .collect();
 
-        // Create title with scroll indicator
-        let scroll_info = if total_logs > available_height {
-            format!("Logs ({}/{})", self.log_scroll_position + 1, total_logs)
-        } else {
-            "Logs".to_string()
-        };
-        
-        let auto_scroll_indicator = if self.auto_scroll_logs { " [AUTO]" } else { " [MANUAL]" };
-        let title = format!("{}{}", scroll_info, auto_scroll_indicator);
-
         let logs = Paragraph::new(log_lines)
             .block(Block::default()
                 .borders(Borders::ALL)
-                .title(title))
+                .title("Logs"))
             .wrap(ratatui::widgets::Wrap { trim: true });
 
         f.render_widget(logs, area);
@@ -1405,14 +1304,6 @@ impl DataCollectionView {
                     Span::styled("↑/↓: Navigate • ", Style::default().fg(Color::Gray)),
                     Span::styled("Enter", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
                     Span::styled(": Execute • ", Style::default().fg(Color::Gray)),
-                    Span::styled("L", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                    Span::styled(": Toggle Auto-scroll • ", Style::default().fg(Color::Gray)),
-                    Span::styled("U/D", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                    Span::styled(": Scroll Logs • ", Style::default().fg(Color::Gray)),
-                    Span::styled("J/K", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                    Span::styled(": Fine Scroll • ", Style::default().fg(Color::Gray)),
-                    Span::styled("T/B", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                    Span::styled(": Top/Bottom • ", Style::default().fg(Color::Gray)),
                     Span::styled("Q", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
                     Span::styled(": Quit", Style::default().fg(Color::Gray)),
                 ]),

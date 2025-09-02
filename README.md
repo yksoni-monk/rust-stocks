@@ -177,39 +177,6 @@ The system provides detailed batch logging including:
    📊 OVERALL PROGRESS: 5/503 stocks, 2,085 total records
 ```
 
-## 🏗️ Architecture
-
-### Core Components
-
-- **Schwab API Client**: Full authentication, token management, and data retrieval
-- **Market Calendar**: Smart weekend/holiday detection using Schwab market hours API
-- **Database Manager**: SQLite operations with proper schema and migrations
-- **Data Collector**: High-performance concurrent historical data fetching
-- **Analysis Engine**: P/E calculations and stock ranking (in development)
-- **Terminal UI**: Interactive stock search and analysis interface
-
-### Data Models
-
-- **Stock**: Company information (symbol, name, sector, market cap)
-- **DailyPrice**: OHLC data with volume, P/E ratios, and market metrics
-- **StockAnalysis**: P/E decline analysis and performance metrics
-
-### Architecture Principles
-
-- ✅ **Concurrent Processing**: Async/await with semaphore-controlled rate limiting
-- ✅ **Error Isolation**: Individual stock failures don't affect batch processing  
-- ✅ **Progress Tracking**: Real-time monitoring with detailed logging
-- ✅ **State Management**: Database metadata for incremental updates
-- ✅ **Professional CLI**: Named arguments with comprehensive validation
-
-## 📈 Database Schema
-
-The system uses SQLite with the following main tables:
-
-- `stocks`: S&P 500 company information
-- `daily_prices`: Historical OHLC data with financial metrics
-- `metadata`: System state tracking and configuration
-
 ## 🔧 Development
 
 ### Testing API Connectivity
@@ -234,6 +201,10 @@ The system includes comprehensive performance tracking:
 - Batch completion rates and timings  
 - Overall progress with record counts
 - Error tracking with detailed reporting
+
+### Testing
+
+For comprehensive testing information, see [tests.md](tests.md).
 
 ## 📋 Current Status
 

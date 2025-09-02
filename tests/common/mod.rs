@@ -6,32 +6,14 @@ pub mod fixtures;
 
 use anyhow::Result;
 use chrono::{NaiveDate, Utc};
-use tempfile::TempDir;
-use std::path::PathBuf;
 
-/// Test environment setup
-pub struct TestEnv {
-    _temp_dir: TempDir, // Keep for cleanup
-    pub db_path: PathBuf,
-}
-
-impl TestEnv {
-    /// Create a new test environment
-    pub fn new() -> Result<Self> {
-        let temp_dir = tempfile::tempdir()?;
-        let db_path = temp_dir.path().join("test_stocks.db");
-        
-        Ok(Self {
-            _temp_dir: temp_dir,
-            db_path,
-        })
-    }
-
-    /// Get the database path as a string
-    pub fn db_path_str(&self) -> &str {
-        self.db_path.to_str().unwrap()
-    }
-}
+// Re-export main database functions for convenience
+pub use database::{
+    init_test_database,
+    get_test_database,
+    insert_sample_stocks,
+    cleanup_test_database,
+};
 
 /// Test data utilities
 pub mod test_data {

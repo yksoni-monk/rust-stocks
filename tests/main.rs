@@ -16,14 +16,10 @@ fn test_test_infrastructure() {
 /// Test that common utilities are available
 #[test]
 fn test_common_utilities() {
-    use common::{TestEnv, test_data, logging};
+    use common::{/* TestEnv, */ test_data, logging};
     
     logging::init_test_logging();
     logging::log_test_step("Testing common utilities");
-    
-    // Test environment creation
-    let env = TestEnv::new().expect("Failed to create test environment");
-    assert!(env.db_path.exists() || !env.db_path.exists(), "Database path should be valid");
     
     // Test data creation
     let stock = test_data::create_test_stock("TEST", "Test Company");

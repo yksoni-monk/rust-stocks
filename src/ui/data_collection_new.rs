@@ -10,12 +10,26 @@ use ratatui::{
 use std::process::Command;
 use std::io::Write;
 use std::sync::Arc;
+use std::fs::OpenOptions;
 use tokio::sync::broadcast;
 
 use crate::ui::{
     View, ViewLayout,
     state::{AsyncStateManager, LogLevel, StateUpdate},
 };
+use crate::database_sqlx::DatabaseManagerSqlx;
+
+/// Debug logging function
+fn debug_log(message: &str) {
+    if let Ok(mut file) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("debug_tui.log") 
+    {
+        let timestamp = Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
+        let _ = writeln!(file, "[{}] {}", timestamp, message);
+    }
+}
 
 /// Data collection action definition
 #[derive(Debug, Clone)]
@@ -74,6 +88,12 @@ pub struct DataCollectionView {
     // Async state management
     pub state_manager: AsyncStateManager,
     
+    // Database reference
+    pub database: Option<Arc<DatabaseManagerSqlx>>,
+    
+    // Global broadcast sender for state updates
+    pub global_broadcast_sender: Option<broadcast::Sender<StateUpdate>>,
+    
     // Pending operations
     pub pending_log_message: Option<String>,
     pub pending_log_level: Option<LogLevel>,
@@ -103,10 +123,27 @@ impl DataCollectionView {
             confirmation_state: None,
             stock_selection_state: None,
             date_selection_state: None,
-            state_manager: AsyncStateManager::new(),
+            state_manager: AsyncStateManager::new(), // This will be replaced by global one
+            database: None,
+            global_broadcast_sender: None,
             pending_log_message: None,
             pending_log_level: None,
         }
+    }
+
+    /// Set the global state manager
+    pub fn set_state_manager(&mut self, state_manager: AsyncStateManager) {
+        self.state_manager = state_manager;
+    }
+
+    /// Set the global broadcast sender
+    pub fn set_global_broadcast_sender(&mut self, sender: broadcast::Sender<StateUpdate>) {
+        self.global_broadcast_sender = Some(sender);
+    }
+
+    /// Set database reference
+    pub fn set_database(&mut self, database: Arc<DatabaseManagerSqlx>) {
+        self.database = Some(database);
     }
 
     /// Add a log message
@@ -123,14 +160,8 @@ impl DataCollectionView {
 
     /// Get available stocks from database
     async fn get_available_stocks(&self) -> Vec<String> {
-        // Fallback to sample list for now
-        vec![
-            "AAPL".to_string(), "MSFT".to_string(), "GOOGL".to_string(), "AMZN".to_string(),
-            "TSLA".to_string(), "META".to_string(), "NVDA".to_string(), "NFLX".to_string(),
-            "JPM".to_string(), "JNJ".to_string(), "PG".to_string(), "V".to_string(),
-            "HD".to_string(), "DIS".to_string(), "PYPL".to_string(), "INTC".to_string(),
-            "VZ".to_string(), "ADBE".to_string(), "CRM".to_string(), "NKE".to_string(),
-        ]
+        // This method is deprecated - stocks are now loaded via async state updates
+        vec![] // Empty list - will be populated from database
     }
 
     /// Start date selection for a selected stock
@@ -219,22 +250,51 @@ impl DataCollectionView {
 
     /// Start stock and date selection process
     fn start_stock_and_date_selection(&mut self) {
-        // For now, use a simple list of stocks
-        let stocks = vec![
-            "AAPL".to_string(), "MSFT".to_string(), "GOOGL".to_string(), "AMZN".to_string(),
-            "TSLA".to_string(), "META".to_string(), "NVDA".to_string(), "NFLX".to_string(),
-            "JPM".to_string(), "JNJ".to_string(), "PG".to_string(), "V".to_string(),
-            "HD".to_string(), "DIS".to_string(), "PYPL".to_string(), "INTC".to_string(),
-            "VZ".to_string(), "ADBE".to_string(), "CRM".to_string(), "NKE".to_string(),
-        ];
+        // Clone database reference to avoid borrow checker issues
+        let database = if let Some(db) = &self.database {
+            db.clone()
+        } else {
+            self.add_log_message(LogLevel::Error, "Database not available");
+            return;
+        };
         
+        // Start with a loading state
         self.stock_selection_state = Some(StockSelectionState {
-            available_stocks: stocks,
+            available_stocks: vec!["Loading S&P500 stocks...".to_string()],
             selected_index: 0,
             search_query: String::new(),
             is_searching: false,
         });
-        self.add_log_message(LogLevel::Info, "Stock selection started. Type to search, ↑/↓ to navigate, Enter to select");
+        self.add_log_message(LogLevel::Info, "Loading S&P500 stocks from database...");
+        
+        // Start async operation to load S&P500 stocks
+        let operation_id = "load_sp500_stocks".to_string();
+        let _ = self.state_manager.start_operation(operation_id.clone(), "Loading S&P500 stocks".to_string(), true);
+        
+        // Spawn the actual work
+        let mut state_manager = self.state_manager.clone();
+        let operation_id_clone = operation_id.clone();
+        let global_broadcast_sender = self.global_broadcast_sender.clone().expect("Global broadcast sender not set");
+        tokio::spawn(async move {
+            debug_log("Async task started - loading S&P500 stocks");
+            match database.get_active_stocks().await {
+                Ok(stocks) => {
+                    let symbols: Vec<String> = stocks.into_iter().map(|s| s.symbol).collect();
+                    debug_log(&format!("Loaded {} stocks from database: {:?}", symbols.len(), &symbols[0..5]));
+                    let _ = state_manager.complete_operation(&operation_id_clone, Ok(format!("Loaded {} S&P500 stocks", symbols.len())));
+                    let _ = state_manager.add_log_message(LogLevel::Success, &format!("Loaded {} S&P500 stocks", symbols.len()));
+                    
+                    // Send stock list update to UI via global broadcast channel
+                    debug_log("Sending StockListUpdated state update");
+                    let _ = global_broadcast_sender.send(StateUpdate::StockListUpdated { stocks: symbols });
+                    debug_log("StockListUpdated state update sent");
+                }
+                Err(e) => {
+                    debug_log(&format!("Failed to load stocks: {}", e));
+                    let _ = state_manager.complete_operation(&operation_id_clone, Err(format!("Failed to load S&P500 stocks: {}", e)));
+                }
+            }
+        });
     }
 
     /// Run historical data collection
@@ -495,8 +555,8 @@ impl DataCollectionView {
 
         // Split main content into actions and logs
         let main_chunks = view_layout.split_main_content_vertical(&[
-            Constraint::Length(12), // Actions list
-            Constraint::Min(0),     // Logs
+            Constraint::Length(8), // Actions list (reduced from 12)
+            Constraint::Min(0),    // Logs (increased space)
         ]);
 
         // Actions list
@@ -545,7 +605,7 @@ impl DataCollectionView {
 
     /// Render the logs
     fn render_logs(&self, f: &mut Frame, area: Rect) {
-        let recent_logs = self.state_manager.get_recent_logs(20);
+        let recent_logs = self.state_manager.get_recent_logs(50); // Increased from 20 to 50
         let log_items: Vec<ListItem> = recent_logs
             .iter()
             .map(|log| {
@@ -730,7 +790,10 @@ impl DataCollectionView {
             .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
         f.render_widget(title, view_layout.title);
 
-        // Date inputs
+        // Date inputs with cursor
+        let start_date_with_cursor = self.render_input_field_with_cursor(&date_state.start_date_input, date_state.cursor_position, true);
+        let end_date_with_cursor = self.render_input_field_with_cursor(&date_state.end_date_input, 0, false);
+        
         let date_content = vec![
             Line::from(vec![
                 Span::styled("📅 Default Date Range", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
@@ -738,12 +801,12 @@ impl DataCollectionView {
             Line::from(vec![Span::styled("", Style::default())]),
             Line::from(vec![
                 Span::styled("Start Date: ", Style::default().fg(Color::White)),
-                Span::styled(&date_state.start_date_input, Style::default().fg(Color::Cyan)),
+                Span::styled(start_date_with_cursor, Style::default().fg(Color::Cyan)),
             ]),
             Line::from(vec![Span::styled("", Style::default())]),
             Line::from(vec![
                 Span::styled("End Date: ", Style::default().fg(Color::White)),
-                Span::styled(&date_state.end_date_input, Style::default().fg(Color::Cyan)),
+                Span::styled(end_date_with_cursor, Style::default().fg(Color::Cyan)),
             ]),
             Line::from(vec![Span::styled("", Style::default())]),
             Line::from(vec![
@@ -765,6 +828,31 @@ impl DataCollectionView {
             .block(Block::default().borders(Borders::ALL))
             .style(Style::default().fg(Color::Gray));
         f.render_widget(status, view_layout.status);
+    }
+
+    /// Render input field with cursor
+    fn render_input_field_with_cursor(&self, input: &str, cursor_pos: usize, is_active: bool) -> String {
+        if !is_active {
+            return input.to_string();
+        }
+        
+        if cursor_pos > input.len() {
+            return format!("{}{}", input, "█");
+        }
+        
+        let mut result = String::new();
+        for (i, c) in input.chars().enumerate() {
+            if i == cursor_pos {
+                result.push('█');
+            }
+            result.push(c);
+        }
+        
+        if cursor_pos == input.len() {
+            result.push('█');
+        }
+        
+        result
     }
 }
 
@@ -999,6 +1087,7 @@ impl View for DataCollectionView {
     }
 
     fn handle_state_update(&mut self, update: &crate::ui::state::StateUpdate) -> Result<bool> {
+        debug_log(&format!("DataCollectionView received state update: {:?}", update));
         // Process state updates from async operations
         match update {
             crate::ui::state::StateUpdate::LogMessage { level, message } => {
@@ -1013,6 +1102,19 @@ impl View for DataCollectionView {
                     Err(err) => {
                         self.add_log_message(LogLevel::Error, &format!("Operation {} failed: {}", id, err));
                     }
+                }
+                Ok(true)
+            }
+            crate::ui::state::StateUpdate::StockListUpdated { stocks } => {
+                debug_log(&format!("Received StockListUpdated state update with {} stocks", stocks.len()));
+                // Update the stock selection state with real S&P500 stocks
+                if let Some(stock_state) = &mut self.stock_selection_state {
+                    stock_state.available_stocks = stocks.clone();
+                    stock_state.selected_index = 0;
+                    self.add_log_message(LogLevel::Success, &format!("Stock list updated with {} S&P500 stocks", stocks.len()));
+                    debug_log(&format!("Stock list updated with {} stocks: {:?}", stocks.len(), &stocks[0..5]));
+                } else {
+                    debug_log("ERROR: No stock_selection_state available to update");
                 }
                 Ok(true)
             }

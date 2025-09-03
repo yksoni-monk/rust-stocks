@@ -20,6 +20,7 @@ pub enum StateUpdate {
     OperationProgress { id: String, progress: f64, message: String },
     OperationCompleted { id: String, result: Result<String, String> },
     LogMessage { level: LogLevel, message: String },
+    StockListUpdated { stocks: Vec<String> }, // New variant for stock list updates
 }
 
 /// Log levels

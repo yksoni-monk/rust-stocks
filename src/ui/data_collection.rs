@@ -302,16 +302,11 @@ impl DataCollectionView {
                         stock_state.is_searching = true;
                         // Use a simple filter without calling self methods
                         let query = stock_state.search_query.to_uppercase();
-                        let all_stocks = vec![
-                            "AAPL".to_string(), "MSFT".to_string(), "GOOGL".to_string(), "AMZN".to_string(),
-                            "TSLA".to_string(), "META".to_string(), "NVDA".to_string(), "NFLX".to_string(),
-                            "JPM".to_string(), "JNJ".to_string(), "PG".to_string(), "V".to_string(),
-                            "HD".to_string(), "DIS".to_string(), "PYPL".to_string(), "INTC".to_string(),
-                            "VZ".to_string(), "ADBE".to_string(), "CRM".to_string(), "NKE".to_string(),
-                        ];
+                        // TODO: Replace with database query for real S&P500 stocks
+                        let all_stocks: Vec<String> = vec![]; // Empty list - will be populated from database
                         let filtered: Vec<String> = all_stocks
                             .into_iter()
-                            .filter(|stock| stock.to_uppercase().contains(&query))
+                            .filter(|stock: &String| stock.to_uppercase().contains(&query))
                             .collect();
                         stock_state.available_stocks = filtered;
                         stock_state.selected_index = 0;
@@ -322,16 +317,11 @@ impl DataCollectionView {
                     stock_state.is_searching = !stock_state.search_query.is_empty();
                     // Use a simple filter without calling self methods
                     let query = stock_state.search_query.to_uppercase();
-                    let all_stocks = vec![
-                        "AAPL".to_string(), "MSFT".to_string(), "GOOGL".to_string(), "AMZN".to_string(),
-                        "TSLA".to_string(), "META".to_string(), "NVDA".to_string(), "NFLX".to_string(),
-                        "JPM".to_string(), "JNJ".to_string(), "PG".to_string(), "V".to_string(),
-                        "HD".to_string(), "DIS".to_string(), "PYPL".to_string(), "INTC".to_string(),
-                        "VZ".to_string(), "ADBE".to_string(), "CRM".to_string(), "NKE".to_string(),
-                    ];
+                    // TODO: Replace with database query for real S&P500 stocks
+                    let all_stocks: Vec<String> = vec![]; // Empty list - will be populated from database
                     let filtered: Vec<String> = all_stocks
                         .into_iter()
-                        .filter(|stock| stock.to_uppercase().contains(&query))
+                        .filter(|stock: &String| stock.to_uppercase().contains(&query))
                         .collect();
                     stock_state.available_stocks = filtered;
                     stock_state.selected_index = 0;

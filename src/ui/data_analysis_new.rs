@@ -8,6 +8,7 @@ use ratatui::{
     Frame,
 };
 use std::sync::Arc;
+use tokio::sync::broadcast;
 
 use crate::ui::{
     View, ViewLayout,
@@ -56,6 +57,9 @@ pub struct DataAnalysisView {
     // Database reference
     pub database: Option<Arc<DatabaseManagerSqlx>>,
     
+    // Global broadcast sender for state updates
+    pub global_broadcast_sender: Option<broadcast::Sender<StateUpdate>>,
+    
     // Pending operations
     pub pending_log_message: Option<String>,
     pub pending_log_level: Option<LogLevel>,
@@ -72,6 +76,7 @@ impl DataAnalysisView {
             stock_data: None,
             state_manager: AsyncStateManager::new(),
             database: None,
+            global_broadcast_sender: None,
             pending_log_message: None,
             pending_log_level: None,
         }
@@ -80,6 +85,16 @@ impl DataAnalysisView {
     /// Set database reference
     pub fn set_database(&mut self, database: Arc<DatabaseManagerSqlx>) {
         self.database = Some(database);
+    }
+
+    /// Set the global state manager
+    pub fn set_state_manager(&mut self, state_manager: AsyncStateManager) {
+        self.state_manager = state_manager;
+    }
+
+    /// Set the global broadcast sender
+    pub fn set_global_broadcast_sender(&mut self, sender: broadcast::Sender<StateUpdate>) {
+        self.global_broadcast_sender = Some(sender);
     }
 
     /// Add a log message

@@ -256,28 +256,22 @@ impl DataAnalysisView {
 
     /// Render the stock list view
     fn render_stock_list_view(&self, f: &mut Frame, area: Rect) {
-        let view_layout = ViewLayout::new(area);
-        
-        // Title
-        let title = Paragraph::new("📊 Data Analysis - Available Stocks")
-            .block(Block::default().borders(Borders::ALL))
-            .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
-        f.render_widget(title, view_layout.title);
+        // No title rendering - handled by main app tab bar
 
         // Stock list
         if self.state_manager.has_active_operations() {
             let loading = Paragraph::new("Loading available stocks...")
                 .block(Block::default().borders(Borders::ALL))
                 .style(Style::default().fg(Color::Cyan));
-            f.render_widget(loading, view_layout.main_content);
+            f.render_widget(loading, area);
         } else if self.available_stocks.is_empty() {
             let empty = Paragraph::new("No stocks with data found in database.\nUse Data Collection to fetch stock data first.")
                 .block(Block::default().borders(Borders::ALL))
                 .style(Style::default().fg(Color::Gray));
-            f.render_widget(empty, view_layout.main_content);
+            f.render_widget(empty, area);
         } else {
             // Calculate how many rows fit; each item uses 2 lines + 1 for borders/title
-            let list_height = view_layout.main_content.height as usize;
+            let list_height = area.height as usize;
             let visible_rows = list_height.saturating_sub(2) / 2; // approximate visible items
             let visible_rows = visible_rows.max(1);
 
@@ -324,33 +318,22 @@ impl DataAnalysisView {
             let list = List::new(items)
                 .block(Block::default().borders(Borders::ALL).title("Stocks with Data"))
                 .style(Style::default().fg(Color::White));
-            f.render_widget(list, view_layout.main_content);
+            f.render_widget(list, area);
         }
-
-        // Status
-        let status = Paragraph::new("↑/↓: Navigate • Enter: Select Stock • R: Refresh • Q: Quit")
-            .block(Block::default().borders(Borders::ALL))
-            .style(Style::default().fg(Color::Gray));
-        f.render_widget(status, view_layout.status);
     }
 
     /// Render the stock detail view
     fn render_stock_detail_view(&self, f: &mut Frame, area: Rect) {
-        let view_layout = ViewLayout::new(area);
-        
-        // Header
-        if let Some(stock) = &self.selected_stock {
-            let header = Paragraph::new(format!("📊 {} - {}", stock.symbol, stock.company_name))
-                .block(Block::default().borders(Borders::ALL))
-                .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
-            f.render_widget(header, view_layout.title);
-        }
+        // No header rendering - handled by main app tab bar
 
-        // Split main content
-        let main_chunks = view_layout.split_main_content_vertical(&[
-            Constraint::Length(5), // Date input
-            Constraint::Min(0),   // Data display
-        ]);
+        // Split area into date input and data display
+        let main_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(5), // Date input
+                Constraint::Min(0),    // Data display
+            ])
+            .split(area);
 
         // Date input
         let date_input_with_cursor = self.render_date_input_with_cursor();
@@ -414,11 +397,7 @@ impl DataAnalysisView {
             f.render_widget(empty, main_chunks[1]);
         }
 
-        // Status
-        let status = Paragraph::new("←/→: Navigate • Type: Enter Date • Enter: Fetch Data • N/P: Next/Prev Stock • B: Back to List • Q: Quit")
-            .block(Block::default().borders(Borders::ALL))
-            .style(Style::default().fg(Color::Gray));
-        f.render_widget(status, view_layout.status);
+        // Status removed - handled by main app status bar
     }
 
     /// Render date input with cursor

@@ -282,7 +282,11 @@ impl DataCollectionView {
                     let symbols: Vec<String> = stocks.into_iter().map(|s| s.symbol).collect();
                     debug_log(&format!("Loaded {} stocks from database: {:?}", symbols.len(), &symbols[0..5]));
                     let _ = state_manager.complete_operation(&operation_id_clone, Ok(format!("Loaded {} S&P500 stocks", symbols.len())));
-                    let _ = state_manager.add_log_message(LogLevel::Success, &format!("Loaded {} S&P500 stocks", symbols.len()));
+                    // Use global broadcast sender instead of cloned state manager for logs
+                    let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
+                        level: LogLevel::Success, 
+                        message: format!("Loaded {} S&P500 stocks", symbols.len()) 
+                    });
                     
                     // Send stock list update to UI via global broadcast channel
                     debug_log("Sending StockListUpdated state update");
@@ -310,6 +314,7 @@ impl DataCollectionView {
         
         // Spawn the actual work
         let mut state_manager = self.state_manager.clone();
+        let global_broadcast_sender = self.global_broadcast_sender.clone().expect("Global broadcast sender not set");
         tokio::spawn(async move {
             let start_str = start_date.format("%Y%m%d").to_string();
             let end_str = end_date.format("%Y%m%d").to_string();
@@ -326,11 +331,18 @@ impl DataCollectionView {
                     if output.status.success() {
                         let stdout = String::from_utf8_lossy(&output.stdout);
                         let _ = state_manager.complete_operation(&operation_id, Ok("Historical data collection completed successfully".to_string()));
-                        let _ = state_manager.add_log_message(LogLevel::Success, &format!("Output: {}", stdout.trim()));
+                        // Use global broadcast sender for async logging
+                        let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
+                            level: LogLevel::Success, 
+                            message: format!("Output: {}", stdout.trim()) 
+                        });
                     } else {
                         let stderr = String::from_utf8_lossy(&output.stderr);
                         let _ = state_manager.complete_operation(&operation_id, Err("Failed to collect historical data".to_string()));
-                        let _ = state_manager.add_log_message(LogLevel::Error, &format!("Error: {}", stderr.trim()));
+                        let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
+                            level: LogLevel::Error, 
+                            message: format!("Error: {}", stderr.trim()) 
+                        });
                     }
                 }
                 Err(e) => {
@@ -351,6 +363,7 @@ impl DataCollectionView {
         // Spawn the actual work
         let mut state_manager = self.state_manager.clone();
         let symbol_clone = symbol.clone();
+        let global_broadcast_sender = self.global_broadcast_sender.clone().expect("Global broadcast sender not set");
         
         tokio::spawn(async move {
             // Create log file for debugging in archive folder
@@ -366,7 +379,10 @@ impl DataCollectionView {
             let mut log_writer = std::io::BufWriter::new(log_file);
 
             let log_message = format!("🔄 Preparing to fetch {} from {} to {}", symbol_clone, start_date, end_date);
-            let _ = state_manager.add_log_message(LogLevel::Info, &log_message);
+            let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
+                level: LogLevel::Info, 
+                message: log_message.clone() 
+            });
             let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
 
             // Load config, DB and client
@@ -377,7 +393,10 @@ impl DataCollectionView {
                 },
                 Err(e) => { 
                     let error_msg = format!("❌ Config error: {}", e);
-                    let _ = state_manager.add_log_message(LogLevel::Error, &error_msg);
+                    let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
+                        level: LogLevel::Error, 
+                        message: error_msg.clone() 
+                    });
                     let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), error_msg);
                     let _ = state_manager.complete_operation(&operation_id, Err(error_msg));
                     return;
@@ -391,7 +410,10 @@ impl DataCollectionView {
                 },
                 Err(e) => { 
                     let error_msg = format!("❌ DB init error: {}", e);
-                    let _ = state_manager.add_log_message(LogLevel::Error, &error_msg);
+                    let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
+                        level: LogLevel::Error, 
+                        message: error_msg.clone() 
+                    });
                     let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), error_msg);
                     let _ = state_manager.complete_operation(&operation_id, Err(error_msg));
                     return;
@@ -405,7 +427,10 @@ impl DataCollectionView {
                 },
                 Err(e) => { 
                     let error_msg = format!("❌ Client init error: {}", e);
-                    let _ = state_manager.add_log_message(LogLevel::Error, &error_msg);
+                    let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
+                        level: LogLevel::Error, 
+                        message: error_msg.clone() 
+                    });
                     let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), error_msg);
                     let _ = state_manager.complete_operation(&operation_id, Err(error_msg));
                     return;
@@ -420,14 +445,20 @@ impl DataCollectionView {
                 },
                 Ok(None) => { 
                     let error_msg = format!("❌ Unknown symbol {} in DB", symbol_clone);
-                    let _ = state_manager.add_log_message(LogLevel::Error, &error_msg);
+                    let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
+                        level: LogLevel::Error, 
+                        message: error_msg.clone() 
+                    });
                     let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), error_msg);
                     let _ = state_manager.complete_operation(&operation_id, Err(error_msg));
                     return;
                 }
                 Err(e) => { 
                     let error_msg = format!("❌ DB query error: {}", e);
-                    let _ = state_manager.add_log_message(LogLevel::Error, &error_msg);
+                    let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
+                        level: LogLevel::Error, 
+                        message: error_msg.clone() 
+                    });
                     let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), error_msg);
                     let _ = state_manager.complete_operation(&operation_id, Err(error_msg));
                     return;
@@ -438,19 +469,28 @@ impl DataCollectionView {
             let db_arc = Arc::new(database);
 
             let log_message = format!("📡 Fetching {} ({} → {})", symbol_clone, start_date, end_date);
-            let _ = state_manager.add_log_message(LogLevel::Info, &log_message);
+            let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
+                level: LogLevel::Info, 
+                message: log_message.clone() 
+            });
             let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
 
             // Calculate trading week batches
             let batches = crate::ui::data_collection::TradingWeekBatchCalculator::calculate_batches(start_date, end_date);
             let log_message = format!("📊 Created {} trading week batches", batches.len());
-            let _ = state_manager.add_log_message(LogLevel::Info, &log_message);
+            let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
+                level: LogLevel::Info, 
+                message: log_message.clone() 
+            });
             let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
 
             // Log batch plan
             for batch in &batches {
                 let log_message = format!("📅 {}", batch.description);
-                let _ = state_manager.add_log_message(LogLevel::Info, &log_message);
+                let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
+                    level: LogLevel::Info, 
+                    message: log_message.clone() 
+                });
                 let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
             }
 
@@ -459,7 +499,10 @@ impl DataCollectionView {
             // Process each trading week batch
             for batch in batches {
                 let log_message = format!("🔄 Processing {}", batch.description);
-                let _ = state_manager.add_log_message(LogLevel::Info, &log_message);
+                let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
+                    level: LogLevel::Info, 
+                    message: log_message.clone() 
+                });
                 let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
 
                 // Check existing records for this batch
@@ -475,7 +518,10 @@ impl DataCollectionView {
 
                 if existing_count > 0 {
                     let log_message = format!("ℹ️ Batch {}: Found {} existing records, skipping", batch.batch_number, existing_count);
-                    let _ = state_manager.add_log_message(LogLevel::Info, &log_message);
+                    let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
+                        level: LogLevel::Info, 
+                        message: log_message.clone() 
+                    });
                     let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
                     continue;
                 }
@@ -493,17 +539,26 @@ impl DataCollectionView {
                         let _ = writeln!(log_writer, "[{}] ✅ fetch_stock_history completed for batch {}: {} records", Utc::now().format("%H:%M:%S"), batch.batch_number, inserted);
                         if inserted > 0 {
                             let log_message = format!("✅ Batch {}: Inserted {} records (Total: {})", batch.batch_number, inserted, total_inserted);
-                            let _ = state_manager.add_log_message(LogLevel::Success, &log_message);
+                            let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
+                                level: LogLevel::Success, 
+                                message: log_message.clone() 
+                            });
                             let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
                         } else {
                             let log_message = format!("ℹ️ Batch {}: No new records (data already exists) (Total: {})", batch.batch_number, total_inserted);
-                            let _ = state_manager.add_log_message(LogLevel::Info, &log_message);
+                            let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
+                                level: LogLevel::Info, 
+                                message: log_message.clone() 
+                            });
                             let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
                         }
                     }
                     Err(e) => {
                         let error_msg = format!("❌ Batch {}: Failed - {}", batch.batch_number, e);
-                        let _ = state_manager.add_log_message(LogLevel::Error, &error_msg);
+                        let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
+                            level: LogLevel::Error, 
+                            message: error_msg.clone() 
+                        });
                         let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), error_msg);
                     }
                 }
@@ -546,27 +601,21 @@ impl DataCollectionView {
     }
 
     /// Render the main view using centralized layout
-    fn render_main_view(&self, f: &mut Frame, view_layout: ViewLayout) {
-        // Title
-        let title = Paragraph::new("🚀 Data Collection")
-            .block(Block::default().borders(Borders::ALL))
-            .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
-        f.render_widget(title, view_layout.title);
-
-        // Split main content into actions and logs
-        let main_chunks = view_layout.split_main_content_vertical(&[
-            Constraint::Length(8), // Actions list (reduced from 12)
-            Constraint::Min(0),    // Logs (increased space)
-        ]);
+    fn render_main_view(&self, f: &mut Frame, content_area: Rect) {
+        // Split content area directly into actions and logs (no redundant title/status)
+        let main_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(8), // Actions list
+                Constraint::Min(0),    // Logs
+            ])
+            .split(content_area);
 
         // Actions list
         self.render_actions_list(f, main_chunks[0]);
 
         // Logs
         self.render_logs(f, main_chunks[1]);
-
-        // Status
-        self.render_status(f, view_layout.status);
     }
 
     /// Render the actions list
@@ -876,9 +925,8 @@ impl View for DataCollectionView {
             return;
         }
 
-        // Main data collection view using centralized layout
-        let view_layout = ViewLayout::for_data_collection(area);
-        self.render_main_view(f, view_layout);
+        // Main data collection view - just render actions and logs directly
+        self.render_main_view(f, area);
     }
 
     fn get_title(&self) -> String {

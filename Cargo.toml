@@ -76,19 +76,31 @@ pretty_assertions = "1.4"
 # Test binaries
 [[bin]]
 name = "test_concurrent_fetcher_sqlx"
-path = "test_concurrent_fetcher_sqlx.rs"
+path = "tests/bin/test_concurrent_fetcher_sqlx.rs"
 
 [[bin]]
 name = "test_data_collector_sqlx"
-path = "test_data_collector_sqlx.rs"
+path = "tests/bin/test_data_collector_sqlx.rs"
 
 [[bin]]
 name = "test_analysis_sqlx"
-path = "test_analysis_sqlx.rs"
+path = "tests/bin/test_analysis_sqlx.rs"
 
 [[bin]]
 name = "test_sqlx_validation"
-path = "test_sqlx_validation.rs"
+path = "tests/bin/test_sqlx_validation.rs"
+
+[[bin]]
+name = "test_db_state"
+path = "tests/bin/test_db_state.rs"
+
+[[bin]]
+name = "test_tui"
+path = "tests/bin/test_tui.rs"
+
+[[bin]]
+name = "test_minimal"
+path = "tests/bin/test_minimal.rs"
 
 [[bin]]
 name = "data_collection_test"

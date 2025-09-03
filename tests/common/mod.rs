@@ -10,6 +10,14 @@ use chrono::{NaiveDate, Utc};
 // Re-export main database functions for convenience
 pub use database::{
     init_fresh_test_database,
+    init_fresh_test_database_with_cleanup,
+    init_test_database,
+    get_test_database,
+    insert_sample_stocks,
+    cleanup_test_database,
+    cleanup_all_test_databases,
+    cleanup_tmp_directory,
+    TestDatabase,
 };
 
 /// Test data utilities

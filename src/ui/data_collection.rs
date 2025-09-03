@@ -713,14 +713,19 @@ impl DataCollectionView {
     pub fn run_single_stock_collection(&mut self, symbol: String, start_date: NaiveDate, end_date: NaiveDate, log_sender: broadcast::Sender<crate::ui::app::LogMessage>) -> Result<()> {
         self.log_info(&format!("Starting single stock collection for {} from {} to {}", symbol, start_date, end_date));
 
-        // Create log file for debugging
-        let log_file_path = format!("debug_collection_{}_{}_{}.log", symbol, start_date, end_date);
+        // Create log file for debugging in archive folder
+        let archive_dir = "archive/debug_logs";
+        std::fs::create_dir_all(archive_dir).unwrap_or_else(|_| ());
+        let log_file_path = format!("{}/debug_collection_{}_{}_{}.log", archive_dir, symbol, start_date, end_date);
         
         // Spawn the data collection as an async task
         let symbol_clone = symbol.clone();
         tokio::spawn(async move {
             // Create log file inside the async task
-            let log_file = std::fs::File::create(&log_file_path).unwrap_or_else(|_| std::fs::File::create("debug_collection.log").unwrap());
+            let log_file = std::fs::File::create(&log_file_path).unwrap_or_else(|_| {
+                // Fallback to main directory if archive creation fails
+                std::fs::File::create("debug_collection.log").unwrap()
+            });
             let mut log_writer = std::io::BufWriter::new(log_file);
 
             let log_message = format!("🔄 Preparing to fetch {} from {} to {}", symbol_clone, start_date, end_date);

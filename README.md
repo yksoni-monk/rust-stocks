@@ -61,6 +61,23 @@ cargo run --bin rust-stocks
 cargo run --bin update_sp500
 ```
 
+## 🧹 Test Cleanup
+
+To prevent test database files from accumulating and filling up disk space, you can use the cleanup script:
+
+```bash
+./cleanup_tests.sh
+```
+
+This script removes all test database files from the `tests/tmp/` directory.
+
+### Automatic Cleanup
+
+The test framework also includes automatic cleanup functionality:
+- **Before tests**: The `tests/tmp/` directory is cleaned up before test runs
+- **After individual tests**: Test databases created with `init_fresh_test_database_with_cleanup()` are automatically cleaned up
+- **Manual cleanup**: Use `cleanup_tmp_directory()` function in your tests if needed
+
 ## 📊 Data Collection
 
 ### Concurrent Data Fetching

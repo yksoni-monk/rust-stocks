@@ -9,6 +9,23 @@ use rust_stocks::database_sqlx::DatabaseManagerSqlx;
 static mut DB_MANAGER: Option<DatabaseManagerSqlx> = None;
 static INIT: Once = Once::new();
 
+/// Test database info containing both the manager and the file path for cleanup
+pub struct TestDatabase {
+    pub manager: DatabaseManagerSqlx,
+    pub file_path: PathBuf,
+}
+
+impl TestDatabase {
+    /// Clean up the database file
+    pub fn cleanup(&self) -> Result<()> {
+        if self.file_path.exists() {
+            std::fs::remove_file(&self.file_path)?;
+            println!("Cleaned up test database: {}", self.file_path.display());
+        }
+        Ok(())
+    }
+}
+
 /// Initialize a completely fresh test database (creates new file each time)
 pub async fn init_fresh_test_database() -> Result<DatabaseManagerSqlx> {
     // Create tests/tmp directory if it doesn't exist
@@ -36,6 +53,39 @@ pub async fn init_fresh_test_database() -> Result<DatabaseManagerSqlx> {
     let db_manager = DatabaseManagerSqlx::new(&database_path).await?;
 
     Ok(db_manager)
+}
+
+/// Initialize a completely fresh test database with cleanup support
+/// Returns TestDatabase which includes cleanup functionality
+pub async fn init_fresh_test_database_with_cleanup() -> Result<TestDatabase> {
+    // Create tests/tmp directory if it doesn't exist
+    let tests_dir = PathBuf::from("tests");
+    let tmp_dir = tests_dir.join("tmp");
+    std::fs::create_dir_all(&tmp_dir)?;
+
+    // Create a unique database file path using timestamp
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let db_path = tmp_dir.join(format!("test_{}.db", timestamp));
+    let database_path = db_path.to_string_lossy().to_string();
+
+    // Convert to absolute path
+    let absolute_path = std::fs::canonicalize(&tmp_dir)?
+        .join(format!("test_{}.db", timestamp))
+        .to_string_lossy()
+        .to_string();
+
+    println!("Creating fresh test database at: {}", absolute_path);
+
+    // Create database manager using existing infrastructure
+    let db_manager = DatabaseManagerSqlx::new(&database_path).await?;
+
+    Ok(TestDatabase {
+        manager: db_manager,
+        file_path: db_path,
+    })
 }
 
 /// Initialize the test database once for all tests
@@ -116,27 +166,91 @@ pub fn cleanup_test_database() -> Result<()> {
     Ok(())
 }
 
+/// Clean up all test database files in the tmp directory
+/// This is useful for cleaning up accumulated test databases
+pub fn cleanup_all_test_databases() -> Result<()> {
+    let tmp_dir = PathBuf::from("tests/tmp");
+    if !tmp_dir.exists() {
+        return Ok(());
+    }
+
+    let mut cleaned_count = 0;
+    for entry in std::fs::read_dir(&tmp_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_file() && path.extension().map_or(false, |ext| ext == "db") {
+            std::fs::remove_file(&path)?;
+            cleaned_count += 1;
+        }
+    }
+
+    if cleaned_count > 0 {
+        println!("Cleaned up {} test database files", cleaned_count);
+    }
+
+    Ok(())
+}
+
+/// Clean up the entire tmp directory before tests
+/// This ensures we start with a clean slate
+pub fn cleanup_tmp_directory() -> Result<()> {
+    let tmp_dir = PathBuf::from("tests/tmp");
+    if tmp_dir.exists() {
+        std::fs::remove_dir_all(&tmp_dir)?;
+        println!("Cleaned up tmp directory: {}", tmp_dir.display());
+    }
+    
+    // Recreate the directory
+    std::fs::create_dir_all(&tmp_dir)?;
+    println!("Recreated tmp directory: {}", tmp_dir.display());
+    
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    // Global test setup - runs once before all tests
+    static TEST_SETUP: Once = Once::new();
+
+    fn setup_test_environment() {
+        TEST_SETUP.call_once(|| {
+            // Clean up tmp directory before any tests run
+            if let Err(e) = cleanup_tmp_directory() {
+                eprintln!("Warning: Failed to cleanup tmp directory: {}", e);
+            }
+        });
+    }
+
     #[tokio::test]
     async fn test_database_creation() -> Result<()> {
-        let db_manager = init_test_database().await?;
+        setup_test_environment();
+        
+        let test_db = init_fresh_test_database_with_cleanup().await?;
+        let db_manager = &test_db.manager;
         
         // Test that we can insert and retrieve data
-        insert_sample_stocks(&db_manager).await?;
+        insert_sample_stocks(db_manager).await?;
         
         let stocks = db_manager.get_active_stocks().await?;
         assert_eq!(stocks.len(), 5);
         assert_eq!(stocks[0].symbol, "AAPL");
+        
+        // Clean up
+        test_db.cleanup()?;
         
         Ok(())
     }
 
     #[tokio::test]
     async fn test_concurrent_access() -> Result<()> {
+        setup_test_environment();
+        
         let db_manager = get_test_database().await?;
+        
+        // Insert sample data first
+        insert_sample_stocks(&db_manager).await?;
         
         // Test concurrent reads
         let handles: Vec<_> = (0..5).map(|_| {

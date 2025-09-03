@@ -2,16 +2,10 @@
 use anyhow::Result;
 use tracing_subscriber::{FmtSubscriber, EnvFilter};
 
-mod api;
-mod analysis;
-mod data_collector;
-mod database_sqlx;
-mod models;
-
-use crate::analysis::AnalysisEngine;
-use crate::api::SchwabClient;
-use crate::database_sqlx::DatabaseManagerSqlx;
-use crate::models::Config;
+use rust_stocks::analysis::AnalysisEngine;
+use rust_stocks::api::SchwabClient;
+use rust_stocks::database_sqlx::DatabaseManagerSqlx;
+use rust_stocks::models::Config;
 
 #[tokio::main]
 async fn main() -> Result<()> {

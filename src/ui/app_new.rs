@@ -90,15 +90,63 @@ impl StockTuiApp {
                 let _ = writeln!(file, "[{}] App received state update: {:?}", timestamp, update);
             }
             
-            // Broadcast to current view
-            match self.current_view {
-                0 => {
-                    let _ = self.data_collection_view.handle_state_update(&update);
+            // Broadcast to appropriate views based on update type
+            match &update {
+                crate::ui::state::StateUpdate::StockListUpdated { .. } => {
+                    // StockListUpdated should go to both views since both need the stock data
+                    if let Ok(result) = self.data_collection_view.handle_state_update(&update) {
+                        if let Ok(mut file) = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open("debug_tui.log") 
+                        {
+                            let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
+                            let _ = writeln!(file, "[{}] Data collection view handled update, result: {}", timestamp, result);
+                        }
+                    }
+                    if let Ok(result) = self.data_analysis_view.handle_state_update(&update) {
+                        if let Ok(mut file) = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open("debug_tui.log") 
+                        {
+                            let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
+                            let _ = writeln!(file, "[{}] Data analysis view handled update, result: {}, available_stocks count: {}", 
+                                          timestamp, result, self.data_analysis_view.available_stocks.len());
+                        }
+                    }
                 }
-                1 => {
-                    let _ = self.data_analysis_view.handle_state_update(&update);
+                _ => {
+                    // Other updates go only to the current view
+                    match self.current_view {
+                        0 => {
+                            if let Ok(result) = self.data_collection_view.handle_state_update(&update) {
+                                if let Ok(mut file) = std::fs::OpenOptions::new()
+                                    .create(true)
+                                    .append(true)
+                                    .open("debug_tui.log") 
+                                {
+                                    let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
+                                    let _ = writeln!(file, "[{}] Data collection view handled update, result: {}", timestamp, result);
+                                }
+                            }
+                        }
+                        1 => {
+                            if let Ok(result) = self.data_analysis_view.handle_state_update(&update) {
+                                if let Ok(mut file) = std::fs::OpenOptions::new()
+                                    .create(true)
+                                    .append(true)
+                                    .open("debug_tui.log") 
+                                {
+                                    let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
+                                    let _ = writeln!(file, "[{}] Data analysis view handled update, result: {}, available_stocks count: {}", 
+                                                  timestamp, result, self.data_analysis_view.available_stocks.len());
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
                 }
-                _ => {}
             }
         }
         
@@ -166,31 +214,105 @@ impl StockTuiApp {
         // Handle global app events first
         match key {
             KeyCode::Char('q') | KeyCode::Char('Q') => {
+                if let Ok(mut file) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("debug_tui.log") 
+                {
+                    let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
+                    let _ = writeln!(file, "[{}] Quit key pressed", timestamp);
+                }
                 self.should_quit = true;
                 return Ok(());
             }
             KeyCode::Tab => {
+                let old_view = self.current_view;
                 self.current_view = (self.current_view + 1) % 2;
+                if let Ok(mut file) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("debug_tui.log") 
+                {
+                    let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
+                    let _ = writeln!(file, "[{}] Tab pressed - switching from view {} to view {}", timestamp, old_view, self.current_view);
+                }
                 return Ok(());
             }
             KeyCode::BackTab => {
+                let old_view = self.current_view;
                 self.current_view = if self.current_view == 0 { 1 } else { 0 };
+                if let Ok(mut file) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("debug_tui.log") 
+                {
+                    let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
+                    let _ = writeln!(file, "[{}] BackTab pressed - switching from view {} to view {}", timestamp, old_view, self.current_view);
+                }
                 return Ok(());
             }
             KeyCode::Char('r') | KeyCode::Char('R') => {
+                if let Ok(mut file) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("debug_tui.log") 
+                {
+                    let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
+                    let _ = writeln!(file, "[{}] Refresh key pressed", timestamp);
+                }
                 self.refresh_current_view();
                 return Ok(());
             }
             _ => {}
         }
         
+        // Debug log current view and key routing
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("debug_tui.log") 
+        {
+            let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
+            let _ = writeln!(file, "[{}] App routing key {:?} to view {} (current_view value confirmed)", timestamp, key, self.current_view);
+        }
+        
         // Route key events to the current view
         match self.current_view {
             0 => {
-                let _ = self.data_collection_view.handle_key(key);
+                if let Ok(result) = self.data_collection_view.handle_key(key) {
+                    if let Ok(mut file) = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open("debug_tui.log") 
+                    {
+                        let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
+                        let _ = writeln!(file, "[{}] Data collection view handled key, result: {}", timestamp, result);
+                    }
+                }
             }
             1 => {
-                let _ = self.data_analysis_view.handle_key(key);
+                match self.data_analysis_view.handle_key(key) {
+                    Ok(result) => {
+                        if let Ok(mut file) = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open("debug_tui.log") 
+                        {
+                            let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
+                            let _ = writeln!(file, "[{}] Data analysis view handled key, result: {}", timestamp, result);
+                        }
+                    }
+                    Err(e) => {
+                        if let Ok(mut file) = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open("debug_tui.log") 
+                        {
+                            let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
+                            let _ = writeln!(file, "[{}] Data analysis view ERROR handling key: {}", timestamp, e);
+                        }
+                    }
+                }
             }
             _ => {}
         }
@@ -217,22 +339,113 @@ impl StockTuiApp {
 
 /// Run the async TUI application with simplified architecture
 pub async fn run_app_async(config: Config, database: DatabaseManagerSqlx) -> Result<()> {
+    // Debug log function entry - truncate file to start fresh
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open("debug_tui.log") 
+    {
+        let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
+        let _ = writeln!(file, "[{}] run_app_async starting", timestamp);
+    }
+    
     let mut app = StockTuiApp::new(&config, database)?;
     
+    // Debug log after app creation
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("debug_tui.log") 
+    {
+        let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
+        let _ = writeln!(file, "[{}] StockTuiApp created", timestamp);
+    }
+    
     // Enable raw mode
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("debug_tui.log") 
+    {
+        let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
+        let _ = writeln!(file, "[{}] Enabling raw mode", timestamp);
+    }
+    
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
     
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("debug_tui.log") 
+    {
+        let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
+        let _ = writeln!(file, "[{}] Terminal setup complete", timestamp);
+    }
+    
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     
-    // Main async event loop
+    // Debug log that the event loop is starting
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("debug_tui.log") 
+    {
+        let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
+        let _ = writeln!(file, "[{}] Event loop starting", timestamp);
+    }
+
+    // Main async event loop with proper event handling
+    let mut loop_iteration = 0;
     loop {
-        // Handle terminal events with timeout
-        if crossterm::event::poll(std::time::Duration::from_millis(100))? {
+        loop_iteration += 1;
+        
+        // Debug log every 100 iterations to show the loop is running
+        if loop_iteration % 100 == 0 {
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("debug_tui.log") 
+            {
+                let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
+                let _ = writeln!(file, "[{}] Event loop iteration {}", timestamp, loop_iteration);
+            }
+        }
+        
+        // Process all available events without blocking
+        let mut events_processed = false;
+        
+        // Process multiple events in quick succession to handle rapid key presses
+        let mut event_count = 0;
+        const MAX_EVENTS_PER_CYCLE: usize = 10; // Limit to prevent blocking
+        
+        while event_count < MAX_EVENTS_PER_CYCLE && crossterm::event::poll(std::time::Duration::from_millis(0))? {
+            // Debug log that we found an event
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("debug_tui.log") 
+            {
+                let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
+                let _ = writeln!(file, "[{}] Event detected, reading...", timestamp);
+            }
             if let Event::Key(key_event) = event::read()? {
+                // Debug log key events
+                if let Ok(mut file) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("debug_tui.log") 
+                {
+                    let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
+                    let _ = writeln!(file, "[{}] Key event: {:?}", timestamp, key_event.code);
+                }
+                
                 app.handle_key_event(key_event.code).await?;
+                events_processed = true;
+                event_count += 1;
                 
                 if app.should_quit {
                     break;
@@ -240,11 +453,19 @@ pub async fn run_app_async(config: Config, database: DatabaseManagerSqlx) -> Res
             }
         }
         
-        // Update views
-        app.refresh_current_view();
+        // Check if we should quit after processing events
+        if app.should_quit {
+            break;
+        }
         
-        // Draw the UI
+        // Always refresh views and draw UI to ensure responsiveness
+        app.refresh_current_view();
         terminal.draw(|f| app.draw(f))?;
+        
+        // Small delay to maintain reasonable frame rate
+        // Shorter delay when events were processed for better responsiveness
+        let delay_ms = if events_processed { 8 } else { 16 };
+        tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
     }
     
     // Cleanup

@@ -245,8 +245,57 @@ impl AsyncStateManager {
                         self.log_messages.remove(0);
                     }
                 }
-                _ => {
-                    // Other updates are handled by the specific methods
+                StateUpdate::OperationStarted { id, operation } => {
+                    let async_op = AsyncOperation {
+                        id: id.clone(),
+                        operation: operation.clone(),
+                        start_time: Utc::now(),
+                        progress: 0.0,
+                        current_message: "Starting...".to_string(),
+                        is_cancellable: false,
+                    };
+                    self.pending_operations.insert(id, async_op);
+                    self.current_state = AppState::Loading { operation, progress: 0.0 };
+                }
+                StateUpdate::OperationProgress { id, progress, message } => {
+                    if let Some(op) = self.pending_operations.get_mut(&id) {
+                        op.progress = progress;
+                        op.current_message = message.clone();
+                        self.current_state = AppState::Loading { 
+                            operation: op.operation.clone(), 
+                            progress 
+                        };
+                    }
+                }
+                StateUpdate::OperationCompleted { id, result } => {
+                    if let Some(op) = self.pending_operations.remove(&id) {
+                        let completed = CompletedOperation {
+                            id: op.id,
+                            operation: op.operation,
+                            start_time: op.start_time,
+                            end_time: Utc::now(),
+                            result: result.clone(),
+                        };
+                        self.completed_operations.push(completed);
+                        
+                        // Update current state based on result
+                        match result {
+                            Ok(msg) => {
+                                self.current_state = AppState::Success { message: msg.clone() };
+                            }
+                            Err(err) => {
+                                self.current_state = AppState::Error { message: err.clone() };
+                            }
+                        }
+                        
+                        // Return to idle after a brief moment (this could be enhanced with a timer)
+                        if self.pending_operations.is_empty() {
+                            self.current_state = AppState::Idle;
+                        }
+                    }
+                }
+                StateUpdate::StockListUpdated { .. } => {
+                    // StockListUpdated is handled by individual views, not the state manager
                 }
             }
         }

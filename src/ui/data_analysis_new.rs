@@ -7,6 +7,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, Paragraph},
     Frame,
 };
+use std::io::Write;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
@@ -456,6 +457,19 @@ impl View for DataAnalysisView {
     }
 
     fn handle_key(&mut self, key: crossterm::event::KeyCode) -> Result<bool> {
+        // Debug log key events
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("debug_tui.log") 
+        {
+            let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
+            let _ = writeln!(file, "[{}] Data analysis view received key: {:?}, available_stocks: {}, selected_stock: {:?}, selected_index: {}", 
+                          timestamp, key, self.available_stocks.len(), 
+                          self.selected_stock.as_ref().map(|s| s.symbol.as_str()), 
+                          self.selected_stock_index);
+        }
+        
         // Process any pending log messages
         self.process_pending_logs();
         
@@ -478,19 +492,61 @@ impl View for DataAnalysisView {
 
         match key {
             crossterm::event::KeyCode::Up => {
+                if let Ok(mut file) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("debug_tui.log") 
+                {
+                    let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
+                    let _ = writeln!(file, "[{}] Up key - selected_stock.is_none(): {}, available_stocks.is_empty(): {}", 
+                                  timestamp, self.selected_stock.is_none(), self.available_stocks.is_empty());
+                }
+                
                 if self.selected_stock.is_none() && !self.available_stocks.is_empty() {
+                    let old_index = self.selected_stock_index;
                     self.selected_stock_index = self.selected_stock_index.saturating_sub(1);
                     if self.selected_stock_index >= self.available_stocks.len() {
                         self.selected_stock_index = self.available_stocks.len().saturating_sub(1);
+                    }
+                    
+                    if let Ok(mut file) = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open("debug_tui.log") 
+                    {
+                        let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
+                        let _ = writeln!(file, "[{}] Up key navigation: {} -> {}", 
+                                      timestamp, old_index, self.selected_stock_index);
                     }
                 }
                 Ok(true)
             }
             crossterm::event::KeyCode::Down => {
+                if let Ok(mut file) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("debug_tui.log") 
+                {
+                    let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
+                    let _ = writeln!(file, "[{}] Down key - selected_stock.is_none(): {}, available_stocks.is_empty(): {}", 
+                                  timestamp, self.selected_stock.is_none(), self.available_stocks.is_empty());
+                }
+                
                 if self.selected_stock.is_none() && !self.available_stocks.is_empty() {
+                    let old_index = self.selected_stock_index;
                     self.selected_stock_index = self.selected_stock_index.saturating_add(1);
                     if self.selected_stock_index >= self.available_stocks.len() {
                         self.selected_stock_index = 0;
+                    }
+                    
+                    if let Ok(mut file) = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open("debug_tui.log") 
+                    {
+                        let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
+                        let _ = writeln!(file, "[{}] Down key navigation: {} -> {}", 
+                                      timestamp, old_index, self.selected_stock_index);
                     }
                 }
                 Ok(true)
@@ -660,6 +716,24 @@ impl View for DataAnalysisView {
                         self.add_log_message(LogLevel::Error, &format!("Operation {} failed: {}", id, err));
                     }
                 }
+                Ok(true)
+            }
+            StateUpdate::StockListUpdated { stocks } => {
+                // Convert stock symbols to StockInfo objects (for now without detailed data)
+                self.available_stocks = stocks.iter().map(|symbol| StockInfo {
+                    symbol: symbol.clone(),
+                    company_name: symbol.clone(), // Placeholder - could be enhanced later
+                    data_points: 0,
+                    latest_date: None,
+                    earliest_date: None,
+                }).collect();
+                
+                // Reset selection if it's out of bounds
+                if self.selected_stock_index >= self.available_stocks.len() {
+                    self.selected_stock_index = 0;
+                }
+                
+                self.add_log_message(LogLevel::Info, &format!("Received stock list update with {} stocks", stocks.len()));
                 Ok(true)
             }
             _ => Ok(false)

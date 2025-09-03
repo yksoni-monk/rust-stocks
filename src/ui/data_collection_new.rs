@@ -894,11 +894,29 @@ impl View for DataCollectionView {
     }
 
     fn handle_key(&mut self, key: crossterm::event::KeyCode) -> Result<bool> {
+        // Debug log key events
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("debug_tui.log") 
+        {
+            let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
+            let _ = writeln!(file, "[{}] Data collection view received key: {:?}, has_active_ops: {}, confirmation_state: {:?}, stock_selection_state: {:?}, selected_action: {}", 
+                          timestamp, key, 
+                          self.state_manager.has_active_operations(),
+                          self.confirmation_state.is_some(),
+                          self.stock_selection_state.is_some(),
+                          self.selected_action);
+        }
+        
         // Process any pending log messages
         self.process_pending_logs();
         
-        // If we have active operations, only allow quit
-        if self.state_manager.has_active_operations() {
+        // If we have active operations, only allow quit (unless we're in interactive selection states)
+        if self.state_manager.has_active_operations() && 
+           self.confirmation_state.is_none() && 
+           self.stock_selection_state.is_none() && 
+           self.date_selection_state.is_none() {
             if key == crossterm::event::KeyCode::Char('q') || key == crossterm::event::KeyCode::Esc {
                 // Cancel all active operations
                 let active_operations: Vec<String> = self.state_manager.get_active_operations()
@@ -946,13 +964,31 @@ impl View for DataCollectionView {
         if let Some(ref mut stock_state) = self.stock_selection_state {
             match key {
                 crossterm::event::KeyCode::Up => {
+                    let old_index = stock_state.selected_index;
                     if stock_state.selected_index > 0 {
                         stock_state.selected_index -= 1;
                     }
+                    if let Ok(mut file) = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open("debug_tui.log") 
+                    {
+                        let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
+                        let _ = writeln!(file, "[{}] Stock selection Up navigation: {} -> {}", timestamp, old_index, stock_state.selected_index);
+                    }
                 }
                 crossterm::event::KeyCode::Down => {
+                    let old_index = stock_state.selected_index;
                     if stock_state.selected_index < stock_state.available_stocks.len().saturating_sub(1) {
                         stock_state.selected_index += 1;
+                    }
+                    if let Ok(mut file) = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open("debug_tui.log") 
+                    {
+                        let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
+                        let _ = writeln!(file, "[{}] Stock selection Down navigation: {} -> {}", timestamp, old_index, stock_state.selected_index);
                     }
                 }
                 crossterm::event::KeyCode::Char(c) => {
@@ -1066,23 +1102,59 @@ impl View for DataCollectionView {
         // Handle main view navigation
         match key {
             crossterm::event::KeyCode::Up => {
+                let old_action = self.selected_action;
                 self.selected_action = if self.selected_action == 0 {
                     self.actions.len() - 1
                 } else {
                     self.selected_action - 1
                 };
+                if let Ok(mut file) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("debug_tui.log") 
+                {
+                    let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
+                    let _ = writeln!(file, "[{}] Data collection Up navigation: {} -> {}", timestamp, old_action, self.selected_action);
+                }
                 Ok(true)
             }
             crossterm::event::KeyCode::Down => {
+                let old_action = self.selected_action;
                 self.selected_action = (self.selected_action + 1) % self.actions.len();
+                if let Ok(mut file) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("debug_tui.log") 
+                {
+                    let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
+                    let _ = writeln!(file, "[{}] Data collection Down navigation: {} -> {}", timestamp, old_action, self.selected_action);
+                }
                 Ok(true)
             }
             crossterm::event::KeyCode::Enter => {
                 // Execute the selected action
+                if let Ok(mut file) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("debug_tui.log") 
+                {
+                    let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
+                    let _ = writeln!(file, "[{}] Data collection Enter pressed, executing action {}", timestamp, self.selected_action);
+                }
                 self.execute_selected_action();
                 Ok(true)
             }
-            _ => Ok(false)
+            _ => {
+                if let Ok(mut file) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("debug_tui.log") 
+                {
+                    let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
+                    let _ = writeln!(file, "[{}] Data collection unhandled key: {:?}", timestamp, key);
+                }
+                Ok(false)
+            }
         }
     }
 

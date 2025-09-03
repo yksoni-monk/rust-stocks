@@ -1,10 +1,11 @@
 use anyhow::Result;
 use chrono::{NaiveDate, DateTime, Utc};
-use sqlx::{sqlite::SqlitePoolOptions, SqlitePool, Row};
+use sqlx::{sqlite::{SqlitePoolOptions, SqliteConnectOptions}, SqlitePool, Row};
 use std::collections::HashMap;
 use crate::models::{Stock, DailyPrice, StockStatus, StockDataStats};
 
 /// SQLX-based database manager for the Rust Stocks TUI
+#[derive(Clone)]
 pub struct DatabaseManagerSqlx {
     pool: SqlitePool,
 }
@@ -12,13 +13,70 @@ pub struct DatabaseManagerSqlx {
 impl DatabaseManagerSqlx {
     /// Create a new database manager with SQLX
     pub async fn new(database_url: &str) -> Result<Self> {
+        // Ensure the connection string is properly formatted for SQLite
+        let connection_string = if database_url.starts_with("sqlite:") {
+            database_url.to_string()
+        } else {
+            format!("sqlite:{}", database_url)
+        };
+        
+        println!("Connecting to database: {}", connection_string);
+        
         let pool = SqlitePoolOptions::new()
             .max_connections(5)
-            .connect(database_url)
+            .connect_with(SqliteConnectOptions::new().filename(database_url).create_if_missing(true))
             .await?;
         
-        // Run migrations
-        sqlx::migrate!("./migrations").run(&pool).await?;
+        println!("Connected successfully, creating schema...");
+        
+        // Create tables directly instead of using migrations
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS stocks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT UNIQUE NOT NULL,
+                company_name TEXT NOT NULL,
+                sector TEXT,
+                industry TEXT,
+                market_cap REAL,
+                status TEXT NOT NULL DEFAULT 'active',
+                first_trading_date DATE,
+                last_updated DATETIME NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            "#
+        ).execute(&pool).await?;
+        
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS daily_prices (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                stock_id INTEGER NOT NULL,
+                date DATE NOT NULL,
+                open_price REAL,
+                high_price REAL,
+                low_price REAL,
+                close_price REAL NOT NULL,
+                volume INTEGER,
+                pe_ratio REAL,
+                market_cap REAL,
+                dividend_yield REAL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (stock_id) REFERENCES stocks(id),
+                UNIQUE(stock_id, date)
+            )
+            "#
+        ).execute(&pool).await?;
+        
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            "#
+        ).execute(&pool).await?;
         
         Ok(Self { pool })
     }
@@ -318,7 +376,7 @@ impl DatabaseManagerSqlx {
         let price_count = sqlx::query("SELECT COUNT(*) as count FROM daily_prices")
             .fetch_one(&self.pool)
             .await?;
-        stats.insert("total_prices".to_string(), price_count.get::<i64, _>("count"));
+        stats.insert("total_price_records".to_string(), price_count.get::<i64, _>("count"));
 
         // Count unique dates
         let date_count = sqlx::query("SELECT COUNT(DISTINCT date) as count FROM daily_prices")
@@ -334,6 +392,48 @@ impl DatabaseManagerSqlx {
         sqlx::query("DELETE FROM daily_prices").execute(&self.pool).await?;
         sqlx::query("DELETE FROM stocks").execute(&self.pool).await?;
         Ok(())
+    }
+
+    /// Set the last update date
+    pub async fn set_last_update_date(&self, date: NaiveDate) -> Result<()> {
+        self.set_metadata("last_update_date", &date.format("%Y-%m-%d").to_string()).await
+    }
+
+    /// Get the last update date
+    pub async fn get_last_update_date(&self) -> Result<Option<NaiveDate>> {
+        if let Some(date_str) = self.get_metadata("last_update_date").await? {
+            NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")
+                .map(Some)
+                .map_err(|e| anyhow::anyhow!("Failed to parse date: {}", e))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Get P/E ratio on a specific date
+    pub async fn get_pe_ratio_on_date(&self, stock_id: i64, date: NaiveDate) -> Result<Option<f64>> {
+        let row = sqlx::query(
+            "SELECT pe_ratio FROM daily_prices WHERE stock_id = ? AND date = ?"
+        )
+        .bind(stock_id)
+        .bind(date)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|r| r.get::<Option<f64>, _>("pe_ratio")).flatten())
+    }
+
+    /// Get market cap on a specific date
+    pub async fn get_market_cap_on_date(&self, stock_id: i64, date: NaiveDate) -> Result<Option<f64>> {
+        let row = sqlx::query(
+            "SELECT market_cap FROM daily_prices WHERE stock_id = ? AND date = ?"
+        )
+        .bind(stock_id)
+        .bind(date)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|r| r.get::<Option<f64>, _>("market_cap")).flatten())
     }
 
     /// Close the database connection pool

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use crate::common::logging::{init_test_logging, log_test_step, log_test_data};
 use rust_stocks::{
     concurrent_fetcher::{ConcurrentFetchConfig, DateRange, fetch_stocks_concurrently},
-    database::DatabaseManager,
+    database_sqlx::DatabaseManagerSqlx,
     models::Config,
 };
 
@@ -19,7 +19,7 @@ async fn test_concurrent_fetch_integration() {
 
     // Load configuration
     let config = Config::from_env().expect("Failed to load config");
-    let database = DatabaseManager::new(&config.database_path).expect("Failed to create database");
+    let database = DatabaseManagerSqlx::new(&config.database_path).await.expect("Failed to create database");
     let database = Arc::new(database);
 
     // Test configuration
@@ -36,7 +36,7 @@ async fn test_concurrent_fetch_integration() {
     log_test_data("Test config", &fetch_config);
 
     // Ensure we have some stocks in the database
-    let stocks = database.get_active_stocks().expect("Failed to get stocks");
+    let stocks = database.get_active_stocks().await.expect("Failed to get stocks");
     if stocks.is_empty() {
         log_test_step("No stocks found in database, skipping test");
         return;
@@ -69,7 +69,7 @@ async fn test_concurrent_fetch_with_small_date_range() {
     log_test_step("Testing concurrent fetch with small date range");
 
     let config = Config::from_env().expect("Failed to load config");
-    let database = DatabaseManager::new(&config.database_path).expect("Failed to create database");
+    let database = DatabaseManagerSqlx::new(&config.database_path).await.expect("Failed to create database");
     let database = Arc::new(database);
 
     // Test with a smaller date range to reduce API calls
@@ -85,7 +85,7 @@ async fn test_concurrent_fetch_with_small_date_range() {
 
     log_test_data("Small range test config", &fetch_config);
 
-    let stocks = database.get_active_stocks().expect("Failed to get stocks");
+    let stocks = database.get_active_stocks().await.expect("Failed to get stocks");
     if stocks.is_empty() {
         log_test_step("No stocks found in database, skipping test");
         return;
@@ -112,7 +112,7 @@ async fn test_concurrent_fetch_error_handling() {
     log_test_step("Testing concurrent fetch error handling");
 
     let config = Config::from_env().expect("Failed to load config");
-    let database = DatabaseManager::new(&config.database_path).expect("Failed to create database");
+    let database = DatabaseManagerSqlx::new(&config.database_path).await.expect("Failed to create database");
     let database = Arc::new(database);
 
     // Test with invalid date range (future dates) to trigger errors
@@ -128,7 +128,7 @@ async fn test_concurrent_fetch_error_handling() {
 
     log_test_data("Error handling test config", &fetch_config);
 
-    let stocks = database.get_active_stocks().expect("Failed to get stocks");
+    let stocks = database.get_active_stocks().await.expect("Failed to get stocks");
     if stocks.is_empty() {
         log_test_step("No stocks found in database, skipping test");
         return;

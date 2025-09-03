@@ -89,7 +89,7 @@ impl StockTuiApp {
         // Render tab bar
         self.render_tab_bar(f, chunks[0]);
         
-        // Render content based on selected tab
+        // Render content based on selected tab (without adding borders - let each view handle its own layout)
         match self.selected_tab {
             0 => self.data_collection.render(f, chunks[1]),
             1 => self.data_analysis.render(f, chunks[1]),

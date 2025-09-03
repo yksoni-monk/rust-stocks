@@ -1,6 +1,6 @@
 use anyhow::Result;
 use chrono::{NaiveDate, Utc};
-use rust_stocks::database::DatabaseManager;
+use rust_stocks::database_sqlx::DatabaseManagerSqlx;
 use rust_stocks::models::{Config, Stock, StockStatus};
 use tracing::{info, Level};
 
@@ -17,10 +17,10 @@ async fn main() -> Result<()> {
 
     // Load configuration and initialize database
     let config = Config::from_env()?;
-    let database = DatabaseManager::new(&config.database_path)?;
+    let database = DatabaseManagerSqlx::new(&config.database_path).await?;
 
     // Check when S&P 500 list was last updated
-    let last_update = database.get_metadata("sp500_last_updated")?;
+    let last_update = database.get_metadata("sp500_last_updated").await?;
     let should_update = match last_update {
         Some(date_str) => {
             let last_date = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")?;
@@ -46,13 +46,14 @@ async fn main() -> Result<()> {
     }
 
     // Show current stats
-    let (stock_count, _, _) = database.get_stats()?;
+    let stats = database.get_stats().await?;
+    let stock_count = stats.get("total_stocks").unwrap_or(&0);
     info!("📊 Database contains {} S&P 500 companies", stock_count);
 
     Ok(())
 }
 
-async fn update_sp500_list(database: &DatabaseManager) -> Result<()> {
+async fn update_sp500_list(database: &DatabaseManagerSqlx) -> Result<()> {
     info!("🌐 Fetching S&P 500 list from GitHub...");
     
     // Fetch CSV data from GitHub
@@ -88,17 +89,17 @@ async fn update_sp500_list(database: &DatabaseManager) -> Result<()> {
     info!("✅ Parsed {} S&P 500 companies", companies.len());
     
     // Clear existing S&P 500 companies and insert new ones
-    database.clear_stocks()?;
+    database.clear_stocks().await?;
     
     let mut inserted = 0;
     for company in companies {
-        database.upsert_stock(&company)?;
+        database.upsert_stock(&company).await?;
         inserted += 1;
     }
     
     // Update metadata with current date
     let today = Utc::now().date_naive().format("%Y-%m-%d").to_string();
-    database.set_metadata("sp500_last_updated", &today)?;
+    database.set_metadata("sp500_last_updated", &today).await?;
     
     info!("✅ Updated {} S&P 500 companies in database", inserted);
     info!("📅 Set last update date: {}", today);

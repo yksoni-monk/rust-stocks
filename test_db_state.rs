@@ -5,12 +5,12 @@ use tracing_subscriber::{FmtSubscriber, EnvFilter};
 mod api;
 mod analysis;
 mod data_collector;
-mod database;
+mod database_sqlx;
 mod models;
 
 use crate::analysis::AnalysisEngine;
 use crate::api::SchwabClient;
-use crate::database::DatabaseManager;
+use crate::database_sqlx::DatabaseManagerSqlx;
 use crate::models::Config;
 
 #[tokio::main]
@@ -29,7 +29,7 @@ async fn main() -> Result<()> {
     println!("✅ Configuration loaded");
 
     // Initialize database
-    let database = DatabaseManager::new(&config.database_path)?;
+    let database = DatabaseManagerSqlx::new(&config.database_path).await?;
     println!("✅ Database initialized at: {}", config.database_path);
 
     // Initialize analysis engine

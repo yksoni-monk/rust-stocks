@@ -9,7 +9,7 @@ use rust_stocks::{
     api::{SchwabClient, StockDataProvider},
     concurrent_fetcher::{ConcurrentFetchConfig, DateRange, fetch_stocks_concurrently},
     data_collector::DataCollector,
-    database::DatabaseManager,
+    database_sqlx::DatabaseManagerSqlx,
     models::Config,
     utils::MarketCalendar,
 };
@@ -139,12 +139,12 @@ async fn quick_test(start_str: &str, end_str: Option<&str>) -> Result<()> {
 
     // Setup
     let config = Config::from_env()?;
-    let database = DatabaseManager::new(&config.database_path)?;
+    let database = DatabaseManagerSqlx::new(&config.database_path).await?;
     let client = SchwabClient::new(&config)?;
 
     // Get first 10 stocks
     let data_collector = DataCollector::new(client, database, config);
-    let stocks = data_collector.get_active_stocks()?;
+    let stocks = data_collector.get_active_stocks().await?;
     let test_stocks: Vec<_> = stocks.into_iter().take(10).collect();
 
     info!("📊 Testing with {} stocks", test_stocks.len());
@@ -195,10 +195,10 @@ async fn detailed_collection(start_str: &str, end_str: Option<String>, batch_siz
 
     // Setup
     let config = Config::from_env()?;
-    let database = DatabaseManager::new(&config.database_path)?;
+    let database = Arc::new(DatabaseManagerSqlx::new(&config.database_path).await?);
 
     // Get all active stocks
-    let stocks = database.get_active_stocks()?;
+    let stocks = database.get_active_stocks().await?;
     info!("📊 Found {} active stocks", stocks.len());
 
     // Process in batches
@@ -216,7 +216,7 @@ async fn detailed_collection(start_str: &str, end_str: Option<String>, batch_siz
             let client = SchwabClient::new(&Config::from_env()?)?;
             match DataCollector::fetch_stock_history(
                 Arc::new(client),
-                Arc::new(database.clone()),
+                database.clone(),
                 stock.clone(),
                 start_date,
                 end_date
@@ -253,11 +253,11 @@ async fn concurrent_collection(start_str: Option<&str>, end_str: Option<&str>, t
 
     // Setup
     let config = Config::from_env()?;
-    let database = DatabaseManager::new(&config.database_path)?;
+    let database = DatabaseManagerSqlx::new(&config.database_path).await?;
     let database = Arc::new(database);
 
     // Check if we have stocks
-    let stocks = database.get_active_stocks()?;
+    let stocks = database.get_active_stocks().await?;
     if stocks.is_empty() {
         error!("❌ No stocks found in database. Please run 'cargo run --bin update_sp500' first.");
         return Ok(());
@@ -307,14 +307,14 @@ async fn single_stock_test(symbol: &str, start_str: &str, end_str: &str) -> Resu
 
     // Setup
     let config = Config::from_env()?;
-    let database = DatabaseManager::new(&config.database_path)?;
+    let database = DatabaseManagerSqlx::new(&config.database_path).await?;
     let client = SchwabClient::new(&config)?;
 
     info!("✅ Setup complete");
 
     // Check if stock exists in database
     info!("📊 Checking stock in database...");
-    match database.get_stock_by_symbol(symbol)? {
+    match database.get_stock_by_symbol(symbol).await? {
         Some(stock) => {
             info!("✅ Stock found in database: {} ({})", stock.symbol, stock.company_name);
         }
@@ -325,7 +325,10 @@ async fn single_stock_test(symbol: &str, start_str: &str, end_str: &str) -> Resu
 
     // Check database stats
     info!("📊 Database statistics...");
-    let (total_stocks, total_prices, last_update) = database.get_stats()?;
+    let stats = database.get_stats().await?;
+    let total_stocks = stats.get("total_stocks").unwrap_or(&0);
+    let total_prices = stats.get("total_prices").unwrap_or(&0);
+    let last_update: Option<String> = None; // TODO: Add to stats
     info!("Total stocks: {}", total_stocks);
     info!("Total price records: {}", total_prices);
     info!("Last update: {:?}", last_update);

@@ -6,18 +6,17 @@ pub mod models;
 pub mod database_sqlx;
 pub mod ui;
 pub mod utils;
-// Remaining modules temporarily disabled during SQLX migration
-// pub mod database;
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_database_utilities() {
+    #[tokio::test]
+    async fn test_database_utilities() {
         // Test that we can create a database manager directly
         let db_path = "tests/tmp/test_lib.db";
-        let db_manager = database::DatabaseManager::new(db_path)
+        std::fs::create_dir_all("tests/tmp").expect("Failed to create tmp directory");
+        let db_manager = database_sqlx::DatabaseManagerSqlx::new(db_path).await
             .expect("Failed to create database manager");
         
         // Test that we can insert a stock
@@ -33,11 +32,11 @@ mod tests {
             last_updated: Some(chrono::Utc::now()),
         };
         
-        let stock_id = db_manager.upsert_stock(&stock).expect("Failed to insert stock");
+        let stock_id = db_manager.upsert_stock(&stock).await.expect("Failed to insert stock");
         assert!(stock_id > 0);
         
         // Test that we can retrieve the stock
-        let stocks = db_manager.get_active_stocks().expect("Failed to get stocks");
+        let stocks = db_manager.get_active_stocks().await.expect("Failed to get stocks");
         assert_eq!(stocks.len(), 1);
         assert_eq!(stocks[0].symbol, "AAPL");
         

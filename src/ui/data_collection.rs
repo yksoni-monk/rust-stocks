@@ -1056,6 +1056,7 @@ impl DataCollectionView {
             return;
         }
 
+        // Main data collection view
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([

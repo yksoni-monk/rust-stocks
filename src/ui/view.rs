@@ -18,12 +18,12 @@ pub trait View {
     }
     
     /// Handle view-specific key events (sync version)
-    fn handle_key(&mut self, key: crossterm::event::KeyCode) -> Result<bool> {
+    fn handle_key(&mut self, _key: crossterm::event::KeyCode) -> Result<bool> {
         Ok(false) // Default: not handled
     }
     
     /// Handle view-specific state updates (sync version)
-    fn handle_state_update(&mut self, update: &crate::ui::state::StateUpdate) -> Result<bool> {
+    fn handle_state_update(&mut self, _update: &crate::ui::state::StateUpdate) -> Result<bool> {
         Ok(false) // Default: not handled
     }
     
@@ -176,7 +176,7 @@ impl BaseView {
 }
 
 impl View for BaseView {
-    fn render(&self, f: &mut Frame, area: Rect) {
+    fn render(&self, _f: &mut Frame, _area: Rect) {
         // Default empty render - subclasses should override
     }
     

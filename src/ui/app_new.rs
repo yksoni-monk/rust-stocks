@@ -42,7 +42,7 @@ pub struct StockTuiApp {
 }
 
 impl StockTuiApp {
-    pub fn new(config: &Config, database: DatabaseManagerSqlx) -> Result<Self> {
+    pub fn new(_config: &Config, database: DatabaseManagerSqlx) -> Result<Self> {
         // Create global state manager
         let global_state_manager = AsyncStateManager::new();
         let log_sender = global_state_manager.get_broadcast_sender();

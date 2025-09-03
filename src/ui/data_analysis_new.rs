@@ -12,7 +12,7 @@ use std::sync::Arc;
 use tokio::sync::broadcast;
 
 use crate::ui::{
-    View, ViewLayout,
+    View,
     state::{AsyncStateManager, LogLevel, StateUpdate},
 };
 use crate::database_sqlx::DatabaseManagerSqlx;
@@ -544,7 +544,7 @@ impl View for DataAnalysisView {
                             Ok(date) => {
                                 let symbol = stock.symbol.clone();
                                 let date_clone = date;
-                                let stock_clone = stock.clone();
+                                let _stock_clone = stock.clone();
                                 
                                 // Clone database reference to avoid borrow checker issues
                                 let database = if let Some(db) = &self.database {

@@ -60,7 +60,7 @@ impl TradingWeekBatchCalculator {
         let mut batch_number = 1;
 
         while current_date <= to_date {
-            let week_start = MarketCalendar::get_week_start(current_date);
+            let _week_start = MarketCalendar::get_week_start(current_date);
             let week_end = MarketCalendar::get_week_end(current_date);
             
             // Ensure we don't go beyond the to_date

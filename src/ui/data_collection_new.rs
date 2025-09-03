@@ -1,5 +1,5 @@
 use anyhow::Result;
-use chrono::{DateTime, NaiveDate, Utc, Datelike};
+use chrono::{NaiveDate, Utc, Datelike};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -14,7 +14,7 @@ use std::fs::OpenOptions;
 use tokio::sync::broadcast;
 
 use crate::ui::{
-    View, ViewLayout,
+    View,
     state::{AsyncStateManager, LogLevel, StateUpdate},
 };
 use crate::database_sqlx::DatabaseManagerSqlx;

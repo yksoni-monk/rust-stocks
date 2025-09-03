@@ -13,7 +13,7 @@ use tracing_subscriber::{self, FmtSubscriber};
 
 use crate::database_sqlx::DatabaseManagerSqlx;
 use crate::models::Config;
-use crate::ui::app::run_app_async;
+use crate::ui::app_new::run_app_async;
 
 #[tokio::main]
 async fn main() -> Result<()> {

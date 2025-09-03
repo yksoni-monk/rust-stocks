@@ -1,5 +1,5 @@
 use anyhow::Result;
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, NaiveDate, Utc, Datelike};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -71,6 +71,94 @@ pub struct DateSelectionState {
 pub enum DateField {
     StartDate,
     EndDate,
+}
+
+/// Trading week batch definition
+#[derive(Debug, Clone)]
+pub struct TradingWeekBatch {
+    pub batch_number: usize,
+    pub start_date: NaiveDate,
+    pub end_date: NaiveDate,
+    pub description: String,
+}
+
+/// Trading week batch calculator
+pub struct TradingWeekBatchCalculator;
+
+impl TradingWeekBatchCalculator {
+    /// Calculate trading week batches for a given date range
+    pub fn calculate_batches(start_date: NaiveDate, end_date: NaiveDate) -> Vec<TradingWeekBatch> {
+        let mut batches = Vec::new();
+        let mut batch_number = 1;
+        
+        // Start with the first trading week that contains the start date
+        let mut current_week_start = Self::get_week_start(start_date);
+        
+        while current_week_start <= end_date {
+            // Find the end of the current trading week (Friday)
+            let current_week_end = Self::get_week_end(current_week_start);
+            
+            // Adjust to user's requested range
+            let batch_start = std::cmp::max(current_week_start, start_date);
+            let batch_end = std::cmp::min(current_week_end, end_date);
+            
+            // Skip if batch is empty
+            if batch_start > batch_end {
+                // Move to next week
+                current_week_start = current_week_end + chrono::Duration::days(1);
+                continue;
+            }
+
+            let description = format!("Week {}: {} to {}", 
+                batch_number, 
+                batch_start.format("%Y-%m-%d"), 
+                batch_end.format("%Y-%m-%d")
+            );
+
+            batches.push(TradingWeekBatch {
+                batch_number,
+                start_date: batch_start,
+                end_date: batch_end,
+                description,
+            });
+
+            // Move to next week (Monday of next week)
+            current_week_start = current_week_end + chrono::Duration::days(1);
+            batch_number += 1;
+        }
+
+        batches
+    }
+
+    /// Get the start of the trading week (Monday) for a given date
+    pub fn get_week_start(date: NaiveDate) -> NaiveDate {
+        let weekday = date.weekday();
+        let days_to_monday = match weekday {
+            chrono::Weekday::Mon => 0,
+            chrono::Weekday::Tue => 1,
+            chrono::Weekday::Wed => 2,
+            chrono::Weekday::Thu => 3,
+            chrono::Weekday::Fri => 4,
+            chrono::Weekday::Sat => 5,
+            chrono::Weekday::Sun => 6,
+        };
+        date - chrono::Duration::days(days_to_monday as i64)
+    }
+
+    /// Get the end of the trading week (Friday) for a given date
+    pub fn get_week_end(date: NaiveDate) -> NaiveDate {
+        let weekday = date.weekday();
+        let days_to_friday = match weekday {
+            chrono::Weekday::Mon => 4,
+            chrono::Weekday::Tue => 3,
+            chrono::Weekday::Wed => 2,
+            chrono::Weekday::Thu => 1,
+            chrono::Weekday::Fri => 0,
+            chrono::Weekday::Sat => 6,
+            chrono::Weekday::Sun => 5,
+        };
+        date + chrono::Duration::days(days_to_friday as i64)
+    }
 }
 
 /// Refactored DataCollectionView implementing the View trait
@@ -474,7 +562,7 @@ impl DataCollectionView {
             let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
 
             // Calculate trading week batches
-            let batches = crate::utils::TradingWeekBatchCalculator::calculate_batches(start_date_clone, end_date_clone);
+                            let batches = TradingWeekBatchCalculator::calculate_batches(start_date_clone, end_date_clone);
             let log_message = format!("📊 Created {} trading week batches", batches.len());
             let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
                 level: LogLevel::Info, 

@@ -3,7 +3,7 @@
 use test_log::test;
 use pretty_assertions::assert_eq;
 use chrono::NaiveDate;
-use rust_stocks::ui::data_collection::TradingWeekBatchCalculator;
+use rust_stocks::ui::data_collection_new::{TradingWeekBatchCalculator, TradingWeekBatch};
 
 #[test]
 fn test_trading_week_batch_calculation_basic() {
@@ -53,6 +53,7 @@ fn test_trading_week_batch_calculation_single_week() {
     assert_eq!(batches[0].batch_number, 1);
     assert_eq!(batches[0].start_date, NaiveDate::from_ymd_opt(2025, 8, 6).unwrap()); // Respects user's start date
     assert_eq!(batches[0].end_date, NaiveDate::from_ymd_opt(2025, 8, 8).unwrap());   // Friday
+    assert_eq!(batches[0].description, "Week 1: 2025-08-06 to 2025-08-08");
 }
 
 #[test]
@@ -69,6 +70,7 @@ fn test_trading_week_batch_calculation_weekend_start() {
     assert_eq!(batches[0].batch_number, 1);
     assert_eq!(batches[0].start_date, NaiveDate::from_ymd_opt(2025, 8, 9).unwrap()); // Respects user's start date
     assert_eq!(batches[0].end_date, NaiveDate::from_ymd_opt(2025, 8, 15).unwrap());   // Friday
+    assert_eq!(batches[0].description, "Week 1: 2025-08-09 to 2025-08-15");
 }
 
 #[test]
@@ -83,6 +85,7 @@ fn test_trading_week_batch_calculation_weekend_end() {
     assert_eq!(batches[0].batch_number, 1);
     assert_eq!(batches[0].start_date, NaiveDate::from_ymd_opt(2025, 8, 11).unwrap()); // Monday
     assert_eq!(batches[0].end_date, NaiveDate::from_ymd_opt(2025, 8, 15).unwrap());   // Friday (last trading day)
+    assert_eq!(batches[0].description, "Week 1: 2025-08-11 to 2025-08-15");
 }
 
 #[test]
@@ -101,11 +104,13 @@ fn test_trading_week_batch_calculation_multiple_months() {
     assert_eq!(batches[0].batch_number, 1);
     assert_eq!(batches[0].start_date, NaiveDate::from_ymd_opt(2024, 12, 30).unwrap());
     assert_eq!(batches[0].end_date, NaiveDate::from_ymd_opt(2025, 1, 3).unwrap());
+    assert_eq!(batches[0].description, "Week 1: 2024-12-30 to 2025-01-03");
     
     // Week 2: Jan 4 to Jan 10 (next trading week)
     assert_eq!(batches[1].batch_number, 2);
     assert_eq!(batches[1].start_date, NaiveDate::from_ymd_opt(2025, 1, 4).unwrap());
     assert_eq!(batches[1].end_date, NaiveDate::from_ymd_opt(2025, 1, 10).unwrap());
+    assert_eq!(batches[1].description, "Week 2: 2025-01-04 to 2025-01-10");
 }
 
 #[test]
@@ -120,6 +125,7 @@ fn test_trading_week_batch_calculation_single_day() {
     assert_eq!(batches[0].batch_number, 1);
     assert_eq!(batches[0].start_date, NaiveDate::from_ymd_opt(2025, 8, 6).unwrap()); // Respects user's start date
     assert_eq!(batches[0].end_date, NaiveDate::from_ymd_opt(2025, 8, 6).unwrap());   // Respects user's end date
+    assert_eq!(batches[0].description, "Week 1: 2025-08-06 to 2025-08-06");
 }
 
 #[test]
@@ -234,7 +240,6 @@ fn test_batch_descriptions() {
     let batches = TradingWeekBatchCalculator::calculate_batches(start_date, end_date);
     
     assert_eq!(batches.len(), 1);
-    assert_eq!(batches[0].description, "Week 1: 2025-08-06 to 2025-08-08");
     
     // Test multiple batches
     let start_date = NaiveDate::from_ymd_opt(2025, 8, 6).unwrap();

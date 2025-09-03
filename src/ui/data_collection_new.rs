@@ -235,7 +235,6 @@ impl DataCollectionView {
     fn start_operation_by_type(&mut self, action_id: &str) {
         match action_id {
             "single_stock" => {
-                self.add_log_message(LogLevel::Info, "Starting stock and date selection...");
                 self.start_stock_and_date_selection();
             }
             "all_stocks" => {
@@ -265,7 +264,7 @@ impl DataCollectionView {
             search_query: String::new(),
             is_searching: false,
         });
-        self.add_log_message(LogLevel::Info, "Loading S&P500 stocks from database...");
+        // Note: The async operation will log the success/failure via OperationCompleted state update
         
         // Start async operation to load S&P500 stocks
         let operation_id = "load_sp500_stocks".to_string();
@@ -282,11 +281,7 @@ impl DataCollectionView {
                     let symbols: Vec<String> = stocks.into_iter().map(|s| s.symbol).collect();
                     debug_log(&format!("Loaded {} stocks from database: {:?}", symbols.len(), &symbols[0..5]));
                     let _ = state_manager.complete_operation(&operation_id_clone, Ok(format!("Loaded {} S&P500 stocks", symbols.len())));
-                    // Use global broadcast sender instead of cloned state manager for logs
-                    let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
-                        level: LogLevel::Success, 
-                        message: format!("Loaded {} S&P500 stocks", symbols.len()) 
-                    });
+                    // Note: Don't send duplicate LogMessage - OperationCompleted will trigger the log via handle_state_update
                     
                     // Send stock list update to UI via global broadcast channel
                     debug_log("Sending StockListUpdated state update");
@@ -354,7 +349,8 @@ impl DataCollectionView {
 
     /// Run single stock collection
     fn run_single_stock_collection(&mut self, symbol: String, start_date: NaiveDate, end_date: NaiveDate) {
-        self.add_log_message(LogLevel::Info, &format!("Starting single stock collection for {} from {} to {}", symbol, start_date, end_date));
+        // Log the start of collection for user feedback
+        self.add_log_message(LogLevel::Info, &format!("Starting collection for {} from {} to {}", symbol, start_date, end_date));
 
         // Start async operation
         let operation_id = format!("single_stock_{}", symbol);
@@ -363,13 +359,15 @@ impl DataCollectionView {
         // Spawn the actual work
         let mut state_manager = self.state_manager.clone();
         let symbol_clone = symbol.clone();
+        let start_date_clone = start_date;
+        let end_date_clone = end_date;
         let global_broadcast_sender = self.global_broadcast_sender.clone().expect("Global broadcast sender not set");
         
         tokio::spawn(async move {
             // Create log file for debugging in archive folder
             let archive_dir = "archive/debug_logs";
             std::fs::create_dir_all(archive_dir).unwrap_or_else(|_| ());
-            let log_file_path = format!("{}/debug_collection_{}_{}_{}.log", archive_dir, symbol_clone, start_date, end_date);
+            let log_file_path = format!("{}/debug_collection_{}_{}_{}.log", archive_dir, symbol_clone, start_date_clone, end_date_clone);
             
             // Create log file inside the async task
             let log_file = std::fs::File::create(&log_file_path).unwrap_or_else(|_| {
@@ -378,7 +376,7 @@ impl DataCollectionView {
             });
             let mut log_writer = std::io::BufWriter::new(log_file);
 
-            let log_message = format!("🔄 Preparing to fetch {} from {} to {}", symbol_clone, start_date, end_date);
+            let log_message = format!("🔄 Preparing to fetch {} from {} to {}", symbol_clone, start_date_clone, end_date_clone);
             let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
                 level: LogLevel::Info, 
                 message: log_message.clone() 
@@ -468,7 +466,7 @@ impl DataCollectionView {
             let client_arc = Arc::new(client);
             let db_arc = Arc::new(database);
 
-            let log_message = format!("📡 Fetching {} ({} → {})", symbol_clone, start_date, end_date);
+            let log_message = format!("📡 Fetching {} ({} → {})", symbol_clone, start_date_clone, end_date_clone);
             let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
                 level: LogLevel::Info, 
                 message: log_message.clone() 
@@ -476,7 +474,7 @@ impl DataCollectionView {
             let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
 
             // Calculate trading week batches
-            let batches = crate::ui::data_collection::TradingWeekBatchCalculator::calculate_batches(start_date, end_date);
+            let batches = crate::ui::data_collection::TradingWeekBatchCalculator::calculate_batches(start_date_clone, end_date_clone);
             let log_message = format!("📊 Created {} trading week batches", batches.len());
             let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
                 level: LogLevel::Info, 
@@ -654,7 +652,11 @@ impl DataCollectionView {
 
     /// Render the logs
     fn render_logs(&self, f: &mut Frame, area: Rect) {
-        let recent_logs = self.state_manager.get_recent_logs(50); // Increased from 20 to 50
+        // Calculate available height for logs (subtract 2 for borders)
+        let available_height = area.height.saturating_sub(2) as usize;
+        let log_count = if available_height > 0 { available_height } else { 10 };
+        
+        let recent_logs = self.state_manager.get_recent_logs(log_count);
         let log_items: Vec<ListItem> = recent_logs
             .iter()
             .map(|log| {
@@ -681,9 +683,13 @@ impl DataCollectionView {
                 .title("Logs"))
             .style(Style::default().fg(Color::White));
 
-        // Auto-scroll to the bottom (latest logs)
+        // Auto-scroll to show the most recent logs at the bottom
         let mut list_state = ratatui::widgets::ListState::default();
-        if !recent_logs.is_empty() {
+        if !recent_logs.is_empty() && recent_logs.len() > available_height {
+            // If we have more logs than can fit, don't select any item to show the last logs
+            list_state.select(None);
+        } else if !recent_logs.is_empty() {
+            // If all logs fit, select the last one to highlight it
             list_state.select(Some(recent_logs.len() - 1));
         }
 
@@ -776,19 +782,14 @@ impl DataCollectionView {
 
     /// Render stock selection
     fn render_stock_selection(&self, f: &mut Frame, area: Rect, stock_state: &StockSelectionState) {
-        let view_layout = ViewLayout::new(area);
-        
-        // Title
-        let title = Paragraph::new("📈 Select Stock")
-            .block(Block::default().borders(Borders::ALL))
-            .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
-        f.render_widget(title, view_layout.title);
-
-        // Split main content
-        let main_chunks = view_layout.split_main_content_vertical(&[
-            Constraint::Length(3), // Search
-            Constraint::Min(0),    // Stock list
-        ]);
+        // Split content area for search and stock list
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3), // Search
+                Constraint::Min(0),    // Stock list
+            ])
+            .split(area);
 
         // Search input
         let search_text = if stock_state.is_searching {
@@ -797,9 +798,9 @@ impl DataCollectionView {
             "Type to search stocks...".to_string()
         };
         let search = Paragraph::new(search_text)
-            .block(Block::default().borders(Borders::ALL).title("Search"))
+            .block(Block::default().borders(Borders::ALL).title("📈 Select Stock - Search"))
             .style(Style::default().fg(if stock_state.is_searching { Color::Cyan } else { Color::Gray }));
-        f.render_widget(search, main_chunks[0]);
+        f.render_widget(search, chunks[0]);
 
         // Stock list
         let items: Vec<ListItem> = stock_state.available_stocks
@@ -816,36 +817,22 @@ impl DataCollectionView {
             .collect();
 
         let list = List::new(items)
-            .block(Block::default().borders(Borders::ALL).title("Available Stocks"))
+            .block(Block::default().borders(Borders::ALL).title("Available Stocks (↑/↓: Navigate • Enter: Select • Esc: Cancel)"))
             .highlight_style(Style::default().bg(Color::LightBlue).fg(Color::Black))
             .highlight_symbol("→ ");
 
-        f.render_stateful_widget(list, main_chunks[1], &mut ratatui::widgets::ListState::default().with_selected(Some(stock_state.selected_index)));
-
-        // Status
-        let status = Paragraph::new("↑/↓: Navigate • Type: Search • Enter: Select • Esc: Cancel")
-            .block(Block::default().borders(Borders::ALL))
-            .style(Style::default().fg(Color::Gray));
-        f.render_widget(status, view_layout.status);
+        f.render_stateful_widget(list, chunks[1], &mut ratatui::widgets::ListState::default().with_selected(Some(stock_state.selected_index)));
     }
 
     /// Render date selection
     fn render_date_selection(&self, f: &mut Frame, area: Rect, date_state: &DateSelectionState) {
-        let view_layout = ViewLayout::new(area);
-        
-        // Title
-        let title = Paragraph::new(format!("📅 Select Date Range for {}", date_state.selected_stock))
-            .block(Block::default().borders(Borders::ALL))
-            .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
-        f.render_widget(title, view_layout.title);
-
         // Date inputs with cursor
         let start_date_with_cursor = self.render_input_field_with_cursor(&date_state.start_date_input, date_state.cursor_position, true);
         let end_date_with_cursor = self.render_input_field_with_cursor(&date_state.end_date_input, 0, false);
         
         let date_content = vec![
             Line::from(vec![
-                Span::styled("📅 Default Date Range", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(format!("📅 Select Date Range for {}", date_state.selected_stock), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
             ]),
             Line::from(vec![Span::styled("", Style::default())]),
             Line::from(vec![
@@ -870,13 +857,7 @@ impl DataCollectionView {
         let date_inputs = Paragraph::new(date_content)
             .block(Block::default().borders(Borders::ALL).title("Date Range Selection"))
             .style(Style::default().fg(Color::White));
-        f.render_widget(date_inputs, view_layout.main_content);
-
-        // Status
-        let status = Paragraph::new("Editing date range • Use arrow keys to navigate • Enter to start collection")
-            .block(Block::default().borders(Borders::ALL))
-            .style(Style::default().fg(Color::Gray));
-        f.render_widget(status, view_layout.status);
+        f.render_widget(date_inputs, area);
     }
 
     /// Render input field with cursor
@@ -1211,6 +1192,7 @@ impl View for DataCollectionView {
         // Process state updates from async operations
         match update {
             crate::ui::state::StateUpdate::LogMessage { level, message } => {
+                // Add the log message to our internal log list for display in TUI
                 self.add_log_message(level.clone(), message);
                 Ok(true)
             }
@@ -1231,7 +1213,6 @@ impl View for DataCollectionView {
                 if let Some(stock_state) = &mut self.stock_selection_state {
                     stock_state.available_stocks = stocks.clone();
                     stock_state.selected_index = 0;
-                    self.add_log_message(LogLevel::Success, &format!("Stock list updated with {} S&P500 stocks", stocks.len()));
                     debug_log(&format!("Stock list updated with {} stocks: {:?}", stocks.len(), &stocks[0..5]));
                 } else {
                     debug_log("ERROR: No stock_selection_state available to update");

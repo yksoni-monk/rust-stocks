@@ -92,6 +92,36 @@ impl StockTuiApp {
             
             // Broadcast to appropriate views based on update type
             match &update {
+                crate::ui::state::StateUpdate::LogMessage { .. } => {
+                    // LogMessage events should only go to the current view to avoid duplicates
+                    match self.current_view {
+                        0 => {
+                            if let Ok(result) = self.data_collection_view.handle_state_update(&update) {
+                                if let Ok(mut file) = std::fs::OpenOptions::new()
+                                    .create(true)
+                                    .append(true)
+                                    .open("debug_tui.log") 
+                                {
+                                    let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
+                                    let _ = writeln!(file, "[{}] Data collection view handled LogMessage, result: {}", timestamp, result);
+                                }
+                            }
+                        }
+                        1 => {
+                            if let Ok(result) = self.data_analysis_view.handle_state_update(&update) {
+                                if let Ok(mut file) = std::fs::OpenOptions::new()
+                                    .create(true)
+                                    .append(true)
+                                    .open("debug_tui.log") 
+                                {
+                                    let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
+                                    let _ = writeln!(file, "[{}] Data analysis view handled LogMessage, result: {}", timestamp, result);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
                 crate::ui::state::StateUpdate::StockListUpdated { .. } => {
                     // StockListUpdated should go to both views since both need the stock data
                     if let Ok(result) = self.data_collection_view.handle_state_update(&update) {

@@ -17,9 +17,18 @@ use crate::ui::app_new::run_app_async;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize logging
+    // Initialize logging to file to avoid interference with TUI
+    use std::fs::OpenOptions;
+    let log_file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open("tracing.log")
+        .expect("Failed to create tracing.log file");
+    
     let subscriber = FmtSubscriber::builder()
         .with_max_level(Level::INFO)
+        .with_writer(log_file)
         .finish();
     
     tracing::subscriber::set_global_default(subscriber)

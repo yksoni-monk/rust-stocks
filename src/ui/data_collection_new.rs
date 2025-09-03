@@ -474,7 +474,7 @@ impl DataCollectionView {
             let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
 
             // Calculate trading week batches
-            let batches = crate::ui::data_collection::TradingWeekBatchCalculator::calculate_batches(start_date_clone, end_date_clone);
+            let batches = crate::utils::TradingWeekBatchCalculator::calculate_batches(start_date_clone, end_date_clone);
             let log_message = format!("📊 Created {} trading week batches", batches.len());
             let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
                 level: LogLevel::Info, 
@@ -484,7 +484,7 @@ impl DataCollectionView {
 
             // Log batch plan
             for batch in &batches {
-                let log_message = format!("📅 {}", batch.description);
+                let log_message = format!("📅 Batch {} ({} to {})", batch.batch_number, batch.start_date, batch.end_date);
                 let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
                     level: LogLevel::Info, 
                     message: log_message.clone() 
@@ -496,7 +496,7 @@ impl DataCollectionView {
 
             // Process each trading week batch
             for batch in batches {
-                let log_message = format!("🔄 Processing {}", batch.description);
+                let log_message = format!("🔄 Processing Batch {} ({} to {})", batch.batch_number, batch.start_date, batch.end_date);
                 let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
                     level: LogLevel::Info, 
                     message: log_message.clone() 

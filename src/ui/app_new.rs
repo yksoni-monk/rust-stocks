@@ -131,7 +131,7 @@ impl StockTuiApp {
                             .open("debug_tui.log") 
                         {
                             let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
-                            let _ = writeln!(file, "[{}] Data collection view handled update, result: {}", timestamp, result);
+                            let _ = writeln!(file, "[{}] Data collection view handled StockListUpdated, result: {}", timestamp, result);
                         }
                     }
                     if let Ok(result) = self.data_analysis_view.handle_state_update(&update) {
@@ -141,7 +141,7 @@ impl StockTuiApp {
                             .open("debug_tui.log") 
                         {
                             let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S%.3f");
-                            let _ = writeln!(file, "[{}] Data analysis view handled update, result: {}, available_stocks count: {}", 
+                            let _ = writeln!(file, "[{}] Data analysis view handled StockListUpdated, result: {}, available_stocks count: {}", 
                                           timestamp, result, self.data_analysis_view.available_stocks.len());
                         }
                     }

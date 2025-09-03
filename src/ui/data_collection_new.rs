@@ -567,12 +567,22 @@ impl DataCollectionView {
             }
 
             let _ = writeln!(log_writer, "[{}] 🏁 All batches processed. Total inserted: {}", Utc::now().format("%H:%M:%S"), total_inserted);
+            
+            // Send completion message to TUI logs
             if total_inserted > 0 {
-                let log_message = format!("✅ Successfully completed: {} new records inserted", total_inserted);
+                let log_message = format!("🎉 {} data collection completed: {} new records inserted", symbol_clone, total_inserted);
+                let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
+                    level: LogLevel::Success, 
+                    message: log_message.clone() 
+                });
                 let _ = state_manager.complete_operation(&operation_id, Ok(log_message.clone()));
                 let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
             } else {
-                let log_message = format!("ℹ️ Completed: No new records inserted (all data already exists)");
+                let log_message = format!("✅ {} data collection completed: All data already exists (no new records needed)", symbol_clone);
+                let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
+                    level: LogLevel::Success, 
+                    message: log_message.clone() 
+                });
                 let _ = state_manager.complete_operation(&operation_id, Ok(log_message.clone()));
                 let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
             }

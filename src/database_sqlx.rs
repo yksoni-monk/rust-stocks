@@ -82,6 +82,7 @@ impl DatabaseManagerSqlx {
     }
 
     /// Upsert a stock (insert or update) - using raw SQL for flexibility
+    #[allow(dead_code)]
     pub async fn upsert_stock(&self, stock: &Stock) -> Result<i64> {
         let status_str = match stock.status {
             StockStatus::Active => "active",
@@ -388,6 +389,7 @@ impl DatabaseManagerSqlx {
     }
 
     /// Clear all stocks and related data - using raw SQL
+    #[allow(dead_code)]
     pub async fn clear_stocks(&self) -> Result<()> {
         sqlx::query("DELETE FROM daily_prices").execute(&self.pool).await?;
         sqlx::query("DELETE FROM stocks").execute(&self.pool).await?;
@@ -395,11 +397,13 @@ impl DatabaseManagerSqlx {
     }
 
     /// Set the last update date
+    #[allow(dead_code)]
     pub async fn set_last_update_date(&self, date: NaiveDate) -> Result<()> {
         self.set_metadata("last_update_date", &date.format("%Y-%m-%d").to_string()).await
     }
 
     /// Get the last update date
+    #[allow(dead_code)]
     pub async fn get_last_update_date(&self) -> Result<Option<NaiveDate>> {
         if let Some(date_str) = self.get_metadata("last_update_date").await? {
             NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")
@@ -411,6 +415,7 @@ impl DatabaseManagerSqlx {
     }
 
     /// Get P/E ratio on a specific date
+    #[allow(dead_code)]
     pub async fn get_pe_ratio_on_date(&self, stock_id: i64, date: NaiveDate) -> Result<Option<f64>> {
         let row = sqlx::query(
             "SELECT pe_ratio FROM daily_prices WHERE stock_id = ? AND date = ?"
@@ -424,6 +429,7 @@ impl DatabaseManagerSqlx {
     }
 
     /// Get market cap on a specific date
+    #[allow(dead_code)]
     pub async fn get_market_cap_on_date(&self, stock_id: i64, date: NaiveDate) -> Result<Option<f64>> {
         let row = sqlx::query(
             "SELECT market_cap FROM daily_prices WHERE stock_id = ? AND date = ?"
@@ -437,6 +443,7 @@ impl DatabaseManagerSqlx {
     }
 
     /// Close the database connection pool
+    #[allow(dead_code)]
     pub async fn close(self) -> Result<()> {
         self.pool.close().await;
         Ok(())

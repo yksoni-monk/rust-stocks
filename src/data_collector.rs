@@ -245,6 +245,7 @@ impl DataCollector {
 
 
     /// Fetch historical data for a single stock using weekly batches (takes reference)
+    #[allow(dead_code)]
     pub async fn fetch_stock_history_with_batching_ref(
         client: &SchwabClient,
         database: &DatabaseManagerSqlx,
@@ -364,13 +365,13 @@ impl DataCollector {
 
     /// Get collection statistics
     #[allow(dead_code)]
-    pub async fn get_collection_stats(&self) -> Result<CollectionStats> {
+        pub async fn get_collection_stats(&self) -> Result<DataCollectionStats> {
         let stats = self.database.get_stats().await?;
         
         // Calculate date range of available data
         let (earliest_date, latest_date) = self.get_data_date_range().await?;
         
-        Ok(CollectionStats {
+        Ok(DataCollectionStats {
             total_stocks: stats.get("total_stocks").unwrap_or(&0).clone() as usize,
             total_price_records: stats.get("total_prices").unwrap_or(&0).clone() as usize,
             last_update_date: None, // TODO: Add this to database stats
@@ -482,9 +483,9 @@ impl DataCollector {
 }
 
 /// Statistics about data collection
-#[derive(Debug)]
 #[allow(dead_code)]
-pub struct CollectionStats {
+#[derive(Debug)]
+pub struct DataCollectionStats {
     pub total_stocks: usize,
     pub total_price_records: usize,
     pub last_update_date: Option<NaiveDate>,

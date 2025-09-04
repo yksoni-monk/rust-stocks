@@ -10,6 +10,7 @@ use anyhow::Result;
 
 use crate::database_sqlx::DatabaseManagerSqlx;
 
+#[allow(dead_code)]
 pub struct Dashboard {
     pub database_stats: Option<DatabaseStats>,
 }
@@ -26,6 +27,7 @@ pub struct DatabaseStats {
 }
 
 impl Dashboard {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self {
             database_stats: None,
@@ -33,6 +35,7 @@ impl Dashboard {
     }
 
     /// Refresh data from database
+    #[allow(dead_code)]
     pub async fn refresh_data(&mut self, database: &DatabaseManagerSqlx) -> Result<()> {
         // Get basic database stats
         let stocks = database.get_active_stocks().await?;

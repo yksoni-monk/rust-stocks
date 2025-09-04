@@ -14,6 +14,7 @@ pub enum AppState {
 }
 
 /// State update events for async operations
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum StateUpdate {
     OperationStarted { id: String, operation: String },
@@ -33,6 +34,7 @@ pub enum LogLevel {
 }
 
 /// Async operation tracking
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct AsyncOperation {
     pub id: String,
@@ -44,6 +46,7 @@ pub struct AsyncOperation {
 }
 
 /// Completed operation record
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct CompletedOperation {
     pub id: String,
@@ -130,6 +133,7 @@ impl AsyncStateManager {
     }
 
     /// Update operation progress
+    #[allow(dead_code)]
     pub fn update_progress(&mut self, id: &str, progress: f64, message: &str) -> Result<()> {
         if let Some(op) = self.pending_operations.get_mut(id) {
             op.progress = progress;

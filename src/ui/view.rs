@@ -2,6 +2,7 @@ use anyhow::Result;
 use ratatui::{Frame, prelude::Rect};
 
 /// View contract for all TUI views (non-async for trait object compatibility)
+#[allow(dead_code)]
 pub trait View {
     /// Render the view
     fn render(&self, f: &mut Frame, area: Rect);
@@ -34,6 +35,7 @@ pub trait View {
 }
 
 /// View manager for handling multiple views
+#[allow(dead_code)]
 pub struct ViewManager {
     pub views: Vec<Box<dyn View>>,
     pub current_view_index: usize,
@@ -148,6 +150,7 @@ impl ViewManager {
 }
 
 /// Base view implementation with common functionality
+#[allow(dead_code)]
 pub struct BaseView {
     pub title: String,
     pub status: String,
@@ -194,6 +197,7 @@ impl View for BaseView {
 }
 
 /// View factory for creating different types of views
+#[allow(dead_code)]
 pub struct ViewFactory;
 
 impl ViewFactory {
@@ -218,6 +222,7 @@ impl ViewFactory {
 
 /// View state for tracking view-specific data
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ViewState {
     pub title: String,
     pub status: String,

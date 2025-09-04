@@ -1,6 +1,6 @@
 //! Database operation tests
 
-use test_log::test;
+use anyhow::Result;
 use pretty_assertions::assert_eq;
 use chrono::NaiveDate;
 // Stock model is used indirectly through test_data

@@ -57,6 +57,7 @@ pub struct StockSelectionState {
 }
 
 /// Date selection state
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct DateSelectionState {
     pub selected_stock: String,
@@ -67,6 +68,7 @@ pub struct DateSelectionState {
 }
 
 /// Date field being edited
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum DateField {
     StartDate,
@@ -74,6 +76,7 @@ pub enum DateField {
 }
 
 /// Trading week batch definition
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct TradingWeekBatch {
     pub batch_number: usize,
@@ -247,6 +250,7 @@ impl DataCollectionView {
     }
 
     /// Get available stocks from database
+    #[allow(dead_code)]
     async fn get_available_stocks(&self) -> Vec<String> {
         // This method is deprecated - stocks are now loaded via async state updates
         vec![] // Empty list - will be populated from database
@@ -678,6 +682,7 @@ impl DataCollectionView {
     }
 
     /// Cancel current operation
+    #[allow(dead_code)]
     fn cancel_operation(&mut self) {
         self.add_log_message(LogLevel::Warning, "Operation cancelled by user");
         // Cancel all active operations
@@ -692,6 +697,7 @@ impl DataCollectionView {
     }
 
     /// Complete current operation
+    #[allow(dead_code)]
     fn complete_operation(&mut self) {
         // This is now handled by the AsyncStateManager
     }
@@ -795,6 +801,7 @@ impl DataCollectionView {
     }
 
     /// Render the status
+    #[allow(dead_code)]
     fn render_status(&self, f: &mut Frame, area: Rect) {
         let status_text = if self.state_manager.has_active_operations() {
             vec![

@@ -28,6 +28,7 @@ pub struct StockInfo {
 }
 
 /// Stock data for a specific date
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct StockData {
     pub symbol: String,
@@ -171,6 +172,7 @@ impl DataAnalysisView {
     }
 
     /// Fetch stock data for a specific date
+    #[allow(dead_code)]
     async fn fetch_stock_data(&mut self, symbol: &str, date: NaiveDate) -> Result<()> {
         // Clone database reference to avoid borrow checker issues
         let database = if let Some(db) = &self.database {

@@ -90,11 +90,9 @@ pub async fn init_fresh_test_database_with_cleanup() -> Result<TestDatabase> {
 
 /// Initialize the test database once for all tests
 pub async fn init_test_database() -> Result<DatabaseManagerSqlx> {
-    unsafe {
-        INIT.call_once(|| {
-            // This will be set in the function below
-        });
-    }
+    INIT.call_once(|| {
+        // This will be set in the function below
+    });
 
     // Create tests/tmp directory if it doesn't exist
     let tests_dir = PathBuf::from("tests");

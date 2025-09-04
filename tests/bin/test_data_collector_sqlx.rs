@@ -3,7 +3,6 @@ use tracing::{error, Level};
 use tracing_subscriber::{self, FmtSubscriber};
 
 use rust_stocks::database_sqlx::DatabaseManagerSqlx;
-use rust_stocks::data_collector::DataCollector;
 use rust_stocks::models::{Config, Stock, StockStatus};
 
 #[tokio::main]
@@ -55,7 +54,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn test_data_collector_functionality(database: &DatabaseManagerSqlx, config: &Config) -> Result<()> {
+async fn test_data_collector_functionality(database: &DatabaseManagerSqlx, _config: &Config) -> Result<()> {
     // Create a mock SchwabClient for testing (we'll just test the database operations)
     // In a real scenario, you'd want to test with actual API calls
     

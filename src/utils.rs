@@ -1,15 +1,18 @@
 use chrono::{NaiveDate, Weekday, Datelike};
 
 /// Market calendar utilities for handling trading days
+#[allow(dead_code)]
 pub struct MarketCalendar;
 
 impl MarketCalendar {
     /// Check if a date is a weekend
+    #[allow(dead_code)]
     pub fn is_weekend(date: NaiveDate) -> bool {
         matches!(date.weekday(), Weekday::Sat | Weekday::Sun)
     }
 
     /// Adjust a date for weekends (Saturday/Sunday → Friday)
+    #[allow(dead_code)]
     pub fn adjust_for_weekend(date: NaiveDate) -> NaiveDate {
         match date.weekday() {
             Weekday::Sat => date - chrono::Duration::days(1), // Saturday -> Friday
@@ -50,6 +53,7 @@ impl MarketCalendar {
 }
 
 /// Trading week batch calculator for data collection
+#[allow(dead_code)]
 pub struct TradingWeekBatchCalculator;
 
 impl TradingWeekBatchCalculator {
@@ -82,6 +86,7 @@ impl TradingWeekBatchCalculator {
 }
 
 /// Represents a trading week batch for data collection
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct TradingWeekBatch {
     pub batch_number: usize,

@@ -7,6 +7,7 @@ use ratatui::{
 };
 
 /// Centralized layout management to prevent conflicts between views
+#[allow(dead_code)]
 pub struct TuiLayout {
     pub tab_bar: Rect,
     pub content: Rect,
@@ -33,6 +34,7 @@ impl TuiLayout {
     }
 
     /// Render the tab bar
+    #[allow(dead_code)]
     pub fn render_tab_bar(&self, f: &mut Frame, selected_tab: usize) {
         let titles = vec![
             "Data Collection",
@@ -49,6 +51,7 @@ impl TuiLayout {
     }
 
     /// Render the status bar
+    #[allow(dead_code)]
     pub fn render_status_bar(&self, f: &mut Frame, status_text: &str) {
         let status_content = vec![
             Line::from(vec![
@@ -73,12 +76,14 @@ impl TuiLayout {
     }
 
     /// Get content area for views to use
+    #[allow(dead_code)]
     pub fn get_content_area(&self) -> Rect {
         self.content
     }
 }
 
 /// Helper struct for view-specific layouts
+#[allow(dead_code)]
 pub struct ViewLayout {
     pub title: Rect,
     pub main_content: Rect,
@@ -87,6 +92,7 @@ pub struct ViewLayout {
 
 impl ViewLayout {
     /// Create a view layout within the given content area
+    #[allow(dead_code)]
     pub fn new(content_area: Rect) -> Self {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -105,6 +111,7 @@ impl ViewLayout {
     }
 
     /// Create a layout for data collection view (with logs)
+    #[allow(dead_code)]
     pub fn for_data_collection(content_area: Rect) -> Self {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -124,6 +131,7 @@ impl ViewLayout {
     }
 
     /// Create a layout for data analysis view
+    #[allow(dead_code)]
     pub fn for_data_analysis(content_area: Rect) -> Self {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -142,6 +150,7 @@ impl ViewLayout {
     }
 
     /// Split main content into horizontal sections
+    #[allow(dead_code)]
     pub fn split_main_content(&self, direction: Direction, constraints: &[Constraint]) -> Vec<Rect> {
         Layout::default()
             .direction(direction)
@@ -151,11 +160,13 @@ impl ViewLayout {
     }
 
     /// Split main content into vertical sections
+    #[allow(dead_code)]
     pub fn split_main_content_vertical(&self, constraints: &[Constraint]) -> Vec<Rect> {
         self.split_main_content(Direction::Vertical, constraints)
     }
 
     /// Split main content into horizontal sections
+    #[allow(dead_code)]
     pub fn split_main_content_horizontal(&self, constraints: &[Constraint]) -> Vec<Rect> {
         self.split_main_content(Direction::Horizontal, constraints)
     }

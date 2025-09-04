@@ -4,6 +4,7 @@ use tokio::sync::mpsc;
 use crate::ui::state::{StateUpdate, LogLevel};
 
 /// Unified TUI events
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum TuiEvent {
     Key(KeyCode),
@@ -14,6 +15,7 @@ pub enum TuiEvent {
 }
 
 /// Event manager for handling all TUI events
+#[allow(dead_code)]
 pub struct EventManager {
     pub event_sender: mpsc::Sender<TuiEvent>,
     pub event_receiver: mpsc::Receiver<TuiEvent>,
@@ -67,6 +69,7 @@ impl EventManager {
 }
 
 /// Event handler trait for views (sync version for trait object compatibility)
+#[allow(dead_code)]
 pub trait EventHandler {
     /// Handle a TUI event (sync version)
     fn handle_event(&mut self, event: &TuiEvent) -> Result<bool>; // Returns true if event was handled
@@ -83,6 +86,7 @@ pub trait EventHandler {
 }
 
 /// Global event handler for the main application
+#[allow(dead_code)]
 pub struct GlobalEventHandler {
     pub event_manager: EventManager,
 }
@@ -122,6 +126,7 @@ impl GlobalEventHandler {
 }
 
 /// Event routing for different views
+#[allow(dead_code)]
 pub struct EventRouter {
     pub handlers: Vec<Box<dyn EventHandler>>,
 }
@@ -161,6 +166,7 @@ impl EventRouter {
 }
 
 /// Event loop for the TUI application
+#[allow(dead_code)]
 pub struct EventLoop {
     pub global_handler: GlobalEventHandler,
     pub router: EventRouter,

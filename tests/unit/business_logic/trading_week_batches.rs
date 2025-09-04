@@ -3,7 +3,7 @@
 use test_log::test;
 use pretty_assertions::assert_eq;
 use chrono::NaiveDate;
-use rust_stocks::ui::data_collection_new::{TradingWeekBatchCalculator, TradingWeekBatch};
+use rust_stocks::ui::data_collection_new::TradingWeekBatchCalculator;
 
 #[test]
 fn test_trading_week_batch_calculation_basic() {

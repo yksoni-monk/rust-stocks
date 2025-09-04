@@ -30,6 +30,7 @@ use crate::{
 };
 
 /// Main TUI application with simplified architecture
+#[allow(dead_code)]
 pub struct StockTuiApp {
     pub should_quit: bool,
     pub current_view: usize, // 0 = data collection, 1 = data analysis

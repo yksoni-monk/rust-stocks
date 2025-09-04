@@ -1,7 +1,6 @@
 use anyhow::Result;
 use chrono::{NaiveDate, DateTime, Utc};
-use sqlx::{sqlite::SqlitePoolOptions, SqlitePool, Row};
-use std::collections::HashMap;
+use sqlx::{sqlite::SqlitePoolOptions, Row};
 
 // Simple test structs for validation
 #[derive(Debug)]

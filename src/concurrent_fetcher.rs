@@ -17,6 +17,7 @@ use crate::{
 };
 
 /// Configuration for concurrent fetching
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ConcurrentFetchConfig {
     pub date_range: DateRange,
@@ -26,6 +27,7 @@ pub struct ConcurrentFetchConfig {
 }
 
 /// Date range for fetching data
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct DateRange {
     pub start_date: NaiveDate,
@@ -33,6 +35,7 @@ pub struct DateRange {
 }
 
 /// Progress update from worker threads
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct FetchProgress {
     pub thread_id: usize,
@@ -42,6 +45,7 @@ pub struct FetchProgress {
 }
 
 /// Status of a fetch operation
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum FetchStatus {
     Started,
@@ -51,6 +55,7 @@ pub enum FetchStatus {
 }
 
 /// Result of concurrent fetching operation
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct FetchResult {
     pub total_stocks: usize,
@@ -60,6 +65,7 @@ pub struct FetchResult {
     pub total_records_fetched: usize,
 }
 
+#[allow(dead_code)]
 /// Main function to fetch stock data concurrently
 pub async fn fetch_stocks_concurrently(
     database: Arc<DatabaseManagerSqlx>,
@@ -145,6 +151,7 @@ pub async fn fetch_stocks_concurrently(
     Ok(result)
 }
 
+#[allow(dead_code)]
 /// Worker thread function
 async fn worker_thread(
     thread_id: usize,
@@ -236,6 +243,7 @@ async fn worker_thread(
     Ok(())
 }
 
+#[allow(dead_code)]
 /// Fetch data for a single stock with retry logic using existing batching function
 async fn fetch_stock_data(
     api_client: &SchwabClient,
@@ -276,6 +284,7 @@ async fn fetch_stock_data(
 }
 
 /// Internal counters for tracking progress
+#[allow(dead_code)]
 #[derive(Debug)]
 struct FetchCounters {
     total_stocks: usize,

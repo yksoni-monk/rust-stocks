@@ -1,10 +1,9 @@
 use anyhow::Result;
 use tracing::{error, Level};
 use tracing_subscriber::{self, FmtSubscriber};
-use std::sync::Arc;
 
 use rust_stocks::database_sqlx::DatabaseManagerSqlx;
-use rust_stocks::concurrent_fetcher::{ConcurrentFetchConfig, DateRange, fetch_stocks_concurrently};
+use rust_stocks::concurrent_fetcher::{ConcurrentFetchConfig, DateRange};
 use rust_stocks::models::Config;
 
 #[tokio::main]

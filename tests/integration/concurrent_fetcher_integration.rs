@@ -141,7 +141,7 @@ async fn test_concurrent_fetch_error_handling() {
 
     // Verify that the system handled errors gracefully
     assert!(result.total_stocks > 0, "Should have attempted to process stocks");
-    assert!(result.failed_stocks >= 0, "Failed stocks count should be non-negative");
+    // Note: failed_stocks is always >= 0 by design, so no need to assert it
 
     log_test_step("Error handling concurrent fetch test completed successfully");
 }

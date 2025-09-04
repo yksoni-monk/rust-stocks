@@ -4,7 +4,6 @@ pub mod database;
 pub mod api_mock;
 pub mod fixtures;
 
-use anyhow::Result;
 use chrono::{NaiveDate, Utc};
 
 // Re-export main database functions for convenience

@@ -236,18 +236,10 @@ impl AsyncStateManager {
     pub fn process_updates(&mut self) {
         while let Ok(update) = self.broadcast_receiver.try_recv() {
             match update {
-                StateUpdate::LogMessage { level, message } => {
-                    let log_msg = LogMessage {
-                        timestamp: Utc::now(),
-                        level,
-                        message,
-                    };
-                    self.log_messages.push(log_msg);
-                    
-                    // Keep only last 100 log messages
-                    if self.log_messages.len() > 100 {
-                        self.log_messages.remove(0);
-                    }
+                StateUpdate::LogMessage { .. } => {
+                    // Log messages are now handled by the global app router to avoid duplication
+                    // The global app routes LogMessage updates to the current view's handle_state_update()
+                    // which calls add_log_message() to add logs to this state manager
                 }
                 StateUpdate::OperationStarted { id, operation } => {
                     let async_op = AsyncOperation {

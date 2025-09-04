@@ -17,7 +17,6 @@ use crate::{
 };
 
 /// Configuration for concurrent fetching
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ConcurrentFetchConfig {
     pub date_range: DateRange,
@@ -27,7 +26,6 @@ pub struct ConcurrentFetchConfig {
 }
 
 /// Date range for fetching data
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct DateRange {
     pub start_date: NaiveDate,
@@ -55,7 +53,6 @@ pub enum FetchStatus {
 }
 
 /// Result of concurrent fetching operation
-#[allow(dead_code)]
 #[derive(Debug)]
 pub struct FetchResult {
     pub total_stocks: usize,
@@ -65,7 +62,6 @@ pub struct FetchResult {
     pub total_records_fetched: usize,
 }
 
-#[allow(dead_code)]
 /// Main function to fetch stock data concurrently
 pub async fn fetch_stocks_concurrently(
     database: Arc<DatabaseManagerSqlx>,

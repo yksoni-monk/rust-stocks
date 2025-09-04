@@ -251,7 +251,7 @@ async fn worker_thread_with_logging(
         });
 
         // Fetch data for this stock (let the data collector handle existing records)
-        match fetch_stock_data(&api_client, &database, &stock, &config).await {
+        match fetch_stock_data(&api_client, &database, &stock, &config, global_broadcast_sender.clone()).await {
             Ok(records_fetched) => {
                 let success_message = format!("✅ Thread {}: Completed {} ({} records fetched)", 
                                            thread_id, stock_symbol, records_fetched);
@@ -307,6 +307,7 @@ async fn fetch_stock_data(
     database: &DatabaseManagerSqlx,
     stock: &Stock,
     config: &UnifiedFetchConfig,
+    global_broadcast_sender: Option<Arc<broadcast::Sender<crate::ui::state::StateUpdate>>>,
 ) -> Result<usize> {
     let mut attempts = 0;
     let mut last_error = None;
@@ -318,6 +319,7 @@ async fn fetch_stock_data(
             stock.clone(),
             config.date_range.start_date,
             config.date_range.end_date,
+            global_broadcast_sender.clone(),
         ).await {
             Ok(records_inserted) => {
                 return Ok(records_inserted);

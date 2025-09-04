@@ -143,7 +143,7 @@ impl DataCollector {
                 
                 async move {
                     let _permit = semaphore.acquire().await.unwrap();
-                    let result = Self::fetch_stock_history_with_batching_ref(&client, &database, stock, from_date, end_date).await;
+                    let result = Self::fetch_stock_history_with_batching_ref(&client, &database, stock, from_date, end_date, None).await;
                     (index, symbol, result)
                 }
             })
@@ -194,6 +194,7 @@ impl DataCollector {
         stock: Stock,
         from_date: NaiveDate,
         to_date: NaiveDate,
+        global_broadcast_sender: Option<Arc<tokio::sync::broadcast::Sender<crate::ui::state::StateUpdate>>>,
     ) -> Result<usize> {
         let stock_id = stock.id.ok_or_else(|| anyhow::anyhow!("Stock has no ID: {}", stock.symbol))?;
         
@@ -201,19 +202,58 @@ impl DataCollector {
         
         // Calculate trading week batches
         let batches = TradingWeekBatchCalculator::calculate_batches(from_date, to_date);
-        debug!("Created {} trading week batches for {}", batches.len(), stock.symbol);
+        
+        // Log batching plan for user visibility
+        let total_days = (to_date - from_date).num_days() + 1;
+        let total_weeks = batches.len();
+        let plan_message = format!("📅 {} data plan: {} days ({} weeks) from {} to {}", 
+                                   stock.symbol, total_days, total_weeks, from_date, to_date);
+        info!("{}", plan_message);
+        if let Some(sender) = &global_broadcast_sender {
+            let _ = sender.send(crate::ui::state::StateUpdate::LogMessage {
+                level: crate::ui::state::LogLevel::Info,
+                message: plan_message,
+            });
+        }
+        
+        if !batches.is_empty() {
+            let batch_message = format!("📊 {} batch plan: {} trading week batches to process", stock.symbol, batches.len());
+            info!("{}", batch_message);
+            if let Some(sender) = &global_broadcast_sender {
+                let _ = sender.send(crate::ui::state::StateUpdate::LogMessage {
+                    level: crate::ui::state::LogLevel::Info,
+                    message: batch_message,
+                });
+            }
+        }
         
         let mut total_inserted = 0;
 
         // Process each trading week batch
-        for batch in batches {
-            debug!("Processing batch {} for {}: {} to {}", batch.batch_number, stock.symbol, batch.start_date, batch.end_date);
+        for (i, batch) in batches.iter().enumerate() {
+            let batch_start_message = format!("🔄 {} batch {}/{}: {} to {}", 
+                                               stock.symbol, i + 1, batches.len(), batch.start_date, batch.end_date);
+            info!("{}", batch_start_message);
+            if let Some(sender) = &global_broadcast_sender {
+                let _ = sender.send(crate::ui::state::StateUpdate::LogMessage {
+                    level: crate::ui::state::LogLevel::Info,
+                    message: batch_start_message,
+                });
+            }
             
             // Check existing records for this batch
             let existing_count = database.count_existing_records(stock_id, batch.start_date, batch.end_date).await?;
             
             if existing_count > 0 {
-                debug!("Batch {} for {}: Found {} existing records, skipping", batch.batch_number, stock.symbol, existing_count);
+                let skip_message = format!("⏭️  {} batch {}/{}: {} existing records found, skipping", 
+                                           stock.symbol, i + 1, batches.len(), existing_count);
+                info!("{}", skip_message);
+                if let Some(sender) = &global_broadcast_sender {
+                    let _ = sender.send(crate::ui::state::StateUpdate::LogMessage {
+                        level: crate::ui::state::LogLevel::Info,
+                        message: skip_message,
+                    });
+                }
                 continue;
             }
 
@@ -251,14 +291,36 @@ impl DataCollector {
                     }
                     
                     total_inserted += records_inserted;
-                    if records_inserted > 0 {
-                        info!("✅ Batch {} for {}: Inserted {} records (Total: {})", batch.batch_number, stock.symbol, records_inserted, total_inserted);
+                    let batch_result_message = if records_inserted > 0 {
+                        format!("✅ {} batch {}/{}: inserted {} records (total: {})", 
+                                stock.symbol, i + 1, batches.len(), records_inserted, total_inserted)
                     } else {
-                        debug!("ℹ️ Batch {} for {}: No new records (Total: {})", batch.batch_number, stock.symbol, total_inserted);
+                        format!("ℹ️  {} batch {}/{}: no new records needed (total: {})", 
+                                stock.symbol, i + 1, batches.len(), total_inserted)
+                    };
+                    
+                    info!("{}", batch_result_message);
+                    if let Some(sender) = &global_broadcast_sender {
+                        let level = if records_inserted > 0 {
+                            crate::ui::state::LogLevel::Success
+                        } else {
+                            crate::ui::state::LogLevel::Info
+                        };
+                        let _ = sender.send(crate::ui::state::StateUpdate::LogMessage {
+                            level,
+                            message: batch_result_message,
+                        });
                     }
                 }
                 Err(e) => {
-                    warn!("❌ Batch {} for {}: Failed - {}", batch.batch_number, stock.symbol, e);
+                    let error_message = format!("❌ {} batch {}/{}: failed - {}", stock.symbol, i + 1, batches.len(), e);
+                    warn!("{}", error_message);
+                    if let Some(sender) = &global_broadcast_sender {
+                        let _ = sender.send(crate::ui::state::StateUpdate::LogMessage {
+                            level: crate::ui::state::LogLevel::Error,
+                            message: error_message,
+                        });
+                    }
                 }
             }
 
@@ -266,12 +328,25 @@ impl DataCollector {
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
         }
 
-        if total_inserted > 0 {
-            info!("✅ {}: Added {} historical records using batching", stock.symbol, total_inserted);
+        // Final completion summary
+        let completion_message = if total_inserted > 0 {
+            format!("🏁 {} complete: {} new records added from {} batches", 
+                    stock.symbol, total_inserted, batches.len())
+        } else {
+            format!("🏁 {} complete: all data already exists, no new records needed", stock.symbol)
+        };
+        
+        info!("{}", completion_message);
+        if let Some(sender) = &global_broadcast_sender {
+            let _ = sender.send(crate::ui::state::StateUpdate::LogMessage {
+                level: crate::ui::state::LogLevel::Success,
+                message: completion_message,
+            });
         }
         
         Ok(total_inserted)
     }
+
 
     /// Perform incremental update (fetch data since last update)
     #[allow(dead_code)]

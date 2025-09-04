@@ -191,7 +191,7 @@ async fn worker_thread_with_logging(
         };
 
         let stock_symbol = stock.symbol.clone();
-        let stock_id = stock.id.unwrap();
+        let _stock_id = stock.id.unwrap();
 
         // Send progress update to TUI
         if let Some(sender) = &global_broadcast_sender {
@@ -209,38 +209,7 @@ async fn worker_thread_with_logging(
             message: format!("Thread {}: Starting {}", thread_id, stock_symbol),
         });
 
-        // Check if data already exists for this date range
-        let existing_count = database.count_existing_records(
-            stock_id, 
-            config.date_range.start_date, 
-            config.date_range.end_date
-        ).await?;
-
-        if existing_count > 0 {
-            // Data already exists, skip
-            let skip_message = format!("⏭️  Thread {}: Skipping {} ({} records already exist)", 
-                                     thread_id, stock_symbol, existing_count);
-            
-            if let Some(sender) = &global_broadcast_sender {
-                let _ = sender.send(crate::ui::state::StateUpdate::LogMessage {
-                    level: crate::ui::state::LogLevel::Info,
-                    message: skip_message.clone(),
-                });
-            }
-
-            let _ = progress_sender.send(FetchProgress {
-                thread_id,
-                stock_symbol: stock_symbol.clone(),
-                status: FetchStatus::Skipped,
-                message: skip_message,
-            });
-
-            let mut counters = counters.lock().unwrap();
-            counters.skipped_stocks += 1;
-            continue;
-        }
-
-        // Fetch data for this stock
+        // Fetch data for this stock (let the data collector handle existing records)
         match fetch_stock_data(&api_client, &database, &stock, &config).await {
             Ok(records_fetched) => {
                 let success_message = format!("✅ Thread {}: Completed {} ({} records fetched)", 

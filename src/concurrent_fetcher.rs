@@ -67,6 +67,15 @@ pub async fn fetch_stocks_concurrently(
     database: Arc<DatabaseManagerSqlx>,
     config: ConcurrentFetchConfig,
 ) -> Result<FetchResult> {
+    fetch_stocks_concurrently_with_logging(database, config, None).await
+}
+
+/// Main function to fetch stock data concurrently with TUI logging
+pub async fn fetch_stocks_concurrently_with_logging(
+    database: Arc<DatabaseManagerSqlx>,
+    config: ConcurrentFetchConfig,
+    global_broadcast_sender: Option<Arc<broadcast::Sender<crate::ui::state::StateUpdate>>>,
+) -> Result<FetchResult> {
     info!("🚀 Starting concurrent fetch with {} threads", config.num_threads);
     info!("📅 Date range: {} to {}", config.date_range.start_date, config.date_range.end_date);
 
@@ -74,6 +83,14 @@ pub async fn fetch_stocks_concurrently(
     let stocks = database.get_active_stocks().await?;
     let total_stocks = stocks.len();
     info!("📊 Found {} active stocks to process", total_stocks);
+
+    // Send log to TUI if available
+    if let Some(sender) = &global_broadcast_sender {
+        let _ = sender.send(crate::ui::state::StateUpdate::LogMessage {
+            level: crate::ui::state::LogLevel::Info,
+            message: format!("📊 Found {} active stocks to process", total_stocks),
+        });
+    }
 
     // Apply stock limit if specified (for testing)
     let stocks = if let Some(max_stocks) = config.max_stocks {
@@ -110,15 +127,17 @@ pub async fn fetch_stocks_concurrently(
         let progress_sender = Arc::clone(&progress_sender);
         let counters = Arc::clone(&counters);
         let config = config.clone();
+        let global_broadcast_sender = global_broadcast_sender.clone();
 
         let handle = tokio::spawn(async move {
-            worker_thread(
+            worker_thread_with_logging(
                 thread_id,
                 stock_queue,
                 database,
                 progress_sender,
                 counters,
                 config,
+                global_broadcast_sender,
             ).await
         });
         
@@ -148,7 +167,131 @@ pub async fn fetch_stocks_concurrently(
 }
 
 #[allow(dead_code)]
-/// Worker thread function
+/// Worker thread function with TUI logging
+/// Worker thread function with TUI logging
+async fn worker_thread_with_logging(
+    thread_id: usize,
+    stock_queue: Arc<Mutex<Vec<Stock>>>,
+    database: Arc<DatabaseManagerSqlx>,
+    progress_sender: Arc<broadcast::Sender<FetchProgress>>,
+    counters: Arc<Mutex<FetchCounters>>,
+    config: ConcurrentFetchConfig,
+    global_broadcast_sender: Option<Arc<broadcast::Sender<crate::ui::state::StateUpdate>>>,
+) -> Result<()> {
+    // Create API client for this thread
+    let api_config = Config::from_env()?;
+    let api_client = SchwabClient::new(&api_config)?;
+    
+    loop {
+        // Get next stock from queue
+        let stock = {
+            let mut queue = stock_queue.lock().unwrap();
+            if queue.is_empty() {
+                break; // No more stocks to process
+            }
+            queue.remove(0)
+        };
+
+        let stock_symbol = stock.symbol.clone();
+        let stock_id = stock.id.unwrap();
+
+        // Send progress update to TUI
+        if let Some(sender) = &global_broadcast_sender {
+            let _ = sender.send(crate::ui::state::StateUpdate::LogMessage {
+                level: crate::ui::state::LogLevel::Info,
+                message: format!("🔄 Thread {}: Starting {}", thread_id, stock_symbol),
+            });
+        }
+
+        // Send progress update to internal channel
+        let _ = progress_sender.send(FetchProgress {
+            thread_id,
+            stock_symbol: stock_symbol.clone(),
+            status: FetchStatus::Started,
+            message: format!("Thread {}: Starting {}", thread_id, stock_symbol),
+        });
+
+        // Check if data already exists for this date range
+        let existing_count = database.count_existing_records(
+            stock_id, 
+            config.date_range.start_date, 
+            config.date_range.end_date
+        ).await?;
+
+        if existing_count > 0 {
+            // Data already exists, skip
+            let skip_message = format!("⏭️  Thread {}: Skipping {} ({} records already exist)", 
+                                     thread_id, stock_symbol, existing_count);
+            
+            if let Some(sender) = &global_broadcast_sender {
+                let _ = sender.send(crate::ui::state::StateUpdate::LogMessage {
+                    level: crate::ui::state::LogLevel::Info,
+                    message: skip_message.clone(),
+                });
+            }
+
+            let _ = progress_sender.send(FetchProgress {
+                thread_id,
+                stock_symbol: stock_symbol.clone(),
+                status: FetchStatus::Skipped,
+                message: skip_message,
+            });
+
+            let mut counters = counters.lock().unwrap();
+            counters.skipped_stocks += 1;
+            continue;
+        }
+
+        // Fetch data for this stock
+        match fetch_stock_data(&api_client, &database, &stock, &config).await {
+            Ok(records_fetched) => {
+                let success_message = format!("✅ Thread {}: Completed {} ({} records fetched)", 
+                                           thread_id, stock_symbol, records_fetched);
+                
+                if let Some(sender) = &global_broadcast_sender {
+                    let _ = sender.send(crate::ui::state::StateUpdate::LogMessage {
+                        level: crate::ui::state::LogLevel::Success,
+                        message: success_message.clone(),
+                    });
+                }
+
+                let _ = progress_sender.send(FetchProgress {
+                    thread_id,
+                    stock_symbol: stock_symbol.clone(),
+                    status: FetchStatus::Completed,
+                    message: success_message,
+                });
+
+                let mut counters = counters.lock().unwrap();
+                counters.processed_stocks += 1;
+                counters.total_records_fetched += records_fetched;
+            }
+            Err(e) => {
+                let error_msg = format!("❌ Thread {}: Failed {} - {}", thread_id, stock_symbol, e);
+                error!("{}", error_msg);
+                
+                if let Some(sender) = &global_broadcast_sender {
+                    let _ = sender.send(crate::ui::state::StateUpdate::LogMessage {
+                        level: crate::ui::state::LogLevel::Error,
+                        message: error_msg.clone(),
+                    });
+                }
+
+                let _ = progress_sender.send(FetchProgress {
+                    thread_id,
+                    stock_symbol: stock_symbol.clone(),
+                    status: FetchStatus::Failed(e.to_string()),
+                    message: error_msg,
+                });
+
+                let mut counters = counters.lock().unwrap();
+                counters.failed_stocks += 1;
+            }
+        }
+    }
+
+    Ok(())
+}
 async fn worker_thread(
     thread_id: usize,
     stock_queue: Arc<Mutex<Vec<Stock>>>,

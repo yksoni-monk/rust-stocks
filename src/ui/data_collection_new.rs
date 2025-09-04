@@ -7,7 +7,6 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, Paragraph},
     Frame,
 };
-use std::process::Command;
 use std::io::Write;
 use std::sync::Arc;
 use std::fs::OpenOptions;
@@ -56,21 +55,19 @@ pub struct StockSelectionState {
     pub is_searching: bool,
 }
 
-/// Date selection state
-#[allow(dead_code)]
+/// Date range input state
 #[derive(Debug, Clone)]
-pub struct DateSelectionState {
-    pub selected_stock: String,
+pub struct DateRangeInputState {
     pub start_date_input: String,
     pub end_date_input: String,
-    pub selected_field: DateField, // start_date or end_date
-    pub cursor_position: usize, // cursor position within the current field
+    pub selected_field: DateRangeField,
+    pub cursor_position: usize,
+    pub is_active: bool,
 }
 
-/// Date field being edited
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-pub enum DateField {
+/// Date range field being edited
+#[derive(Debug, Clone, PartialEq)]
+pub enum DateRangeField {
     StartDate,
     EndDate,
 }
@@ -174,7 +171,8 @@ pub struct DataCollectionView {
     // Interactive states
     pub confirmation_state: Option<ConfirmationState>,
     pub stock_selection_state: Option<StockSelectionState>,
-    pub date_selection_state: Option<DateSelectionState>,
+    pub date_range_input_state: Option<DateRangeInputState>,
+    pub selected_stock_for_date_range: Option<String>,
     
     // Async state management
     pub state_manager: AsyncStateManager,
@@ -203,7 +201,7 @@ impl DataCollectionView {
                 id: "all_stocks".to_string(),
                 title: "📊 Fetch All Stocks Data".to_string(),
                 description: "Fetch data for all stocks in a given date range".to_string(),
-                requires_confirmation: true,
+                requires_confirmation: false,
             },
         ];
 
@@ -213,7 +211,8 @@ impl DataCollectionView {
             status: "Ready".to_string(),
             confirmation_state: None,
             stock_selection_state: None,
-            date_selection_state: None,
+            date_range_input_state: None,
+            selected_stock_for_date_range: None,
             state_manager: AsyncStateManager::new(), // This will be replaced by global one
             database: None,
             global_broadcast_sender: None,
@@ -256,24 +255,25 @@ impl DataCollectionView {
         vec![] // Empty list - will be populated from database
     }
 
-    /// Start date selection for a selected stock
-    fn start_date_selection(&mut self, stock: String) {
+    /// Start date range input for single stock
+    fn start_date_range_input_for_single_stock(&mut self, selected_stock: String) {
         let today = chrono::Utc::now().date_naive();
-        let default_start = today - chrono::Duration::days(30);
+        let default_start = today - chrono::Duration::days(30); // Default to last 30 days
         
-        self.date_selection_state = Some(DateSelectionState {
-            selected_stock: stock,
+        self.date_range_input_state = Some(DateRangeInputState {
             start_date_input: default_start.format("%Y-%m-%d").to_string(),
             end_date_input: today.format("%Y-%m-%d").to_string(),
-            selected_field: DateField::StartDate,
+            selected_field: DateRangeField::StartDate,
             cursor_position: 0,
+            is_active: true,
         });
         
-        self.stock_selection_state = None;
-        self.add_log_message(LogLevel::Info, "Date selection started. Use ↑/↓ to navigate, ←/→ to edit, Enter to confirm");
+        // Store the selected stock for later use
+        self.selected_stock_for_date_range = Some(selected_stock.clone());
+        
+        self.add_log_message(LogLevel::Info, &format!("Enter date range for {}", selected_stock));
+        self.add_log_message(LogLevel::Info, "Use Tab to switch between fields, Enter to start collection");
     }
-
-    /// Parse date input in YYYY-MM-DD format
     fn parse_date_input(&self, input: &str) -> Result<NaiveDate> {
         // Try YYYY-MM-DD format first
         if input.len() == 10 && input.contains('-') {
@@ -330,8 +330,7 @@ impl DataCollectionView {
                 self.start_stock_and_date_selection();
             }
             "all_stocks" => {
-                self.add_log_message(LogLevel::Info, "Starting historical data collection...");
-                self.run_historical_collection();
+                self.start_date_range_input();
             }
             _ => {
                 self.add_log_message(LogLevel::Error, &format!("Unknown action: {}", action_id));
@@ -388,52 +387,234 @@ impl DataCollectionView {
         });
     }
 
-    /// Run historical data collection
-    fn run_historical_collection(&mut self) {
-        let start_date = chrono::NaiveDate::from_ymd_opt(2020, 1, 1).unwrap();
-        let end_date = chrono::Utc::now().date_naive();
+    /// Start date range input for concurrent fetching
+    fn start_date_range_input(&mut self) {
+        let today = chrono::Utc::now().date_naive();
+        let default_start = today - chrono::Duration::days(30); // Default to last 30 days
         
-        self.add_log_message(LogLevel::Info, &format!("Starting historical data collection from {} to {}", start_date, end_date));
+        self.date_range_input_state = Some(DateRangeInputState {
+            start_date_input: default_start.format("%Y-%m-%d").to_string(),
+            end_date_input: today.format("%Y-%m-%d").to_string(),
+            selected_field: DateRangeField::StartDate,
+            cursor_position: 0,
+            is_active: true,
+        });
         
-        // Start async operation
-        let operation_id = "historical_collection".to_string();
-        let _ = self.state_manager.start_operation(operation_id.clone(), "Historical Data Collection".to_string(), true);
+        self.add_log_message(LogLevel::Info, "Enter date range for concurrent data collection");
+        self.add_log_message(LogLevel::Info, "Use Tab to switch between fields, Enter to start collection");
+    }
+
+    /// Handle date range input key events
+    fn handle_date_range_input(&mut self, key: crossterm::event::KeyCode) -> bool {
+        if let Some(ref mut state) = self.date_range_input_state {
+            match key {
+                crossterm::event::KeyCode::Tab => {
+                    // Switch between fields
+                    state.selected_field = match state.selected_field {
+                        DateRangeField::StartDate => DateRangeField::EndDate,
+                        DateRangeField::EndDate => DateRangeField::StartDate,
+                    };
+                    state.cursor_position = 0;
+                    return true;
+                }
+                crossterm::event::KeyCode::Enter => {
+                    // Start collection based on whether it's single stock or all stocks
+                    if self.selected_stock_for_date_range.is_some() {
+                        self.start_single_stock_collection();
+                    } else {
+                        self.start_concurrent_fetching();
+                    }
+                    return true;
+                }
+                crossterm::event::KeyCode::Esc => {
+                    // Cancel
+                    self.date_range_input_state = None;
+                    self.selected_stock_for_date_range = None;
+                    self.add_log_message(LogLevel::Info, "Date range input cancelled");
+                    return true;
+                }
+                crossterm::event::KeyCode::Char(c) => {
+                    // Handle character input
+                    let current_input = match state.selected_field {
+                        DateRangeField::StartDate => &mut state.start_date_input,
+                        DateRangeField::EndDate => &mut state.end_date_input,
+                    };
+                    
+                    if current_input.len() < 10 && c.is_ascii_digit() || c == '-' {
+                        if state.cursor_position < current_input.len() {
+                            current_input.insert(state.cursor_position, c);
+                        } else {
+                            current_input.push(c);
+                        }
+                        state.cursor_position += 1;
+                    }
+                    return true;
+                }
+                crossterm::event::KeyCode::Backspace => {
+                    // Handle backspace
+                    let current_input = match state.selected_field {
+                        DateRangeField::StartDate => &mut state.start_date_input,
+                        DateRangeField::EndDate => &mut state.end_date_input,
+                    };
+                    
+                    if state.cursor_position > 0 && state.cursor_position <= current_input.len() {
+                        current_input.remove(state.cursor_position - 1);
+                        state.cursor_position -= 1;
+                    }
+                    return true;
+                }
+                crossterm::event::KeyCode::Left => {
+                    if state.cursor_position > 0 {
+                        state.cursor_position -= 1;
+                    }
+                    return true;
+                }
+                crossterm::event::KeyCode::Right => {
+                    let current_input = match state.selected_field {
+                        DateRangeField::StartDate => &state.start_date_input,
+                        DateRangeField::EndDate => &state.end_date_input,
+                    };
+                    if state.cursor_position < current_input.len() {
+                        state.cursor_position += 1;
+                    }
+                    return true;
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// Start single stock collection with the entered date range
+    fn start_single_stock_collection(&mut self) {
+        // Parse dates
+        let date_state = if let Some(state) = &self.date_range_input_state {
+            state.clone()
+        } else {
+            self.add_log_message(LogLevel::Error, "No date range input state");
+            return;
+        };
+
+        let selected_stock = if let Some(stock) = &self.selected_stock_for_date_range {
+            stock.clone()
+        } else {
+            self.add_log_message(LogLevel::Error, "No stock selected for date range");
+            return;
+        };
+
+        let start_date = match NaiveDate::parse_from_str(&date_state.start_date_input, "%Y-%m-%d") {
+            Ok(date) => date,
+            Err(_) => {
+                self.add_log_message(LogLevel::Error, "Invalid start date format (use YYYY-MM-DD)");
+                return;
+            }
+        };
+
+        let end_date = match NaiveDate::parse_from_str(&date_state.end_date_input, "%Y-%m-%d") {
+            Ok(date) => date,
+            Err(_) => {
+                self.add_log_message(LogLevel::Error, "Invalid end date format (use YYYY-MM-DD)");
+                return;
+            }
+        };
+
+        if start_date > end_date {
+            self.add_log_message(LogLevel::Error, "Start date must be before end date");
+            return;
+        }
+
+        // Clear date input state
+        self.date_range_input_state = None;
+        self.selected_stock_for_date_range = None;
+
+        // Start single stock collection
+        self.run_single_stock_collection(selected_stock, start_date, end_date);
+    }
+    fn start_concurrent_fetching(&mut self) {
+        // Parse dates
+        let date_state = if let Some(state) = &self.date_range_input_state {
+            state.clone()
+        } else {
+            self.add_log_message(LogLevel::Error, "No date range input state");
+            return;
+        };
+
+        let start_date = match NaiveDate::parse_from_str(&date_state.start_date_input, "%Y-%m-%d") {
+            Ok(date) => date,
+            Err(_) => {
+                self.add_log_message(LogLevel::Error, "Invalid start date format (use YYYY-MM-DD)");
+                return;
+            }
+        };
+
+        let end_date = match NaiveDate::parse_from_str(&date_state.end_date_input, "%Y-%m-%d") {
+            Ok(date) => date,
+            Err(_) => {
+                self.add_log_message(LogLevel::Error, "Invalid end date format (use YYYY-MM-DD)");
+                return;
+            }
+        };
+
+        if start_date > end_date {
+            self.add_log_message(LogLevel::Error, "Start date must be before end date");
+            return;
+        }
+
+        // Get database reference
+        let database = if let Some(db) = &self.database {
+            db.clone()
+        } else {
+            self.add_log_message(LogLevel::Error, "Database not available");
+            return;
+        };
+
+        // Clear date input state
+        self.date_range_input_state = None;
+
+        // Start concurrent fetching
+        self.add_log_message(LogLevel::Info, &format!("Starting concurrent fetch from {} to {}", start_date, end_date));
         
-        // Spawn the actual work
+        let operation_id = "concurrent_fetch".to_string();
+        let _ = self.state_manager.start_operation(operation_id.clone(), "Concurrent Data Collection".to_string(), true);
+        
+        // Spawn the concurrent fetching task
         let mut state_manager = self.state_manager.clone();
         let global_broadcast_sender = self.global_broadcast_sender.clone().expect("Global broadcast sender not set");
+        
         tokio::spawn(async move {
-            let start_str = start_date.format("%Y%m%d").to_string();
-            let end_str = end_date.format("%Y%m%d").to_string();
+            use crate::concurrent_fetcher::{ConcurrentFetchConfig, DateRange, fetch_stocks_concurrently_with_logging};
             
-            let output = Command::new("cargo")
-                .args([
-                    "run", "--bin", "collect_with_detailed_logs", "--", 
-                    "-s", &start_str, "-e", &end_str
-                ])
-                .output();
+            let fetch_config = ConcurrentFetchConfig {
+                date_range: DateRange {
+                    start_date,
+                    end_date,
+                },
+                num_threads: 5, // Reasonable default
+                retry_attempts: 3,
+                max_stocks: None, // No limit for production use
+            };
 
-            match output {
-                Ok(output) => {
-                    if output.status.success() {
-                        let stdout = String::from_utf8_lossy(&output.stdout);
-                        let _ = state_manager.complete_operation(&operation_id, Ok("Historical data collection completed successfully".to_string()));
-                        // Use global broadcast sender for async logging
-                        let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
-                            level: LogLevel::Success, 
-                            message: format!("Output: {}", stdout.trim()) 
-                        });
-                    } else {
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        let _ = state_manager.complete_operation(&operation_id, Err("Failed to collect historical data".to_string()));
-                        let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
-                            level: LogLevel::Error, 
-                            message: format!("Error: {}", stderr.trim()) 
-                        });
-                    }
+            // Send initial log message
+            let _ = global_broadcast_sender.send(StateUpdate::LogMessage {
+                level: LogLevel::Info,
+                message: format!("🔄 Starting concurrent fetch for all stocks from {} to {}", 
+                                start_date, end_date),
+            });
+
+            match fetch_stocks_concurrently_with_logging(database, fetch_config, Some(Arc::new(global_broadcast_sender))).await {
+                Ok(result) => {
+                    let success_message = format!(
+                        "✅ Concurrent fetch completed! Processed: {}, Skipped: {}, Failed: {}, Records: {}",
+                        result.processed_stocks,
+                        result.skipped_stocks,
+                        result.failed_stocks,
+                        result.total_records_fetched
+                    );
+                    let _ = state_manager.complete_operation(&operation_id, Ok(success_message));
                 }
                 Err(e) => {
-                    let _ = state_manager.complete_operation(&operation_id, Err(format!("Failed to execute command: {}", e)));
+                    let error_message = format!("❌ Concurrent fetch failed: {}", e);
+                    let _ = state_manager.complete_operation(&operation_id, Err(error_message));
                 }
             }
         });
@@ -929,15 +1110,31 @@ impl DataCollectionView {
         f.render_stateful_widget(list, chunks[1], &mut ratatui::widgets::ListState::default().with_selected(Some(stock_state.selected_index)));
     }
 
-    /// Render date selection
-    fn render_date_selection(&self, f: &mut Frame, area: Rect, date_state: &DateSelectionState) {
+    /// Render date range input
+    fn render_date_range_input(&self, f: &mut Frame, area: Rect, date_state: &DateRangeInputState) {
         // Date inputs with cursor
-        let start_date_with_cursor = self.render_input_field_with_cursor(&date_state.start_date_input, date_state.cursor_position, true);
-        let end_date_with_cursor = self.render_input_field_with_cursor(&date_state.end_date_input, 0, false);
+        let start_date_with_cursor = self.render_input_field_with_cursor(
+            &date_state.start_date_input, 
+            if date_state.selected_field == DateRangeField::StartDate { date_state.cursor_position } else { 0 },
+            date_state.selected_field == DateRangeField::StartDate
+        );
+        let end_date_with_cursor = self.render_input_field_with_cursor(
+            &date_state.end_date_input, 
+            if date_state.selected_field == DateRangeField::EndDate { date_state.cursor_position } else { 0 },
+            date_state.selected_field == DateRangeField::EndDate
+        );
+        
+        // Determine title based on whether it's single stock or all stocks
+        let title = if self.selected_stock_for_date_range.is_some() {
+            let stock = self.selected_stock_for_date_range.as_ref().unwrap();
+            format!("📅 Enter Date Range for {}", stock)
+        } else {
+            "📅 Enter Date Range for Concurrent Data Collection".to_string()
+        };
         
         let date_content = vec![
             Line::from(vec![
-                Span::styled(format!("📅 Select Date Range for {}", date_state.selected_stock), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(title, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
             ]),
             Line::from(vec![Span::styled("", Style::default())]),
             Line::from(vec![
@@ -946,7 +1143,7 @@ impl DataCollectionView {
             ]),
             Line::from(vec![Span::styled("", Style::default())]),
             Line::from(vec![
-                Span::styled("End Date: ", Style::default().fg(Color::White)),
+                Span::styled("End Date:   ", Style::default().fg(Color::White)),
                 Span::styled(end_date_with_cursor, Style::default().fg(Color::Cyan)),
             ]),
             Line::from(vec![Span::styled("", Style::default())]),
@@ -955,12 +1152,12 @@ impl DataCollectionView {
             ]),
             Line::from(vec![Span::styled("", Style::default())]),
             Line::from(vec![
-                Span::styled("↑/↓: Navigate fields • ←/→: Move cursor • Enter: Start collection • Esc: Cancel", Style::default().fg(Color::Gray)),
+                Span::styled("Tab: Switch fields • ←/→: Move cursor • Enter: Start collection • Esc: Cancel", Style::default().fg(Color::Gray)),
             ]),
         ];
 
         let date_inputs = Paragraph::new(date_content)
-            .block(Block::default().borders(Borders::ALL).title("Date Range Selection"))
+            .block(Block::default().borders(Borders::ALL).title("Date Range Input"))
             .style(Style::default().fg(Color::White));
         f.render_widget(date_inputs, area);
     }
@@ -1005,9 +1202,9 @@ impl View for DataCollectionView {
             return;
         }
 
-        // If date selection is active, render date selection
-        if let Some(ref date_state) = self.date_selection_state {
-            self.render_date_selection(f, area, date_state);
+        // If date range input is active, render date range input
+        if let Some(ref date_state) = self.date_range_input_state {
+            self.render_date_range_input(f, area, date_state);
             return;
         }
 
@@ -1050,7 +1247,7 @@ impl View for DataCollectionView {
         if self.state_manager.has_active_operations() && 
            self.confirmation_state.is_none() && 
            self.stock_selection_state.is_none() && 
-           self.date_selection_state.is_none() {
+           self.date_range_input_state.is_none() {
             if key == crossterm::event::KeyCode::Char('q') || key == crossterm::event::KeyCode::Esc {
                 // Cancel all active operations
                 let active_operations: Vec<String> = self.state_manager.get_active_operations()
@@ -1151,7 +1348,8 @@ impl View for DataCollectionView {
                 crossterm::event::KeyCode::Enter => {
                     if !stock_state.available_stocks.is_empty() {
                         let selected_stock = stock_state.available_stocks[stock_state.selected_index].clone();
-                        self.start_date_selection(selected_stock);
+                        self.stock_selection_state = None;
+                        self.start_date_range_input_for_single_stock(selected_stock);
                     }
                 }
                 crossterm::event::KeyCode::Esc => {
@@ -1163,75 +1361,12 @@ impl View for DataCollectionView {
             return Ok(true);
         }
 
-        // Handle date selection
-        if let Some(ref mut date_state) = self.date_selection_state {
-            match key {
-                crossterm::event::KeyCode::Up => {
-                    // Navigate to previous field
-                    date_state.cursor_position = 0;
-                }
-                crossterm::event::KeyCode::Down => {
-                    // Navigate to next field
-                    date_state.cursor_position = 0;
-                }
-                crossterm::event::KeyCode::Left => {
-                    // Move cursor left within current field
-                    if date_state.cursor_position > 0 {
-                        date_state.cursor_position -= 1;
-                    }
-                }
-                crossterm::event::KeyCode::Right => {
-                    // Move cursor right within current field
-                    let current_input = &date_state.start_date_input;
-                    if date_state.cursor_position < current_input.len() {
-                        date_state.cursor_position += 1;
-                    }
-                }
-                crossterm::event::KeyCode::Char(c) => {
-                    // Only allow digits and hyphens
-                    if c.is_numeric() || c == '-' {
-                        let current_input = &mut date_state.start_date_input;
-                        if date_state.cursor_position <= current_input.len() {
-                            current_input.insert(date_state.cursor_position, c);
-                            date_state.cursor_position += 1;
-                        }
-                    }
-                }
-                crossterm::event::KeyCode::Backspace => {
-                    let current_input = &mut date_state.start_date_input;
-                    if date_state.cursor_position > 0 {
-                        current_input.remove(date_state.cursor_position - 1);
-                        date_state.cursor_position -= 1;
-                    }
-                }
-                crossterm::event::KeyCode::Enter => {
-                    // Parse dates and execute single stock collection
-                    if let Some(date_state) = &self.date_selection_state {
-                        match (self.parse_date_input(&date_state.start_date_input), self.parse_date_input(&date_state.end_date_input)) {
-                            (Ok(start_date), Ok(end_date)) => {
-                                if start_date <= end_date {
-                                    let stock = date_state.selected_stock.clone();
-                                    self.add_log_message(LogLevel::Info, &format!("Starting collection for {} from {} to {}", stock, start_date, end_date));
-                                    self.date_selection_state = None;
-                                    self.run_single_stock_collection(stock, start_date, end_date);
-                                } else {
-                                    self.add_log_message(LogLevel::Error, "Start date must be before or equal to end date");
-                                }
-                            }
-                            _ => {
-                                self.add_log_message(LogLevel::Error, "Invalid date format. Use YYYY-MM-DD");
-                            }
-                        }
-                    }
-                }
-                crossterm::event::KeyCode::Esc => {
-                    self.add_log_message(LogLevel::Info, "Date selection cancelled");
-                    self.date_selection_state = None;
-                }
-                _ => {}
-            }
-            return Ok(true);
+        // Handle date range input
+        if self.date_range_input_state.is_some() {
+            return Ok(self.handle_date_range_input(key));
         }
+
+        // Handle main view navigation
 
         // Handle main view navigation
         match key {

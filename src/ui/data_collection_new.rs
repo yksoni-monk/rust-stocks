@@ -270,7 +270,7 @@ impl DataCollectionView {
         
         // Store the selected stock for later use
         self.selected_stock_for_date_range = Some(selected_stock.clone());
-        
+
         self.add_log_message(LogLevel::Info, &format!("Enter date range for {}", selected_stock));
         self.add_log_message(LogLevel::Info, "Use Tab to switch between fields, Enter to start collection");
     }
@@ -595,7 +595,7 @@ impl DataCollectionView {
             };
 
             // Send initial log message
-            let _ = global_broadcast_sender.send(StateUpdate::LogMessage {
+                        let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
                 level: LogLevel::Info,
                 message: format!("🔄 Starting concurrent fetch for all stocks from {} to {}", 
                                 start_date, end_date),

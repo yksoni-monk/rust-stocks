@@ -166,8 +166,6 @@ pub async fn fetch_stocks_concurrently_with_logging(
     Ok(result)
 }
 
-#[allow(dead_code)]
-/// Worker thread function with TUI logging
 /// Worker thread function with TUI logging
 async fn worker_thread_with_logging(
     thread_id: usize,
@@ -292,96 +290,6 @@ async fn worker_thread_with_logging(
 
     Ok(())
 }
-async fn worker_thread(
-    thread_id: usize,
-    stock_queue: Arc<Mutex<Vec<Stock>>>,
-    database: Arc<DatabaseManagerSqlx>,
-    progress_sender: Arc<broadcast::Sender<FetchProgress>>,
-    counters: Arc<Mutex<FetchCounters>>,
-    config: ConcurrentFetchConfig,
-) -> Result<()> {
-    // Create API client for this thread
-    let api_config = Config::from_env()?;
-    let api_client = SchwabClient::new(&api_config)?;
-    
-    loop {
-        // Get next stock from queue
-        let stock = {
-            let mut queue = stock_queue.lock().unwrap();
-            if queue.is_empty() {
-                break; // No more stocks to process
-            }
-            queue.remove(0)
-        };
-
-        let stock_symbol = stock.symbol.clone();
-        let stock_id = stock.id.unwrap();
-
-        // Send progress update
-        let _ = progress_sender.send(FetchProgress {
-            thread_id,
-            stock_symbol: stock_symbol.clone(),
-            status: FetchStatus::Started,
-            message: format!("Thread {}: Starting {}", thread_id, stock_symbol),
-        });
-
-        // Check if data already exists for this date range
-        let existing_count = database.count_existing_records(
-            stock_id, 
-            config.date_range.start_date, 
-            config.date_range.end_date
-        ).await?;
-
-        if existing_count > 0 {
-            // Data already exists, skip
-            let _ = progress_sender.send(FetchProgress {
-                thread_id,
-                stock_symbol: stock_symbol.clone(),
-                status: FetchStatus::Skipped,
-                message: format!("Thread {}: Skipping {} ({} records already exist)", 
-                               thread_id, stock_symbol, existing_count),
-            });
-
-            let mut counters = counters.lock().unwrap();
-            counters.skipped_stocks += 1;
-            continue;
-        }
-
-        // Fetch data for this stock
-        match fetch_stock_data(&api_client, &database, &stock, &config).await {
-            Ok(records_fetched) => {
-                let _ = progress_sender.send(FetchProgress {
-                    thread_id,
-                    stock_symbol: stock_symbol.clone(),
-                    status: FetchStatus::Completed,
-                    message: format!("Thread {}: Completed {} ({} records fetched)", 
-                                   thread_id, stock_symbol, records_fetched),
-                });
-
-                let mut counters = counters.lock().unwrap();
-                counters.processed_stocks += 1;
-                counters.total_records_fetched += records_fetched;
-            }
-            Err(e) => {
-                let error_msg = format!("Thread {}: Failed {} - {}", thread_id, stock_symbol, e);
-                error!("{}", error_msg);
-                
-                let _ = progress_sender.send(FetchProgress {
-                    thread_id,
-                    stock_symbol: stock_symbol.clone(),
-                    status: FetchStatus::Failed(e.to_string()),
-                    message: error_msg,
-                });
-
-                let mut counters = counters.lock().unwrap();
-                counters.failed_stocks += 1;
-            }
-        }
-    }
-
-    Ok(())
-}
-
 #[allow(dead_code)]
 /// Fetch data for a single stock with retry logic using existing batching function
 async fn fetch_stock_data(

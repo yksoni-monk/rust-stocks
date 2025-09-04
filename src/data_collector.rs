@@ -187,7 +187,6 @@ impl DataCollector {
 
 
     /// Fetch historical data for a single stock using weekly batches (takes reference)
-    #[allow(dead_code)]
     pub async fn fetch_stock_history_with_batching_ref(
         client: &SchwabClient,
         database: &DatabaseManagerSqlx,

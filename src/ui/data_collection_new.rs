@@ -72,25 +72,7 @@ pub enum DateRangeField {
     EndDate,
 }
 
-/// Trading week batch calculator
-pub struct TradingWeekBatchCalculator;
-
-impl TradingWeekBatchCalculator {
-    /// Calculate trading week batches for a given date range
-    pub fn calculate_batches(start_date: NaiveDate, end_date: NaiveDate) -> Vec<crate::utils::TradingWeekBatch> {
-        crate::utils::TradingWeekBatchCalculator::calculate_batches(start_date, end_date)
-    }
-
-    /// Get the start of the trading week (Monday) for a given date
-    pub fn get_week_start(date: NaiveDate) -> NaiveDate {
-        crate::utils::TradingWeekBatchCalculator::get_week_start(date)
-    }
-
-    /// Get the end of the trading week (Friday) for a given date
-    pub fn get_week_end(date: NaiveDate) -> NaiveDate {
-        crate::utils::TradingWeekBatchCalculator::get_week_end(date)
-    }
-}
+// Trading week calculator removed - use crate::utils::TradingWeekBatchCalculator directly
 
 /// Refactored DataCollectionView implementing the View trait
 pub struct DataCollectionView {

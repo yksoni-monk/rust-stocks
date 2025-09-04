@@ -332,14 +332,14 @@ impl DataCollectionView {
         });
         
         self.add_log_message(LogLevel::Info, "Enter date range for concurrent data collection");
-        self.add_log_message(LogLevel::Info, "Use Tab to switch between fields, Enter to start collection");
+        self.add_log_message(LogLevel::Info, "Use Up/Down arrows to switch between fields, Enter to start collection");
     }
 
     /// Handle date range input key events
     fn handle_date_range_input(&mut self, key: crossterm::event::KeyCode) -> bool {
         if let Some(ref mut state) = self.date_range_input_state {
             match key {
-                crossterm::event::KeyCode::Tab => {
+                crossterm::event::KeyCode::Up | crossterm::event::KeyCode::Down => {
                     // Switch between fields
                     state.selected_field = match state.selected_field {
                         DateRangeField::StartDate => DateRangeField::EndDate,
@@ -678,7 +678,7 @@ impl DataCollectionView {
             let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
 
             // Calculate trading week batches
-                            let batches = TradingWeekBatchCalculator::calculate_batches(start_date_clone, end_date_clone);
+            let batches = TradingWeekBatchCalculator::calculate_batches(start_date_clone, end_date_clone);
             let log_message = format!("📊 Created {} trading week batches", batches.len());
             let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
                 level: LogLevel::Info, 
@@ -686,9 +686,13 @@ impl DataCollectionView {
             });
             let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
 
-            // Log batch plan
-            for batch in &batches {
-                let log_message = format!("📅 Batch {} ({} to {})", batch.batch_number, batch.start_date, batch.end_date);
+            // Log batch plan summary instead of individual batches
+            if !batches.is_empty() {
+                let log_message = format!("📅 Batch range: {} to {} ({} batches total)", 
+                    batches.first().unwrap().start_date, 
+                    batches.last().unwrap().end_date,
+                    batches.len()
+                );
                 let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
                     level: LogLevel::Info, 
                     message: log_message.clone() 
@@ -700,15 +704,14 @@ impl DataCollectionView {
 
             // Process each trading week batch
             for batch in batches {
-                let log_message = format!("🔄 Processing Batch {} ({} to {})", batch.batch_number, batch.start_date, batch.end_date);
+                // Check existing records for this batch
+                let log_message = format!("🔍 Checking existing records for batch {}", batch.batch_number);
                 let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
                     level: LogLevel::Info, 
                     message: log_message.clone() 
                 });
                 let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
-
-                // Check existing records for this batch
-                let _ = writeln!(log_writer, "[{}] 🔍 Checking existing records for batch {}", Utc::now().format("%H:%M:%S"), batch.batch_number);
+                
                 let existing_count = {
                     let db_arc = db_arc.clone();
                     let stock_id = stock.id.unwrap();
@@ -716,19 +719,25 @@ impl DataCollectionView {
                     let end_date = batch.end_date;
                     db_arc.count_existing_records(stock_id, start_date, end_date).await.unwrap_or(0)
                 };
-                let _ = writeln!(log_writer, "[{}] 📊 Found {} existing records for batch {}", Utc::now().format("%H:%M:%S"), existing_count, batch.batch_number);
+                
+                let log_message = format!("📊 Found {} existing records for batch {}", existing_count, batch.batch_number);
+                let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
+                    level: LogLevel::Info, 
+                    message: log_message.clone() 
+                });
+                let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
 
                 if existing_count > 0 {
-                    let log_message = format!("ℹ️ Batch {}: Found {} existing records, skipping", batch.batch_number, existing_count);
-                    let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
-                        level: LogLevel::Info, 
-                        message: log_message.clone() 
-                    });
-                    let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
                     continue;
                 }
 
-                let _ = writeln!(log_writer, "[{}] 🚀 Starting fetch_stock_history for batch {}", Utc::now().format("%H:%M:%S"), batch.batch_number);
+                let log_message = format!("🚀 Starting fetch_stock_history for batch {}", batch.batch_number);
+                let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
+                    level: LogLevel::Info, 
+                    message: log_message.clone() 
+                });
+                let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
+                
                 match crate::data_collector::DataCollector::fetch_stock_history(
                     client_arc.clone(),
                     db_arc.clone(),
@@ -738,22 +747,12 @@ impl DataCollectionView {
                 ).await {
                     Ok(inserted) => {
                         total_inserted += inserted;
-                        let _ = writeln!(log_writer, "[{}] ✅ fetch_stock_history completed for batch {}: {} records", Utc::now().format("%H:%M:%S"), batch.batch_number, inserted);
-                        if inserted > 0 {
-                            let log_message = format!("✅ Batch {}: Inserted {} records (Total: {})", batch.batch_number, inserted, total_inserted);
-                            let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
-                                level: LogLevel::Success, 
-                                message: log_message.clone() 
-                            });
-                            let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
-                        } else {
-                            let log_message = format!("ℹ️ Batch {}: No new records (data already exists) (Total: {})", batch.batch_number, total_inserted);
-                            let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
-                                level: LogLevel::Info, 
-                                message: log_message.clone() 
-                            });
-                            let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
-                        }
+                        let log_message = format!("✅ fetch_stock_history completed for batch {}: {} records", batch.batch_number, inserted);
+                        let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
+                            level: LogLevel::Success, 
+                            message: log_message.clone() 
+                        });
+                        let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
                     }
                     Err(e) => {
                         let error_msg = format!("❌ Batch {}: Failed - {}", batch.batch_number, e);
@@ -765,23 +764,25 @@ impl DataCollectionView {
                     }
                 }
 
-                let _ = writeln!(log_writer, "[{}] ⏱️ Waiting 500ms before next batch", Utc::now().format("%H:%M:%S"));
+                let log_message = format!("⏱️ Waiting 500ms before next batch");
+                let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
+                    level: LogLevel::Info, 
+                    message: log_message.clone() 
+                });
+                let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
                 // Small delay between batches to avoid rate limiting
                 tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
             }
 
-            let _ = writeln!(log_writer, "[{}] 🏁 All batches processed. Total inserted: {}", Utc::now().format("%H:%M:%S"), total_inserted);
+            let log_message = format!("🏁 All batches processed. Total inserted: {}", total_inserted);
+            let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
+                level: LogLevel::Info, 
+                message: log_message.clone() 
+            });
+            let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
             
-            // Send completion message to TUI logs
-            if total_inserted > 0 {
-                let log_message = format!("🎉 {} data collection completed: {} new records inserted", symbol_clone, total_inserted);
-                let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
-                    level: LogLevel::Success, 
-                    message: log_message.clone() 
-                });
-                let _ = state_manager.complete_operation(&operation_id, Ok(log_message.clone()));
-                let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
-            } else {
+            // Send completion message to TUI logs (only for the case where no data was needed)
+            if total_inserted == 0 {
                 let log_message = format!("✅ {} data collection completed: All data already exists (no new records needed)", symbol_clone);
                 let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
                     level: LogLevel::Success, 
@@ -789,6 +790,8 @@ impl DataCollectionView {
                 });
                 let _ = state_manager.complete_operation(&operation_id, Ok(log_message.clone()));
                 let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
+            } else {
+                let _ = state_manager.complete_operation(&operation_id, Ok("Data collection completed".to_string()));
             }
         });
     }

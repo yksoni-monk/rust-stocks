@@ -16,7 +16,18 @@ use crate::{
     data_collector::DataCollector,
 };
 
-/// Configuration for concurrent fetching
+/// Unified configuration for stock fetching (single stock or concurrent)
+#[derive(Debug, Clone)]
+pub struct UnifiedFetchConfig {
+    pub stocks: Vec<Stock>,           // Single=[selected], All=get_active_stocks()
+    pub date_range: DateRange,
+    pub num_threads: usize,           // Single=1, Concurrent=5-10
+    pub retry_attempts: u32,
+    pub rate_limit_ms: u64,
+    pub max_stocks: Option<usize>,    // For testing limits
+}
+
+/// Legacy configuration for backward compatibility
 #[derive(Debug, Clone)]
 pub struct ConcurrentFetchConfig {
     pub date_range: DateRange,
@@ -62,33 +73,25 @@ pub struct FetchResult {
     pub total_records_fetched: usize,
 }
 
-/// Main function to fetch stock data concurrently
-pub async fn fetch_stocks_concurrently(
+/// Unified function to fetch stock data (single stock or concurrent)
+pub async fn fetch_stocks_unified_with_logging(
     database: Arc<DatabaseManagerSqlx>,
-    config: ConcurrentFetchConfig,
-) -> Result<FetchResult> {
-    fetch_stocks_concurrently_with_logging(database, config, None).await
-}
-
-/// Main function to fetch stock data concurrently with TUI logging
-pub async fn fetch_stocks_concurrently_with_logging(
-    database: Arc<DatabaseManagerSqlx>,
-    config: ConcurrentFetchConfig,
+    config: UnifiedFetchConfig,
     global_broadcast_sender: Option<Arc<broadcast::Sender<crate::ui::state::StateUpdate>>>,
 ) -> Result<FetchResult> {
-    info!("🚀 Starting concurrent fetch with {} threads", config.num_threads);
+    info!("🚀 Starting unified fetch with {} threads", config.num_threads);
     info!("📅 Date range: {} to {}", config.date_range.start_date, config.date_range.end_date);
 
-    // Get all active stocks ordered by symbol
-    let stocks = database.get_active_stocks().await?;
+    // Use provided stocks instead of loading from database
+    let stocks = config.stocks.clone();
     let total_stocks = stocks.len();
-    info!("📊 Found {} active stocks to process", total_stocks);
+    info!("📊 Processing {} stocks", total_stocks);
 
     // Send log to TUI if available
     if let Some(sender) = &global_broadcast_sender {
         let _ = sender.send(crate::ui::state::StateUpdate::LogMessage {
             level: crate::ui::state::LogLevel::Info,
-            message: format!("📊 Found {} active stocks to process", total_stocks),
+            message: format!("📊 Processing {} stocks", total_stocks),
         });
     }
 
@@ -159,11 +162,49 @@ pub async fn fetch_stocks_concurrently_with_logging(
         total_records_fetched: final_counters.total_records_fetched,
     };
 
-    info!("✅ Concurrent fetch completed");
+    info!("✅ Unified fetch completed");
     info!("📊 Results: {} processed, {} skipped, {} failed, {} records fetched", 
           result.processed_stocks, result.skipped_stocks, result.failed_stocks, result.total_records_fetched);
 
     Ok(result)
+}
+
+/// Main function to fetch stock data concurrently
+pub async fn fetch_stocks_concurrently(
+    database: Arc<DatabaseManagerSqlx>,
+    config: ConcurrentFetchConfig,
+) -> Result<FetchResult> {
+    // Convert legacy config to unified config
+    let stocks = database.get_active_stocks().await?;
+    let unified_config = UnifiedFetchConfig {
+        stocks,
+        date_range: config.date_range,
+        num_threads: config.num_threads,
+        retry_attempts: config.retry_attempts,
+        rate_limit_ms: 500, // Default rate limit
+        max_stocks: config.max_stocks,
+    };
+    fetch_stocks_unified_with_logging(database, unified_config, None).await
+}
+
+/// Legacy function to fetch stock data concurrently with TUI logging
+/// Delegates to the unified function for consistency
+pub async fn fetch_stocks_concurrently_with_logging(
+    database: Arc<DatabaseManagerSqlx>,
+    config: ConcurrentFetchConfig,
+    global_broadcast_sender: Option<Arc<broadcast::Sender<crate::ui::state::StateUpdate>>>,
+) -> Result<FetchResult> {
+    // Convert legacy config to unified config
+    let stocks = database.get_active_stocks().await?;
+    let unified_config = UnifiedFetchConfig {
+        stocks,
+        date_range: config.date_range,
+        num_threads: config.num_threads,
+        retry_attempts: config.retry_attempts,
+        rate_limit_ms: 500, // Default rate limit
+        max_stocks: config.max_stocks,
+    };
+    fetch_stocks_unified_with_logging(database, unified_config, global_broadcast_sender).await
 }
 
 /// Worker thread function with TUI logging
@@ -173,7 +214,7 @@ async fn worker_thread_with_logging(
     database: Arc<DatabaseManagerSqlx>,
     progress_sender: Arc<broadcast::Sender<FetchProgress>>,
     counters: Arc<Mutex<FetchCounters>>,
-    config: ConcurrentFetchConfig,
+    config: UnifiedFetchConfig,
     global_broadcast_sender: Option<Arc<broadcast::Sender<crate::ui::state::StateUpdate>>>,
 ) -> Result<()> {
     // Create API client for this thread
@@ -265,7 +306,7 @@ async fn fetch_stock_data(
     api_client: &SchwabClient,
     database: &DatabaseManagerSqlx,
     stock: &Stock,
-    config: &ConcurrentFetchConfig,
+    config: &UnifiedFetchConfig,
 ) -> Result<usize> {
     let mut attempts = 0;
     let mut last_error = None;

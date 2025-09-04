@@ -944,6 +944,169 @@ async fn execute_action(&mut self, action: &DataCollectionAction) -> Result<()> 
 - **API Authentication**: Leverage existing Python token management
 - **Error Recovery**: Implement robust retry mechanisms with exponential backoff
 
+## Data Collection Architecture Consolidation (Phase 4A)
+
+### Problem Statement
+
+The current data collection system has architectural redundancy between single stock and concurrent stock fetching:
+
+**Current Issues:**
+- **Duplicate Batching Logic**: Both single and concurrent flows implement trading week batching
+- **Multiple Similar Functions**: Three functions in DataCollector doing similar work with different interfaces
+- **Inconsistent UI Logging**: Manual batch processing in UI layer duplicates existing batching logic
+- **Code Maintenance Burden**: Changes must be made in multiple places
+
+**Current Architecture:**
+```
+Single Stock Flow:
+UI (run_single_stock_collection) 
+  → Manual batching with TradingWeekBatchCalculator
+  → DataCollector::fetch_stock_history() (no batching)
+  → Custom TUI logging per batch
+
+Concurrent Stock Flow:  
+UI (start_concurrent_fetching)
+  → ConcurrentFetcher
+  → DataCollector::fetch_stock_history_with_batching_ref() (with batching)
+  → Thread-based TUI logging
+```
+
+### Consolidation Plan
+
+**Philosophical Truth**: Single stock fetching is just concurrent fetching with `threads=1` and `stocks=[selected_stock]`
+
+**Target Architecture:**
+```
+Unified Flow:
+UI → Unified Stock Fetcher → Consistent TUI Logging
+
+Single Stock: UnifiedFetcher(threads=1, stocks=[selected])
+All Stocks:   UnifiedFetcher(threads=5-10, stocks=get_active_stocks())
+```
+
+### Implementation Plan
+
+#### Step 1: Create Unified Configuration
+```rust
+#[derive(Debug, Clone)]
+pub struct UnifiedFetchConfig {
+    pub stocks: Vec<Stock>,           // Single=[selected], All=get_active_stocks()  
+    pub date_range: DateRange,
+    pub num_threads: usize,           // Single=1, Concurrent=5-10
+    pub retry_attempts: u32,
+    pub rate_limit_ms: u64,
+    pub max_stocks: Option<usize>,    // For testing limits
+}
+```
+
+#### Step 2: Consolidate DataCollector Functions
+**Remove:**
+- `fetch_stock_history()` (simple, no batching)
+- Manual batching logic in `run_single_stock_collection`
+
+**Keep & Enhance:**
+- `fetch_stock_history_with_batching_ref()` → rename to `fetch_single_stock_with_batching()`
+- Make it the single source of truth for all stock data fetching
+
+#### Step 3: Update UI Layer
+**Single Stock Collection:**
+```rust
+async fn run_single_stock_collection(&mut self, stock: Stock, date_range: DateRange) {
+    let config = UnifiedFetchConfig {
+        stocks: vec![stock],
+        date_range,
+        num_threads: 1,
+        retry_attempts: 3,
+        rate_limit_ms: 500,
+        max_stocks: None,
+    };
+    
+    fetch_stocks_unified_with_logging(database, config, global_broadcast_sender).await
+}
+```
+
+**Concurrent Collection:**
+```rust
+async fn start_concurrent_fetching(&mut self, date_range: DateRange) {
+    let all_stocks = database.get_active_stocks().await?;
+    let config = UnifiedFetchConfig {
+        stocks: all_stocks,
+        date_range,
+        num_threads: 5,
+        retry_attempts: 3,
+        rate_limit_ms: 500,
+        max_stocks: None,
+    };
+    
+    fetch_stocks_unified_with_logging(database, config, global_broadcast_sender).await
+}
+```
+
+#### Step 4: Unified Function Signature
+```rust
+pub async fn fetch_stocks_unified_with_logging(
+    database: Arc<DatabaseManagerSqlx>,
+    config: UnifiedFetchConfig,
+    global_broadcast_sender: Option<Arc<broadcast::Sender<StateUpdate>>>,
+) -> Result<FetchResult>
+```
+
+### Expected Benefits
+
+1. **Code Elimination:**
+   - Remove ~200 lines of duplicate batching logic from UI
+   - Eliminate `fetch_stock_history()` function
+   - Single function handles all data fetching scenarios
+
+2. **Consistent Behavior:**
+   - Same error handling and retry logic for both flows
+   - Unified logging format and timing
+   - Same rate limiting strategy
+
+3. **Easier Testing:**
+   - Single code path to test for all scenarios
+   - Test binaries automatically get improvements
+   - Consistent behavior across UI and CLI
+
+4. **Maintainability:**
+   - Changes made in one place affect all flows
+   - Clear separation of concerns: UI handles UX, DataCollector handles fetching
+   - Simpler debugging and profiling
+
+### Migration Checklist
+
+- [ ] Create `UnifiedFetchConfig` struct
+- [ ] Rename `fetch_stocks_concurrently_with_logging` → `fetch_stocks_unified_with_logging`
+- [ ] Update function to accept `UnifiedFetchConfig` instead of `ConcurrentFetchConfig`
+- [ ] Remove manual batching from `run_single_stock_collection`
+- [ ] Update single stock UI to call unified fetcher with threads=1
+- [ ] Remove `fetch_stock_history()` function from DataCollector
+- [ ] Update test binaries to use unified interface
+- [ ] Verify UI functionality: both "single stock" and "all stocks" work identically
+- [ ] Test with different thread counts (1, 5, 10)
+
+### Test Compatibility
+
+**Test Binaries Impact:**
+- `data_collection_test.rs`: Currently calls `DataCollector::fetch_stock_history()` - needs update
+- `test_concurrent_fetcher_sqlx.rs`: Uses concurrent fetcher - minimal changes needed
+- Other test binaries: Use tracing directly, unaffected
+
+**UI Functionality Preserved:**
+- ✅ User can still select single stock + date range
+- ✅ User can still select "all stocks" + date range  
+- ✅ Same TUI experience, cleaner implementation
+- ✅ Same performance characteristics
+- ✅ Same error handling and recovery
+
+### Rollback Plan
+
+If issues arise during consolidation:
+1. Revert to git commit before consolidation starts
+2. Each step is incremental and can be backed out individually
+3. Tests will catch any functional regressions immediately
+4. UI behavior should be identical - any differences indicate bugs
+
 ---
-*Last Updated: 2025-08-29*
-*Version: 1.0*
+*Last Updated: 2025-01-04*
+*Version: 1.1 - Added Data Collection Consolidation Plan*

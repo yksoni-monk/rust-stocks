@@ -513,26 +513,42 @@ impl DataCollectionView {
         let global_broadcast_sender = self.global_broadcast_sender.clone().expect("Global broadcast sender not set");
         
         tokio::spawn(async move {
-            use crate::concurrent_fetcher::{ConcurrentFetchConfig, DateRange, fetch_stocks_concurrently_with_logging};
+            use crate::concurrent_fetcher::{UnifiedFetchConfig, DateRange, fetch_stocks_unified_with_logging};
+
+            // Get all active stocks from database
+            let stocks = match database.get_active_stocks().await {
+                Ok(stocks) => stocks,
+                Err(e) => {
+                    let error_msg = format!("❌ Failed to get active stocks: {}", e);
+                    let _ = global_broadcast_sender.send(StateUpdate::LogMessage {
+                        level: LogLevel::Error,
+                        message: error_msg.clone(),
+                    });
+                    let _ = state_manager.complete_operation(&operation_id, Err(error_msg));
+                    return;
+                }
+            };
             
-            let fetch_config = ConcurrentFetchConfig {
+            let fetch_config = UnifiedFetchConfig {
+                stocks, // Use all active stocks
                 date_range: DateRange {
                     start_date,
                     end_date,
                 },
-                num_threads: 5, // Reasonable default
+                num_threads: 5, // Reasonable default for concurrent fetching
                 retry_attempts: 3,
+                rate_limit_ms: 500,
                 max_stocks: None, // No limit for production use
             };
 
             // Send initial log message
-                        let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
+            let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
                 level: LogLevel::Info,
                 message: format!("🔄 Starting concurrent fetch for all stocks from {} to {}", 
                                 start_date, end_date),
             });
 
-            match fetch_stocks_concurrently_with_logging(database, fetch_config, Some(Arc::new(global_broadcast_sender))).await {
+            match fetch_stocks_unified_with_logging(database, fetch_config, Some(Arc::new(global_broadcast_sender))).await {
                 Ok(result) => {
                     let success_message = format!(
                         "✅ Concurrent fetch completed! Processed: {}, Skipped: {}, Failed: {}, Records: {}",
@@ -551,7 +567,7 @@ impl DataCollectionView {
         });
     }
 
-    /// Run single stock collection
+    /// Run single stock collection using unified fetcher
     fn run_single_stock_collection(&mut self, symbol: String, start_date: NaiveDate, end_date: NaiveDate) {
         // Log the start of collection for user feedback
         self.add_log_message(LogLevel::Info, &format!("Starting collection for {} from {} to {}", symbol, start_date, end_date));
@@ -560,238 +576,61 @@ impl DataCollectionView {
         let operation_id = format!("single_stock_{}", symbol);
         let _ = self.state_manager.start_operation(operation_id.clone(), format!("Single Stock Collection: {}", symbol), true);
         
-        // Spawn the actual work
+        // Spawn the actual work using unified fetcher
         let mut state_manager = self.state_manager.clone();
         let symbol_clone = symbol.clone();
-        let start_date_clone = start_date;
-        let end_date_clone = end_date;
         let global_broadcast_sender = self.global_broadcast_sender.clone().expect("Global broadcast sender not set");
+        let database = self.database.clone().expect("Database not available");
         
         tokio::spawn(async move {
-            // Create log file for debugging in archive folder
-            let archive_dir = "archive/debug_logs";
-            std::fs::create_dir_all(archive_dir).unwrap_or_else(|_| ());
-            let log_file_path = format!("{}/debug_collection_{}_{}_{}.log", archive_dir, symbol_clone, start_date_clone, end_date_clone);
-            
-            // Create log file inside the async task
-            let log_file = std::fs::File::create(&log_file_path).unwrap_or_else(|_| {
-                // Fallback to main directory if archive creation fails
-                std::fs::File::create("debug_collection.log").unwrap()
-            });
-            let mut log_writer = std::io::BufWriter::new(log_file);
+            use crate::concurrent_fetcher::{UnifiedFetchConfig, DateRange, fetch_stocks_unified_with_logging};
 
-            let log_message = format!("🔄 Preparing to fetch {} from {} to {}", symbol_clone, start_date_clone, end_date_clone);
-            let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
-                level: LogLevel::Info, 
-                message: log_message.clone() 
-            });
-            let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
-
-            // Load config, DB and client
-            let config = match crate::models::Config::from_env() {
-                Ok(c) => {
-                    let _ = writeln!(log_writer, "[{}] ✅ Config loaded successfully", Utc::now().format("%H:%M:%S"));
-                    c
-                },
-                Err(e) => { 
-                    let error_msg = format!("❌ Config error: {}", e);
-                    let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
-                        level: LogLevel::Error, 
-                        message: error_msg.clone() 
-                    });
-                    let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), error_msg);
-                    let _ = state_manager.complete_operation(&operation_id, Err(error_msg));
-                    return;
-                }
-            };
-            
-            let database = match crate::database_sqlx::DatabaseManagerSqlx::new(&config.database_path).await {
-                Ok(db) => {
-                    let _ = writeln!(log_writer, "[{}] ✅ Database initialized successfully", Utc::now().format("%H:%M:%S"));
-                    db
-                },
-                Err(e) => { 
-                    let error_msg = format!("❌ DB init error: {}", e);
-                    let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
-                        level: LogLevel::Error, 
-                        message: error_msg.clone() 
-                    });
-                    let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), error_msg);
-                    let _ = state_manager.complete_operation(&operation_id, Err(error_msg));
-                    return;
-                }
-            };
-            
-            let client = match crate::api::SchwabClient::new(&config) {
-                Ok(c) => {
-                    let _ = writeln!(log_writer, "[{}] ✅ Schwab client initialized successfully", Utc::now().format("%H:%M:%S"));
-                    c
-                },
-                Err(e) => { 
-                    let error_msg = format!("❌ Client init error: {}", e);
-                    let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
-                        level: LogLevel::Error, 
-                        message: error_msg.clone() 
-                    });
-                    let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), error_msg);
-                    let _ = state_manager.complete_operation(&operation_id, Err(error_msg));
-                    return;
-                }
-            };
-
-            // Find stock by symbol
+            // Get database and find stock by symbol
             let stock = match database.get_stock_by_symbol(&symbol_clone).await {
-                Ok(Some(s)) => {
-                    let _ = writeln!(log_writer, "[{}] ✅ Found stock: {} ({})", Utc::now().format("%H:%M:%S"), s.symbol, s.company_name);
-                    s
-                },
-                Ok(None) => { 
-                    let error_msg = format!("❌ Unknown symbol {} in DB", symbol_clone);
-                    let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
-                        level: LogLevel::Error, 
-                        message: error_msg.clone() 
+                Ok(Some(s)) => s,
+                Ok(None) => {
+                    let error_msg = format!("❌ Unknown symbol {} in database", symbol_clone);
+                    let _ = global_broadcast_sender.send(StateUpdate::LogMessage {
+                        level: LogLevel::Error,
+                        message: error_msg.clone(),
                     });
-                    let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), error_msg);
                     let _ = state_manager.complete_operation(&operation_id, Err(error_msg));
                     return;
                 }
-                Err(e) => { 
-                    let error_msg = format!("❌ DB query error: {}", e);
-                    let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
-                        level: LogLevel::Error, 
-                        message: error_msg.clone() 
+                Err(e) => {
+                    let error_msg = format!("❌ Database query error: {}", e);
+                    let _ = global_broadcast_sender.send(StateUpdate::LogMessage {
+                        level: LogLevel::Error,
+                        message: error_msg.clone(),
                     });
-                    let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), error_msg);
                     let _ = state_manager.complete_operation(&operation_id, Err(error_msg));
                     return;
                 }
             };
 
-            let client_arc = Arc::new(client);
-            let db_arc = Arc::new(database);
+            // Create unified config for single stock (threads=1)
+            let config = UnifiedFetchConfig {
+                stocks: vec![stock.clone()],
+                date_range: DateRange { start_date, end_date },
+                num_threads: 1, // Single stock = 1 thread
+                retry_attempts: 3,
+                rate_limit_ms: 500,
+                max_stocks: None,
+            };
 
-            let log_message = format!("📡 Fetching {} ({} → {})", symbol_clone, start_date_clone, end_date_clone);
-            let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
-                level: LogLevel::Info, 
-                message: log_message.clone() 
-            });
-            let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
-
-            // Calculate trading week batches
-            let batches = TradingWeekBatchCalculator::calculate_batches(start_date_clone, end_date_clone);
-            let log_message = format!("📊 Created {} trading week batches", batches.len());
-            let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
-                level: LogLevel::Info, 
-                message: log_message.clone() 
-            });
-            let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
-
-            // Log batch plan summary instead of individual batches
-            if !batches.is_empty() {
-                let log_message = format!("📅 Batch range: {} to {} ({} batches total)", 
-                    batches.first().unwrap().start_date, 
-                    batches.last().unwrap().end_date,
-                    batches.len()
-                );
-                let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
-                    level: LogLevel::Info, 
-                    message: log_message.clone() 
-                });
-                let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
-            }
-
-            let mut total_inserted = 0;
-
-            // Process each trading week batch
-            for batch in batches {
-                // Check existing records for this batch
-                let log_message = format!("🔍 Checking existing records for batch {}", batch.batch_number);
-                let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
-                    level: LogLevel::Info, 
-                    message: log_message.clone() 
-                });
-                let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
-                
-                let existing_count = {
-                    let db_arc = db_arc.clone();
-                    let stock_id = stock.id.unwrap();
-                    let start_date = batch.start_date;
-                    let end_date = batch.end_date;
-                    db_arc.count_existing_records(stock_id, start_date, end_date).await.unwrap_or(0)
-                };
-                
-                let log_message = format!("📊 Found {} existing records for batch {}", existing_count, batch.batch_number);
-                let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
-                    level: LogLevel::Info, 
-                    message: log_message.clone() 
-                });
-                let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
-
-                if existing_count > 0 {
-                    continue;
+            // Use unified fetcher
+            match fetch_stocks_unified_with_logging(database, config, Some(Arc::new(global_broadcast_sender))).await {
+                Ok(result) => {
+                    let success_message = format!(
+                        "✅ Single stock collection completed! Records: {}",
+                        result.total_records_fetched
+                    );
+                    let _ = state_manager.complete_operation(&operation_id, Ok(success_message));
                 }
-
-                let log_message = format!("🚀 Starting fetch_stock_history for batch {}", batch.batch_number);
-                let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
-                    level: LogLevel::Info, 
-                    message: log_message.clone() 
-                });
-                let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
-                
-                match crate::data_collector::DataCollector::fetch_stock_history(
-                    client_arc.clone(),
-                    db_arc.clone(),
-                    stock.clone(),
-                    batch.start_date,
-                    batch.end_date,
-                ).await {
-                    Ok(inserted) => {
-                        total_inserted += inserted;
-                        let log_message = format!("✅ fetch_stock_history completed for batch {}: {} records", batch.batch_number, inserted);
-                        let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
-                            level: LogLevel::Success, 
-                            message: log_message.clone() 
-                        });
-                        let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
-                    }
-                    Err(e) => {
-                        let error_msg = format!("❌ Batch {}: Failed - {}", batch.batch_number, e);
-                        let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
-                            level: LogLevel::Error, 
-                            message: error_msg.clone() 
-                        });
-                        let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), error_msg);
-                    }
+                Err(e) => {
+                    let error_message = format!("❌ Single stock collection failed: {}", e);
+                    let _ = state_manager.complete_operation(&operation_id, Err(error_message));
                 }
-
-                let log_message = format!("⏱️ Waiting 500ms before next batch");
-                let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
-                    level: LogLevel::Info, 
-                    message: log_message.clone() 
-                });
-                let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
-                // Small delay between batches to avoid rate limiting
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-            }
-
-            let log_message = format!("🏁 All batches processed. Total inserted: {}", total_inserted);
-            let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
-                level: LogLevel::Info, 
-                message: log_message.clone() 
-            });
-            let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
-            
-            // Send completion message to TUI logs (only for the case where no data was needed)
-            if total_inserted == 0 {
-                let log_message = format!("✅ {} data collection completed: All data already exists (no new records needed)", symbol_clone);
-                let _ = global_broadcast_sender.send(StateUpdate::LogMessage { 
-                    level: LogLevel::Success, 
-                    message: log_message.clone() 
-                });
-                let _ = state_manager.complete_operation(&operation_id, Ok(log_message.clone()));
-                let _ = writeln!(log_writer, "[{}] {}", Utc::now().format("%H:%M:%S"), log_message);
-            } else {
-                let _ = state_manager.complete_operation(&operation_id, Ok("Data collection completed".to_string()));
             }
         });
     }

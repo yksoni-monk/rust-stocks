@@ -3,7 +3,7 @@ use tracing::{error, Level};
 use tracing_subscriber::{self, FmtSubscriber};
 
 use rust_stocks::database_sqlx::DatabaseManagerSqlx;
-use rust_stocks::concurrent_fetcher::{ConcurrentFetchConfig, DateRange};
+use rust_stocks::concurrent_fetcher::{UnifiedFetchConfig, DateRange};
 use rust_stocks::models::Config;
 
 #[tokio::main]
@@ -65,22 +65,26 @@ async fn test_concurrent_fetcher_functionality(database: &DatabaseManagerSqlx) -
         println!("📊 First stock: {} - {}", stocks[0].symbol, stocks[0].company_name);
     }
 
-    // Test 2: Test concurrent fetch configuration
-    println!("⚙️ Testing concurrent fetch configuration...");
-    let fetch_config = ConcurrentFetchConfig {
+    // Test 2: Test unified fetch configuration
+    println!("⚙️ Testing unified fetch configuration...");
+    let test_stocks = if stocks.len() > 5 { stocks[0..5].to_vec() } else { stocks.clone() };
+    let fetch_config = UnifiedFetchConfig {
+        stocks: test_stocks,
         date_range: DateRange {
             start_date: chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
             end_date: chrono::NaiveDate::from_ymd_opt(2024, 1, 31).unwrap(),
         },
         num_threads: 2,
         retry_attempts: 3,
-        max_stocks: Some(5), // Limit for testing
+        rate_limit_ms: 1000, // Conservative for testing
+        max_stocks: None, // Already limited by stocks vector
     };
     
     println!("📅 Date range: {} to {}", fetch_config.date_range.start_date, fetch_config.date_range.end_date);
     println!("🧵 Threads: {}", fetch_config.num_threads);
     println!("🔄 Retry attempts: {}", fetch_config.retry_attempts);
-    println!("📊 Max stocks: {:?}", fetch_config.max_stocks);
+    println!("📊 Stocks configured: {}", fetch_config.stocks.len());
+    println!("⏱️ Rate limit: {}ms", fetch_config.rate_limit_ms);
 
     // Test 3: Test database operations used by concurrent fetcher
     println!("🔍 Testing database operations used by concurrent fetcher...");

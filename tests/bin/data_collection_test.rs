@@ -210,26 +210,29 @@ async fn detailed_collection(start_str: &str, end_str: Option<String>, batch_siz
         info!("📦 Processing batch {}/{} ({} stocks)", 
               batch_num + 1, (stocks.len() + batch_size - 1) / batch_size, chunk.len());
 
-        for stock in chunk {
-            info!("  📈 Processing {}", stock.symbol);
-            
-            let client = SchwabClient::new(&Config::from_env()?)?;
-            match DataCollector::fetch_stock_history(
-                Arc::new(client),
-                database.clone(),
-                stock.clone(),
-                start_date,
-                end_date
-            ).await {
-                Ok(records) => {
-                    info!("    ✅ {} records", records);
-                    total_records += records;
-                    successful += 1;
-                }
-                Err(e) => {
-                    error!("    ❌ Error: {}", e);
-                    failed += 1;
-                }
+        // Use unified fetcher to process this batch
+        use rust_stocks::concurrent_fetcher::{UnifiedFetchConfig, DateRange, fetch_stocks_unified_with_logging};
+
+        let config = UnifiedFetchConfig {
+            stocks: chunk.to_vec(),
+            date_range: DateRange { start_date, end_date },
+            num_threads: 1, // Process sequentially for detailed logging
+            retry_attempts: 3,
+            rate_limit_ms: 1000, // More conservative for tests
+            max_stocks: None,
+        };
+
+        match fetch_stocks_unified_with_logging(database.clone(), config, None).await {
+            Ok(result) => {
+                info!("    ✅ Batch completed: {} processed, {} records", 
+                      result.processed_stocks, result.total_records_fetched);
+                total_records += result.total_records_fetched;
+                successful += result.processed_stocks;
+                failed += result.failed_stocks;
+            }
+            Err(e) => {
+                error!("    ❌ Batch failed: {}", e);
+                failed += chunk.len();
             }
         }
 

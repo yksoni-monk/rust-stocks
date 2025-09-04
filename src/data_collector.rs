@@ -143,7 +143,7 @@ impl DataCollector {
                 
                 async move {
                     let _permit = semaphore.acquire().await.unwrap();
-                    let result = Self::fetch_stock_history(client, database, stock, from_date, end_date).await;
+                    let result = Self::fetch_stock_history_with_batching_ref(&client, &database, stock, from_date, end_date).await;
                     (index, symbol, result)
                 }
             })
@@ -184,64 +184,6 @@ impl DataCollector {
         
         Ok(total_records)
     }
-
-    /// Fetch historical data for a single stock
-    pub async fn fetch_stock_history(
-        client: Arc<SchwabClient>,
-        database: Arc<DatabaseManagerSqlx>,
-        stock: Stock,
-        from_date: NaiveDate,
-        to_date: NaiveDate,
-    ) -> Result<usize> {
-        let stock_id = stock.id.ok_or_else(|| anyhow::anyhow!("Stock has no ID: {}", stock.symbol))?;
-        
-        debug!("Fetching history for {}: {} to {}", stock.symbol, from_date, to_date);
-        
-        // Get price history from API
-        let price_bars = client.get_price_history(&stock.symbol, from_date, to_date).await?;
-        
-        let mut inserted_count = 0;
-        
-        for bar in price_bars {
-            // Convert timestamp to date
-            let date = chrono::DateTime::from_timestamp(bar.datetime / 1000, 0)
-                .ok_or_else(|| anyhow::anyhow!("Invalid timestamp: {}", bar.datetime))?
-                .date_naive();
-            
-            // Skip if we already have data for this date
-            let has_existing = database.get_price_on_date(stock_id, date).await?;
-            
-            if has_existing.is_some() {
-                continue;
-            }
-            
-            let daily_price = DailyPrice {
-                id: None,
-                stock_id,
-                date,
-                open_price: bar.open,
-                high_price: bar.high,
-                low_price: bar.low,
-                close_price: bar.close,
-                volume: Some(bar.volume),
-                pe_ratio: None, // Historical P/E not available in price history
-                market_cap: None,
-                dividend_yield: None,
-            };
-
-            // Insert the price data
-            database.insert_daily_price(&daily_price).await?;
-            
-            inserted_count += 1;
-        }
-
-        if inserted_count > 0 {
-            info!("✅ {}: Added {} historical records", stock.symbol, inserted_count);
-        }
-        
-        Ok(inserted_count)
-    }
-
 
 
     /// Fetch historical data for a single stock using weekly batches (takes reference)

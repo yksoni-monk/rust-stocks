@@ -228,6 +228,196 @@ function AnalysisView({ stocks }) {
   );
 }
 
+function DataFetchingView() {
+  const [availableStocks, setAvailableStocks] = useState([]);
+  const [selectedStock, setSelectedStock] = useState('');
+  const [startDate, setStartDate] = useState('2024-01-01');
+  const [endDate, setEndDate] = useState('2024-12-31');
+  const [fetchMode, setFetchMode] = useState('single'); // 'single' or 'concurrent'
+  const [message, setMessage] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  // Load available stocks on component mount
+  useEffect(() => {
+    async function loadStocks() {
+      try {
+        const stocks = await invoke('get_available_stock_symbols');
+        setAvailableStocks(stocks);
+        if (stocks.length > 0) {
+          setSelectedStock(stocks[0].symbol);
+        }
+      } catch (error) {
+        console.error('Failed to load stocks:', error);
+      }
+    }
+    loadStocks();
+  }, []);
+
+  async function handleSingleStockFetch() {
+    if (!selectedStock) {
+      setMessage('Please select a stock symbol');
+      return;
+    }
+
+    setLoading(true);
+    setMessage('');
+    
+    try {
+      const result = await invoke('fetch_single_stock_data', {
+        symbol: selectedStock,
+        startDate,
+        endDate
+      });
+      setMessage(result);
+    } catch (error) {
+      setMessage(`Error: ${error}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleConcurrentFetch() {
+    setLoading(true);
+    setMessage('');
+    
+    try {
+      const result = await invoke('fetch_all_stocks_concurrent', {
+        startDate,
+        endDate
+      });
+      setMessage(result);
+    } catch (error) {
+      setMessage(`Error: ${error}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div>
+      <h2 className="text-2xl font-bold mb-6">Data Fetching</h2>
+      
+      <div className="space-y-6">
+        {/* Date Range Selection */}
+        <div className="bg-gray-50 p-4 rounded-lg">
+          <h3 className="font-semibold mb-3">Date Range</h3>
+          <div className="flex gap-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">Start Date</label>
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="border rounded px-3 py-2"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">End Date</label>
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                className="border rounded px-3 py-2"
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Fetch Mode Selection */}
+        <div className="bg-gray-50 p-4 rounded-lg">
+          <h3 className="font-semibold mb-3">Fetch Mode</h3>
+          <div className="flex gap-4">
+            <label className="flex items-center">
+              <input
+                type="radio"
+                name="fetchMode"
+                value="single"
+                checked={fetchMode === 'single'}
+                onChange={(e) => setFetchMode(e.target.value)}
+                className="mr-2"
+              />
+              Single Stock
+            </label>
+            <label className="flex items-center">
+              <input
+                type="radio"
+                name="fetchMode"
+                value="concurrent"
+                checked={fetchMode === 'concurrent'}
+                onChange={(e) => setFetchMode(e.target.value)}
+                className="mr-2"
+              />
+              All Stocks (Concurrent)
+            </label>
+          </div>
+        </div>
+
+        {/* Single Stock Selection */}
+        {fetchMode === 'single' && (
+          <div className="bg-gray-50 p-4 rounded-lg">
+            <h3 className="font-semibold mb-3">Stock Selection</h3>
+            <select
+              value={selectedStock}
+              onChange={(e) => setSelectedStock(e.target.value)}
+              className="border rounded px-3 py-2 min-w-48"
+            >
+              {availableStocks.map((stock) => (
+                <option key={stock.symbol} value={stock.symbol}>
+                  {stock.symbol} - {stock.company_name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {/* Action Buttons */}
+        <div className="flex gap-4">
+          {fetchMode === 'single' ? (
+            <button
+              onClick={handleSingleStockFetch}
+              disabled={loading}
+              className="bg-blue-500 text-white px-6 py-3 rounded hover:bg-blue-600 disabled:bg-gray-400"
+            >
+              {loading ? 'Fetching...' : `Fetch ${selectedStock} Data`}
+            </button>
+          ) : (
+            <button
+              onClick={handleConcurrentFetch}
+              disabled={loading}
+              className="bg-green-500 text-white px-6 py-3 rounded hover:bg-green-600 disabled:bg-gray-400"
+            >
+              {loading ? 'Fetching All Stocks...' : 'Fetch All Stocks (Concurrent)'}
+            </button>
+          )}
+        </div>
+
+        {/* Progress Display */}
+        {loading && (
+          <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
+            <div className="flex items-center gap-2 mb-2">
+              <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+              <span className="font-medium">
+                {fetchMode === 'single' ? `Fetching ${selectedStock}...` : 'Fetching all stocks...'}
+              </span>
+            </div>
+            <div className="text-sm text-gray-600">
+              Please wait while we retrieve stock data for the selected date range.
+            </div>
+          </div>
+        )}
+
+        {/* Results Display */}
+        {message && (
+          <div className="mt-4 p-4 bg-gray-100 border rounded-lg">
+            <h4 className="font-medium mb-2">Results:</h4>
+            <p className="text-sm whitespace-pre-wrap">{message}</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [stocks, setStocks] = useState([]);
   const [dbStats, setDbStats] = useState(null);
@@ -337,6 +527,12 @@ function App() {
                 className={`px-4 py-2 rounded ${currentView === 'analysis' ? 'bg-blue-800' : 'hover:bg-blue-700'}`}
               >
                 Analysis
+              </button>
+              <button 
+                onClick={() => setCurrentView('fetching')}
+                className={`px-4 py-2 rounded ${currentView === 'fetching' ? 'bg-blue-800' : 'hover:bg-blue-700'}`}
+              >
+                Data Fetching
               </button>
             </nav>
           </div>
@@ -462,6 +658,8 @@ function App() {
         )}
 
         {currentView === 'analysis' && <AnalysisView stocks={stocks} />}
+        
+        {currentView === 'fetching' && <DataFetchingView />}
       </div>
     </div>
   );

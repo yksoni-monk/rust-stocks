@@ -18,7 +18,13 @@ pub fn run() {
             
             // Analysis commands
             analysis::get_price_history,
-            analysis::export_data
+            analysis::export_data,
+            
+            // Data fetching commands
+            fetching::get_available_stock_symbols,
+            fetching::fetch_single_stock_data,
+            fetching::fetch_all_stocks_concurrent,
+            fetching::get_fetch_progress
         ])
         .setup(|_app| {
             Ok(())

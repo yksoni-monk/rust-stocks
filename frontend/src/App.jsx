@@ -109,17 +109,22 @@ function App() {
   }
 
   const handleToggleExpansion = (stockId, panelType) => {
+    console.log('handleToggleExpansion called:', { stockId, panelType });
     setExpandedPanels(prev => {
       const newState = { ...prev };
+      console.log('Previous expandedPanels:', prev);
       
       if (newState[stockId] === panelType) {
         // Collapse if same panel is clicked
+        console.log('Collapsing panel');
         delete newState[stockId];
       } else {
         // Expand new panel (or switch to different panel)
+        console.log('Expanding panel');
         newState[stockId] = panelType;
       }
       
+      console.log('New expandedPanels:', newState);
       return newState;
     });
   };

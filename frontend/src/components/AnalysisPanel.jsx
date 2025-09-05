@@ -54,27 +54,15 @@ function AnalysisPanel({ stock }) {
     try {
       const { startDate, endDate } = getDateRange();
       
-      // Load price history with enhanced data
-      const historyResponse = await invoke('get_enhanced_price_history', {
+      // Load price history using the working API call
+      const history = await invoke('get_price_history', {
         symbol: stock.symbol,
         startDate,
         endDate
       });
 
-      if (historyResponse.success) {
-        setPriceHistory(historyResponse.data || []);
-      } else {
-        setError(historyResponse.error || 'Failed to load data');
-      }
-
-      // Load quick metrics if available
-      const metricsResponse = await invoke('get_fundamentals', {
-        symbol: stock.symbol
-      });
-
-      if (metricsResponse.success) {
-        setQuickMetrics(metricsResponse.data);
-      }
+      setPriceHistory(history || []);
+      console.log('Loaded price history for', stock.symbol, ':', history?.length, 'records');
 
     } catch (err) {
       setError(err.toString());
@@ -89,14 +77,14 @@ function AnalysisPanel({ stock }) {
 
   const getMetricValue = (record, metric) => {
     switch (metric) {
-      case 'price': return record.close_price;
+      case 'price': return record.close || record.close_price;
       case 'pe_ratio': return record.pe_ratio;
       case 'eps': return record.eps;
       case 'dividend_yield': return record.dividend_yield;
       case 'volume': return record.volume;
       case 'market_cap': return record.market_cap;
       case 'beta': return record.beta;
-      default: return record.close_price;
+      default: return record.close || record.close_price;
     }
   };
 
@@ -149,30 +137,30 @@ function AnalysisPanel({ stock }) {
   return (
     <div className="space-y-6">
       {/* Quick Metrics Row */}
-      {quickMetrics && (
+      {priceHistory.length > 0 && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div className="bg-white p-3 rounded-lg border text-center">
-            <div className="text-sm text-gray-500">Current Price</div>
+            <div className="text-sm text-gray-500">Latest Close</div>
             <div className="text-lg font-bold text-blue-600">
-              {priceHistory.length > 0 ? `$${priceHistory[priceHistory.length - 1]?.close_price?.toFixed(2) || 'N/A'}` : 'N/A'}
+              ${priceHistory[priceHistory.length - 1]?.close?.toFixed(2) || 'N/A'}
             </div>
           </div>
           <div className="bg-white p-3 rounded-lg border text-center">
-            <div className="text-sm text-gray-500">P/E Ratio</div>
-            <div className="text-lg font-bold text-gray-900">
-              {quickMetrics.pe_ratio ? quickMetrics.pe_ratio.toFixed(2) : 'N/A'}
-            </div>
-          </div>
-          <div className="bg-white p-3 rounded-lg border text-center">
-            <div className="text-sm text-gray-500">EPS</div>
+            <div className="text-sm text-gray-500">Highest</div>
             <div className="text-lg font-bold text-green-600">
-              {quickMetrics.eps ? `$${quickMetrics.eps.toFixed(2)}` : 'N/A'}
+              ${Math.max(...priceHistory.map(p => p.high || 0)).toFixed(2)}
             </div>
           </div>
           <div className="bg-white p-3 rounded-lg border text-center">
-            <div className="text-sm text-gray-500">Market Cap</div>
+            <div className="text-sm text-gray-500">Lowest</div>
+            <div className="text-lg font-bold text-red-600">
+              ${Math.min(...priceHistory.filter(p => p.low > 0).map(p => p.low)).toFixed(2)}
+            </div>
+          </div>
+          <div className="bg-white p-3 rounded-lg border text-center">
+            <div className="text-sm text-gray-500">Avg Volume</div>
             <div className="text-lg font-bold text-purple-600">
-              {quickMetrics.market_cap ? formatMetricValue(quickMetrics.market_cap, 'market_cap') : 'N/A'}
+              {Math.round(priceHistory.reduce((sum, p) => sum + (p.volume || 0), 0) / priceHistory.length).toLocaleString()}
             </div>
           </div>
         </div>

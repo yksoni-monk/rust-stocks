@@ -50,8 +50,11 @@ function ExpandablePanel({
 
   return (
     <div
-      className={`overflow-hidden transition-all duration-${animationDuration} ease-in-out ${className}`}
-      style={{ height: `${height}px` }}
+      className={`overflow-hidden transition-all duration-300 ease-in-out ${className}`}
+      style={{ 
+        height: `${height}px`,
+        transitionDuration: `${animationDuration}ms`
+      }}
     >
       <div ref={contentRef} className="w-full">
         {shouldRender && children}

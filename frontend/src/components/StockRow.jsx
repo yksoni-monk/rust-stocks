@@ -17,11 +17,13 @@ function StockRow({ stock, isExpanded, expandedPanel, onToggleExpansion }) {
   };
 
   const handleAnalyzeClick = () => {
-    onToggleExpansion(stock.id, expandedPanel === 'analysis' ? null : 'analysis');
+    console.log('Analyze clicked for stock:', stock.symbol, 'Current expanded panel:', expandedPanel);
+    onToggleExpansion(stock.id || stock.symbol, expandedPanel === 'analysis' ? null : 'analysis');
   };
 
   const handleFetchClick = () => {
-    onToggleExpansion(stock.id, expandedPanel === 'fetch' ? null : 'fetch');
+    console.log('Fetch clicked for stock:', stock.symbol, 'Current expanded panel:', expandedPanel);
+    onToggleExpansion(stock.id || stock.symbol, expandedPanel === 'fetch' ? null : 'fetch');
   };
 
   return (

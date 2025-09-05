@@ -1,5 +1,6 @@
 // Stock Analysis System - Tauri Backend
 pub mod commands;
+pub mod models;
 
 use commands::*;
 
@@ -30,7 +31,15 @@ pub fn run() {
             // Initialization commands
             initialization::initialize_sp500_stocks,
             initialization::get_initialization_status,
-            initialization::check_database_schema
+            initialization::check_database_schema,
+            
+            // Enhanced commands
+            enhanced::get_enhanced_stock_info,
+            enhanced::get_enhanced_price_history,
+            enhanced::fetch_comprehensive_data,
+            enhanced::get_real_time_quote,
+            enhanced::get_fundamentals,
+            enhanced::get_database_migration_status
         ])
         .setup(|_app| {
             Ok(())

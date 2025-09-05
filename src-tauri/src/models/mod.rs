@@ -187,3 +187,184 @@ pub struct DatabaseStats {
     pub top_pe_decliner: Option<(String, f64)>, // (symbol, decline_percent) - for analysis views
 }
 
+// ============================================================================
+// Enhanced Data Models for Comprehensive Stock Analysis
+// ============================================================================
+
+// Enhanced stock information with comprehensive company data
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StockInfoEnhanced {
+    pub id: i64,
+    pub symbol: String,
+    pub company_name: String,
+    pub exchange: Option<String>,
+    pub sector: Option<String>,
+    pub industry: Option<String>,
+    pub market_cap: Option<f64>,
+    pub description: Option<String>,
+    pub employees: Option<i32>,
+    pub founded_year: Option<i32>,
+    pub headquarters: Option<String>,
+    pub website: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+// Enhanced daily price data with comprehensive fundamental metrics
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnhancedPriceData {
+    pub id: i64,
+    pub stock_id: i64,
+    pub date: String,
+    pub open_price: f64,
+    pub high_price: f64,
+    pub low_price: f64,
+    pub close_price: f64,
+    pub adjusted_close: Option<f64>,
+    pub volume: Option<i64>,
+    pub average_volume: Option<i64>,
+    
+    // Fundamental ratios
+    pub pe_ratio: Option<f64>,
+    pub pe_ratio_forward: Option<f64>,
+    pub pb_ratio: Option<f64>,
+    pub ps_ratio: Option<f64>,
+    pub dividend_yield: Option<f64>,
+    pub dividend_per_share: Option<f64>,
+    pub eps: Option<f64>,
+    pub eps_forward: Option<f64>,
+    pub beta: Option<f64>,
+    
+    // 52-week data
+    pub week_52_high: Option<f64>,
+    pub week_52_low: Option<f64>,
+    pub week_52_change_percent: Option<f64>,
+    
+    // Market metrics
+    pub shares_outstanding: Option<f64>,
+    pub float_shares: Option<f64>,
+    pub revenue_ttm: Option<f64>,
+    pub profit_margin: Option<f64>,
+    pub operating_margin: Option<f64>,
+    pub return_on_equity: Option<f64>,
+    pub return_on_assets: Option<f64>,
+    pub debt_to_equity: Option<f64>,
+    
+    pub created_at: DateTime<Utc>,
+}
+
+// Fundamental data structure for Schwab API responses
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FundamentalData {
+    pub symbol: String,
+    pub pe_ratio: Option<f64>,
+    pub pe_ratio_forward: Option<f64>,
+    pub market_cap: Option<f64>,
+    pub dividend_yield: Option<f64>,
+    pub dividend_per_share: Option<f64>,
+    pub eps: Option<f64>,
+    pub eps_forward: Option<f64>,
+    pub beta: Option<f64>,
+    pub week_52_high: Option<f64>,
+    pub week_52_low: Option<f64>,
+    pub pb_ratio: Option<f64>,
+    pub ps_ratio: Option<f64>,
+    pub shares_outstanding: Option<f64>,
+    pub float_shares: Option<f64>,
+    pub revenue_ttm: Option<f64>,
+    pub profit_margin: Option<f64>,
+    pub operating_margin: Option<f64>,
+    pub return_on_equity: Option<f64>,
+    pub return_on_assets: Option<f64>,
+    pub debt_to_equity: Option<f64>,
+}
+
+// Real-time quote data
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RealTimeQuote {
+    pub id: Option<i64>,
+    pub stock_id: i64,
+    pub symbol: String,
+    pub timestamp: DateTime<Utc>,
+    pub bid_price: Option<f64>,
+    pub bid_size: Option<i32>,
+    pub ask_price: Option<f64>,
+    pub ask_size: Option<i32>,
+    pub last_price: f64,
+    pub last_size: Option<i32>,
+    pub volume: Option<i64>,
+    pub change_amount: Option<f64>,
+    pub change_percent: Option<f64>,
+    pub day_high: Option<f64>,
+    pub day_low: Option<f64>,
+}
+
+// Intraday price data
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IntradayPrice {
+    pub id: Option<i64>,
+    pub stock_id: i64,
+    pub datetime: DateTime<Utc>,
+    pub interval_type: String, // '1min', '5min', '15min', '30min', '1hour'
+    pub open_price: f64,
+    pub high_price: f64,
+    pub low_price: f64,
+    pub close_price: f64,
+    pub volume: Option<i64>,
+}
+
+// Option chain data with Greeks
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OptionData {
+    pub id: Option<i64>,
+    pub stock_id: i64,
+    pub symbol: String,
+    pub expiration_date: NaiveDate,
+    pub strike_price: f64,
+    pub option_type: String, // 'CALL' or 'PUT'
+    pub bid: Option<f64>,
+    pub ask: Option<f64>,
+    pub last_price: Option<f64>,
+    pub volume: Option<i64>,
+    pub open_interest: Option<i64>,
+    pub implied_volatility: Option<f64>,
+    pub delta: Option<f64>,
+    pub gamma: Option<f64>,
+    pub theta: Option<f64>,
+    pub vega: Option<f64>,
+    pub rho: Option<f64>,
+}
+
+// Comprehensive stock data combining all data types
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComprehensiveStockData {
+    pub stock_info: StockInfoEnhanced,
+    pub price_data: Vec<EnhancedPriceData>,
+    pub fundamentals: Option<FundamentalData>,
+    pub real_time_quote: Option<RealTimeQuote>,
+    pub intraday_data: Vec<IntradayPrice>,
+    pub options_data: Vec<OptionData>,
+}
+
+// API response structures for different endpoints
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiResponse<T> {
+    pub success: bool,
+    pub data: Option<T>,
+    pub error: Option<String>,
+    pub timestamp: DateTime<Utc>,
+}
+
+// Data fetch request configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FetchRequest {
+    pub symbol: String,
+    pub start_date: String,
+    pub end_date: String,
+    pub include_fundamentals: bool,
+    pub include_real_time: bool,
+    pub include_intraday: bool,
+    pub include_options: bool,
+    pub intraday_interval: Option<String>,
+}
+

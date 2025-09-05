@@ -2,16 +2,23 @@
 
 A high-performance Rust-based stock analysis system that fetches, stores, and analyzes S&P 500 stock data using the Charles Schwab API.
 
-## 🚀 Quick Start - Just Run It!
+## 🚀 Quick Start - Desktop Application
 
 ```bash
-# Clone and run the main application
+# Clone and run the Tauri desktop application
 git clone <repo>
 cd rust-stocks
-cargo run
+npm run tauri:dev
 ```
 
-**That's it!** The main interactive application will start automatically.
+**That's it!** The modern desktop application with React UI will open automatically.
+
+### Alternative: Terminal UI (Legacy)
+
+```bash
+# Run the legacy terminal-based interface
+cargo run
+```
 
 ## 🎯 Project Overview
 
@@ -27,9 +34,10 @@ This system provides comprehensive stock market data collection and analysis cap
 ## 🚀 Quick Start
 
 ### Prerequisites
-- Rust (latest stable version)
-- Charles Schwab API credentials
-- SQLite (bundled with the application)
+- **Node.js and npm** (for Tauri desktop application)
+- **Rust** (latest stable version)
+- **Charles Schwab API credentials**
+- **SQLite** (bundled with the application)
 
 ### Setup
 1. Clone the repository
@@ -46,9 +54,15 @@ This system provides comprehensive stock market data collection and analysis cap
    cargo build --release
    ```
 
-### Run the Main Application
+### Run the Desktop Application (Recommended)
 ```bash
-# Start the interactive TUI application (DEFAULT - recommended)
+# Start the modern Tauri desktop application with React UI
+npm run tauri:dev
+```
+
+### Run the Terminal Application (Legacy)
+```bash
+# Start the interactive TUI application
 cargo run
 
 # OR be explicit about the main binary

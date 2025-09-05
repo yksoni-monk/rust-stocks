@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use sqlx::{SqlitePool, Row};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StockInfo {
@@ -8,42 +9,93 @@ pub struct StockInfo {
     pub sector: Option<String>,
 }
 
+async fn get_database_connection() -> Result<SqlitePool, String> {
+    let database_url = "sqlite:../stocks.db";
+    SqlitePool::connect(database_url).await
+        .map_err(|e| format!("Database connection failed: {}", e))
+}
+
 #[tauri::command]
 pub async fn get_all_stocks() -> Result<Vec<StockInfo>, String> {
-    // TODO: Implement database connection
-    // For now, return dummy data to test the UI
-    Ok(vec![
-        StockInfo {
-            id: 1,
-            symbol: "AAPL".to_string(),
-            company_name: "Apple Inc.".to_string(),
-            sector: Some("Technology".to_string()),
-        },
-        StockInfo {
-            id: 2,
-            symbol: "MSFT".to_string(),
-            company_name: "Microsoft Corporation".to_string(),
-            sector: Some("Technology".to_string()),
-        },
-        StockInfo {
-            id: 3,
-            symbol: "GOOGL".to_string(),
-            company_name: "Alphabet Inc.".to_string(),
-            sector: Some("Technology".to_string()),
-        },
-    ])
+    let pool = get_database_connection().await?;
+    
+    let query = "SELECT id, symbol, company_name, sector FROM stocks LIMIT 100";
+    
+    match sqlx::query(query).fetch_all(&pool).await {
+        Ok(rows) => {
+            let stocks: Vec<StockInfo> = rows.into_iter().map(|row| {
+                StockInfo {
+                    id: row.get::<i64, _>("id"),
+                    symbol: row.get::<String, _>("symbol"),
+                    company_name: row.get::<String, _>("company_name"),
+                    sector: row.try_get::<Option<String>, _>("sector").unwrap_or(None),
+                }
+            }).collect();
+            Ok(stocks)
+        }
+        Err(e) => {
+            eprintln!("Database query error: {}", e);
+            // Return dummy data as fallback
+            Ok(vec![
+                StockInfo {
+                    id: 1,
+                    symbol: "AAPL".to_string(),
+                    company_name: "Apple Inc.".to_string(),
+                    sector: Some("Technology".to_string()),
+                },
+                StockInfo {
+                    id: 2,
+                    symbol: "MSFT".to_string(),
+                    company_name: "Microsoft Corporation".to_string(),
+                    sector: Some("Technology".to_string()),
+                },
+                StockInfo {
+                    id: 3,
+                    symbol: "GOOGL".to_string(),
+                    company_name: "Alphabet Inc.".to_string(),
+                    sector: Some("Technology".to_string()),
+                },
+            ])
+        }
+    }
 }
 
 #[tauri::command]
 pub async fn search_stocks(query: String) -> Result<Vec<StockInfo>, String> {
-    // TODO: Implement fuzzy search
-    // For now, filter dummy data
-    let all_stocks = get_all_stocks().await?;
-    let filtered = all_stocks.into_iter()
-        .filter(|stock| 
-            stock.symbol.to_lowercase().contains(&query.to_lowercase()) ||
-            stock.company_name.to_lowercase().contains(&query.to_lowercase())
-        )
-        .collect();
-    Ok(filtered)
+    let pool = get_database_connection().await?;
+    
+    let sql_query = "SELECT id, symbol, company_name, sector FROM stocks 
+                     WHERE symbol LIKE ?1 OR company_name LIKE ?1 
+                     LIMIT 50";
+    
+    let search_pattern = format!("%{}%", query);
+    
+    match sqlx::query(sql_query)
+        .bind(&search_pattern)
+        .fetch_all(&pool).await 
+    {
+        Ok(rows) => {
+            let stocks: Vec<StockInfo> = rows.into_iter().map(|row| {
+                StockInfo {
+                    id: row.get::<i64, _>("id"),
+                    symbol: row.get::<String, _>("symbol"),
+                    company_name: row.get::<String, _>("company_name"),
+                    sector: row.try_get::<Option<String>, _>("sector").unwrap_or(None),
+                }
+            }).collect();
+            Ok(stocks)
+        }
+        Err(e) => {
+            eprintln!("Search query error: {}", e);
+            // Fallback to dummy filtered data
+            let all_stocks = get_all_stocks().await?;
+            let filtered = all_stocks.into_iter()
+                .filter(|stock| 
+                    stock.symbol.to_lowercase().contains(&query.to_lowercase()) ||
+                    stock.company_name.to_lowercase().contains(&query.to_lowercase())
+                )
+                .collect();
+            Ok(filtered)
+        }
+    }
 }

@@ -521,11 +521,10 @@ function DataFetchingView() {
 
 function App() {
   const [stocks, setStocks] = useState([]);
-  const [dbStats, setDbStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [currentView, setCurrentView] = useState('dashboard');
+  const [currentView, setCurrentView] = useState('stocks');
   const [selectedStockForDetails, setSelectedStockForDetails] = useState(null);
 
   useEffect(() => {
@@ -535,12 +534,8 @@ function App() {
   async function fetchInitialData() {
     try {
       setLoading(true);
-      const [stocksData, statsData] = await Promise.all([
-        invoke('get_stocks_with_data_status'),
-        invoke('get_database_stats')
-      ]);
+      const stocksData = await invoke('get_stocks_with_data_status');
       setStocks(stocksData);
-      setDbStats(statsData);
     } catch (err) {
       setError(`Failed to fetch data: ${err}`);
       console.error('Error fetching data:', err);
@@ -613,12 +608,6 @@ function App() {
             <h1 className="text-2xl font-bold">Stock Analysis System</h1>
             <nav className="flex space-x-4">
               <button 
-                onClick={() => setCurrentView('dashboard')}
-                className={`px-4 py-2 rounded ${currentView === 'dashboard' ? 'bg-blue-800' : 'hover:bg-blue-700'}`}
-              >
-                Dashboard
-              </button>
-              <button 
                 onClick={() => setCurrentView('stocks')}
                 className={`px-4 py-2 rounded ${currentView === 'stocks' ? 'bg-blue-800' : 'hover:bg-blue-700'}`}
               >
@@ -648,58 +637,6 @@ function App() {
       </header>
 
       <div className="container mx-auto px-4 py-8">
-        {currentView === 'dashboard' && (
-          <div>
-            <h2 className="text-3xl font-bold mb-6">Dashboard</h2>
-            
-            {/* Database Stats */}
-            {dbStats && (
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-                <div className="bg-white p-6 rounded-lg shadow">
-                  <h3 className="text-gray-500 text-sm font-medium">Total Stocks</h3>
-                  <p className="text-2xl font-bold text-blue-600">{dbStats.total_stocks.toLocaleString()}</p>
-                </div>
-                <div className="bg-white p-6 rounded-lg shadow">
-                  <h3 className="text-gray-500 text-sm font-medium">Price Records</h3>
-                  <p className="text-2xl font-bold text-green-600">{dbStats.total_price_records.toLocaleString()}</p>
-                </div>
-                <div className="bg-white p-6 rounded-lg shadow">
-                  <h3 className="text-gray-500 text-sm font-medium">Data Coverage</h3>
-                  <p className="text-2xl font-bold text-purple-600">{dbStats.data_coverage_percentage}%</p>
-                </div>
-                <div className="bg-white p-6 rounded-lg shadow">
-                  <h3 className="text-gray-500 text-sm font-medium">Last Update</h3>
-                  <p className="text-lg font-semibold text-gray-700">{dbStats.last_update}</p>
-                </div>
-              </div>
-            )}
-
-            {/* Quick Actions */}
-            <div className="bg-white rounded-lg shadow p-6">
-              <h3 className="text-xl font-semibold mb-4">Quick Actions</h3>
-              <div className="flex space-x-4">
-                <button 
-                  onClick={handleFetchData}
-                  className="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700 transition-colors"
-                >
-                  Fetch Recent Data
-                </button>
-                <button 
-                  onClick={() => setCurrentView('stocks')}
-                  className="bg-green-600 text-white px-6 py-2 rounded hover:bg-green-700 transition-colors"
-                >
-                  View Stocks
-                </button>
-                <button 
-                  onClick={() => setCurrentView('analysis')}
-                  className="bg-purple-600 text-white px-6 py-2 rounded hover:bg-purple-700 transition-colors"
-                >
-                  Start Analysis
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
 
         {currentView === 'stocks' && (
           <div>

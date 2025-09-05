@@ -35,7 +35,4 @@ wiremock = "0.5"
 assert_matches = "1.5"
 pretty_assertions = "1.4"
 
-# Utility binaries (only keep working ones)
-[[bin]]
-name = "update_sp500"
-path = "tools/update_sp500.rs"
+# No utility binaries needed - functionality moved to Tauri backend

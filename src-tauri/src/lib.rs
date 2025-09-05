@@ -24,7 +24,12 @@ pub fn run() {
             fetching::get_available_stock_symbols,
             fetching::fetch_single_stock_data,
             fetching::fetch_all_stocks_concurrent,
-            fetching::get_fetch_progress
+            fetching::get_fetch_progress,
+            
+            // Initialization commands
+            initialization::initialize_sp500_stocks,
+            initialization::get_initialization_status,
+            initialization::check_database_schema
         ])
         .setup(|_app| {
             Ok(())

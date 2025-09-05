@@ -236,22 +236,53 @@ function DataFetchingView() {
   const [fetchMode, setFetchMode] = useState('single'); // 'single' or 'concurrent'
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
+  const [initStatus, setInitStatus] = useState(null);
+  const [initializing, setInitializing] = useState(false);
 
-  // Load available stocks on component mount
+  // Load available stocks and initialization status on component mount
   useEffect(() => {
-    async function loadStocks() {
+    async function loadData() {
       try {
-        const stocks = await invoke('get_available_stock_symbols');
+        const [stocks, status] = await Promise.all([
+          invoke('get_available_stock_symbols'),
+          invoke('get_initialization_status')
+        ]);
         setAvailableStocks(stocks);
-        if (stocks.length > 0) {
+        setInitStatus(status);
+        if (stocks.length > 0 && stocks[0].symbol !== 'INIT') {
           setSelectedStock(stocks[0].symbol);
         }
       } catch (error) {
-        console.error('Failed to load stocks:', error);
+        console.error('Failed to load data:', error);
       }
     }
-    loadStocks();
+    loadData();
   }, []);
+
+  async function handleInitializeStocks() {
+    setInitializing(true);
+    setMessage('');
+    
+    try {
+      const result = await invoke('initialize_sp500_stocks');
+      setMessage(result);
+      
+      // Reload stocks and status after initialization
+      const [stocks, status] = await Promise.all([
+        invoke('get_available_stock_symbols'),
+        invoke('get_initialization_status')
+      ]);
+      setAvailableStocks(stocks);
+      setInitStatus(status);
+      if (stocks.length > 0) {
+        setSelectedStock(stocks[0].symbol);
+      }
+    } catch (error) {
+      setMessage(`Initialization failed: ${error}`);
+    } finally {
+      setInitializing(false);
+    }
+  }
 
   async function handleSingleStockFetch() {
     if (!selectedStock) {
@@ -298,6 +329,34 @@ function DataFetchingView() {
       <h2 className="text-2xl font-bold mb-6">Data Fetching</h2>
       
       <div className="space-y-6">
+        {/* S&P 500 Initialization Status */}
+        {initStatus && (
+          <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
+            <h3 className="font-semibold mb-3 text-blue-800">S&P 500 Stock Database</h3>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-700 mb-1">{initStatus.status}</p>
+                <p className="text-xs text-gray-500">
+                  Companies: {initStatus.companies_processed} / {initStatus.total_companies}
+                </p>
+              </div>
+              <button
+                onClick={handleInitializeStocks}
+                disabled={initializing}
+                className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:bg-gray-400 text-sm"
+              >
+                {initializing ? 'Initializing...' : 'Initialize S&P 500 Stocks'}
+              </button>
+            </div>
+            {initializing && (
+              <div className="mt-3 flex items-center gap-2">
+                <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                <span className="text-sm text-blue-700">Fetching 503 S&P 500 companies from GitHub...</span>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Date Range Selection */}
         <div className="bg-gray-50 p-4 rounded-lg">
           <h3 className="font-semibold mb-3">Date Range</h3>

@@ -34,22 +34,42 @@ async fn get_database_connection() -> Result<SqlitePool, String> {
 
 #[tauri::command]
 pub async fn get_available_stock_symbols() -> Result<Vec<StockSymbol>, String> {
-    // For now, return a simulation of S&P 500 stocks
-    // This would normally fetch from Schwab API or a stocks database
-    let popular_stocks = vec![
-        StockSymbol { symbol: "AAPL".to_string(), company_name: "Apple Inc.".to_string() },
-        StockSymbol { symbol: "MSFT".to_string(), company_name: "Microsoft Corporation".to_string() },
-        StockSymbol { symbol: "GOOGL".to_string(), company_name: "Alphabet Inc.".to_string() },
-        StockSymbol { symbol: "AMZN".to_string(), company_name: "Amazon.com Inc.".to_string() },
-        StockSymbol { symbol: "TSLA".to_string(), company_name: "Tesla Inc.".to_string() },
-        StockSymbol { symbol: "NVDA".to_string(), company_name: "NVIDIA Corporation".to_string() },
-        StockSymbol { symbol: "META".to_string(), company_name: "Meta Platforms Inc.".to_string() },
-        StockSymbol { symbol: "NFLX".to_string(), company_name: "Netflix Inc.".to_string() },
-        StockSymbol { symbol: "JPM".to_string(), company_name: "JPMorgan Chase & Co.".to_string() },
-        StockSymbol { symbol: "V".to_string(), company_name: "Visa Inc.".to_string() },
-    ];
+    let pool = get_database_connection().await?;
     
-    Ok(popular_stocks)
+    // Fetch all stocks from database
+    match sqlx::query("SELECT symbol, company_name FROM stocks ORDER BY symbol LIMIT 500")
+        .fetch_all(&pool).await
+    {
+        Ok(rows) => {
+            let stocks: Vec<StockSymbol> = rows.into_iter().map(|row| {
+                StockSymbol {
+                    symbol: row.get::<String, _>("symbol"),
+                    company_name: row.get::<String, _>("company_name"),
+                }
+            }).collect();
+            
+            if stocks.is_empty() {
+                // Return a message indicating initialization is needed
+                Ok(vec![
+                    StockSymbol { 
+                        symbol: "INIT".to_string(), 
+                        company_name: "Click 'Initialize S&P 500 Stocks' first".to_string() 
+                    }
+                ])
+            } else {
+                Ok(stocks)
+            }
+        }
+        Err(e) => {
+            eprintln!("Database query error: {}", e);
+            // Return fallback popular stocks
+            Ok(vec![
+                StockSymbol { symbol: "AAPL".to_string(), company_name: "Apple Inc.".to_string() },
+                StockSymbol { symbol: "MSFT".to_string(), company_name: "Microsoft Corporation".to_string() },
+                StockSymbol { symbol: "GOOGL".to_string(), company_name: "Alphabet Inc.".to_string() },
+            ])
+        }
+    }
 }
 
 #[tauri::command]

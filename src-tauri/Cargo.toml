@@ -1,25 +1,35 @@
 [package]
-name = "app"
+name = "rust-stocks-tauri"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "Stock Analysis System - Tauri Backend"
+authors = ["rust-stocks"]
 license = ""
 repository = ""
 edition = "2021"
 rust-version = "1.77.2"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [lib]
-name = "app_lib"
+name = "rust_stocks_tauri_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2.4.1" }
+tauri-build = { version = "2.4.1", features = [] }
 
 [dependencies]
-serde_json = "1.0"
-serde = { version = "1.0", features = ["derive"] }
-log = "0.4"
-tauri = { version = "2.8.5" }
+tauri = { version = "2.8.5", features = [] }
 tauri-plugin-log = "2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite", "chrono", "migrate"] }
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1.0"
+dotenvy = "0.15"
+reqwest = { version = "0.12", features = ["json"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+log = "0.4"
+futures = "0.3"
+fuzzy-matcher = "0.3"
+base64 = "0.22"
+async-trait = "0.1"

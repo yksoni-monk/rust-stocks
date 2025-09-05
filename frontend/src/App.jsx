@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import EnhancedStockDetails from './components/EnhancedStockDetails';
+import EnhancedDataFetching from './components/EnhancedDataFetching';
 
 // Simple AnalysisView component
 function AnalysisView({ stocks }) {
@@ -524,6 +526,7 @@ function App() {
   const [error, setError] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [currentView, setCurrentView] = useState('dashboard');
+  const [selectedStockForDetails, setSelectedStockForDetails] = useState(null);
 
   useEffect(() => {
     fetchInitialData();
@@ -633,6 +636,12 @@ function App() {
               >
                 Data Fetching
               </button>
+              <button 
+                onClick={() => setCurrentView('enhanced-fetching')}
+                className={`px-4 py-2 rounded ${currentView === 'enhanced-fetching' ? 'bg-blue-800' : 'hover:bg-blue-700'}`}
+              >
+                Enhanced Fetching
+              </button>
             </nav>
           </div>
         </div>
@@ -740,12 +749,23 @@ function App() {
                           </span>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                          <button 
-                            onClick={() => setCurrentView('analysis')}
-                            className="text-blue-600 hover:text-blue-900"
-                          >
-                            Analyze
-                          </button>
+                          <div className="flex space-x-2">
+                            <button 
+                              onClick={() => setCurrentView('analysis')}
+                              className="text-blue-600 hover:text-blue-900"
+                            >
+                              Basic Analysis
+                            </button>
+                            <button 
+                              onClick={() => {
+                                setSelectedStockForDetails(stock);
+                                setCurrentView('enhanced-details');
+                              }}
+                              className="text-green-600 hover:text-green-900"
+                            >
+                              Enhanced View
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -759,6 +779,18 @@ function App() {
         {currentView === 'analysis' && <AnalysisView stocks={stocks} />}
         
         {currentView === 'fetching' && <DataFetchingView />}
+
+        {currentView === 'enhanced-fetching' && <EnhancedDataFetching />}
+
+        {currentView === 'enhanced-details' && selectedStockForDetails && (
+          <EnhancedStockDetails 
+            selectedStock={selectedStockForDetails}
+            onBack={() => {
+              setCurrentView('stocks');
+              setSelectedStockForDetails(null);
+            }}
+          />
+        )}
       </div>
     </div>
   );

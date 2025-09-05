@@ -26,7 +26,7 @@ struct TokenResponse {
 #[derive(Debug, Deserialize)]
 struct TokenFile {
     #[allow(dead_code)]
-    creation_timestamp: i64,
+    creation_timestamp: f64,  // Changed from i64 to f64 to handle floating point timestamps
     token: TokenData,
 }
 
@@ -51,6 +51,14 @@ struct StoredTokens {
     access_token: String,
     refresh_token: String,
     expires_at: DateTime<Utc>,
+}
+
+/// Alternative token file format that matches the nested structure
+#[derive(Debug, Deserialize)]
+struct NestedTokenFile {
+    #[allow(dead_code)]
+    creation_timestamp: f64,
+    token: TokenData,
 }
 
 /// Schwab API client
@@ -90,23 +98,65 @@ impl SchwabClient {
 
     /// Load tokens from file
     async fn load_tokens(&self) -> Result<()> {
+        debug!("DEBUG: Attempting to load tokens from path: {}", self.token_path);
+        debug!("DEBUG: Current working directory: {:?}", std::env::current_dir());
+        debug!("DEBUG: Token file exists: {}", std::path::Path::new(&self.token_path).exists());
+        
         if !std::path::Path::new(&self.token_path).exists() {
+            debug!("DEBUG: Token file does not exist at: {}", self.token_path);
             return Err(anyhow!("Token file does not exist: {}", self.token_path));
         }
 
+        debug!("DEBUG: Reading token file content...");
         let content = fs::read_to_string(&self.token_path)?;
+        debug!("DEBUG: Token file content length: {} bytes", content.len());
+        debug!("DEBUG: Token file content preview: {}", &content[..content.len().min(200)]);
         
         // Try to parse the Python-generated token file format first
-        let tokens = if let Ok(token_file) = serde_json::from_str::<TokenFile>(&content) {
-            StoredTokens {
-                access_token: token_file.token.access_token,
-                refresh_token: token_file.token.refresh_token,
-                expires_at: DateTime::from_timestamp(token_file.token.expires_at, 0)
-                    .unwrap_or_else(|| Utc::now()),
+        debug!("DEBUG: Attempting to parse TokenFile format...");
+        let tokens = match serde_json::from_str::<TokenFile>(&content) {
+            Ok(token_file) => {
+                debug!("DEBUG: Successfully parsed TokenFile format");
+                debug!("DEBUG: Access token length: {}", token_file.token.access_token.len());
+                debug!("DEBUG: Expires at timestamp: {}", token_file.token.expires_at);
+                StoredTokens {
+                    access_token: token_file.token.access_token,
+                    refresh_token: token_file.token.refresh_token,
+                    expires_at: DateTime::from_timestamp(token_file.token.expires_at, 0)
+                        .unwrap_or_else(|| Utc::now()),
+                }
             }
-        } else {
-            // Fallback to direct StoredTokens format
-            serde_json::from_str::<StoredTokens>(&content)?
+            Err(e) => {
+                debug!("DEBUG: Failed to parse TokenFile format: {}", e);
+                debug!("DEBUG: Trying NestedTokenFile format...");
+                match serde_json::from_str::<NestedTokenFile>(&content) {
+                    Ok(nested_file) => {
+                        debug!("DEBUG: Successfully parsed NestedTokenFile format");
+                        debug!("DEBUG: Access token length: {}", nested_file.token.access_token.len());
+                        debug!("DEBUG: Expires at timestamp: {}", nested_file.token.expires_at);
+                        StoredTokens {
+                            access_token: nested_file.token.access_token,
+                            refresh_token: nested_file.token.refresh_token,
+                            expires_at: DateTime::from_timestamp(nested_file.token.expires_at, 0)
+                                .unwrap_or_else(|| Utc::now()),
+                        }
+                    }
+                    Err(e2) => {
+                        debug!("DEBUG: Failed to parse NestedTokenFile format: {}", e2);
+                        debug!("DEBUG: Trying StoredTokens format...");
+                        match serde_json::from_str::<StoredTokens>(&content) {
+                            Ok(tokens) => {
+                                debug!("DEBUG: Successfully parsed StoredTokens format");
+                                tokens
+                            }
+                            Err(e3) => {
+                                debug!("DEBUG: Failed to parse StoredTokens format: {}", e3);
+                                return Err(anyhow!("Failed to parse token file in all formats: TokenFile: {}, NestedTokenFile: {}, StoredTokens: {}", e, e2, e3));
+                            }
+                        }
+                    }
+                }
+            }
         };
 
         // Check if tokens are still valid
@@ -132,28 +182,42 @@ impl SchwabClient {
 
     /// Get access token, refreshing if necessary
     async fn get_access_token(&self) -> Result<String> {
+        debug!("DEBUG: get_access_token called");
+        
         // Try to load tokens if we don't have any yet
         {
             let tokens_guard = self.current_tokens.lock().await;
+            debug!("DEBUG: Current tokens loaded: {}", tokens_guard.is_some());
             if tokens_guard.is_none() {
                 drop(tokens_guard);
-                let _ = self.load_tokens().await; // Ignore errors for now
+                debug!("DEBUG: No tokens loaded, attempting to load from file");
+                match self.load_tokens().await {
+                    Ok(_) => debug!("DEBUG: Successfully loaded tokens"),
+                    Err(e) => debug!("DEBUG: Failed to load tokens: {}", e),
+                }
             }
         }
 
         let tokens_guard = self.current_tokens.lock().await;
         if let Some(tokens) = &*tokens_guard {
+            debug!("DEBUG: Found tokens, checking expiration");
+            debug!("DEBUG: Token expires at: {}", tokens.expires_at);
+            debug!("DEBUG: Current time: {}", Utc::now());
+            debug!("DEBUG: Token is valid: {}", tokens.expires_at > Utc::now() + chrono::Duration::minutes(5));
+            
             if tokens.expires_at > Utc::now() + chrono::Duration::minutes(5) {
-                // Token is still valid for at least 5 more minutes
+                debug!("DEBUG: Returning valid access token");
                 return Ok(tokens.access_token.clone());
             }
 
+            debug!("DEBUG: Token expired or expiring soon, attempting refresh");
             // Try to refresh the token
             let refresh_token = tokens.refresh_token.clone();
             drop(tokens_guard); // Release the lock before async call
             
             match self.refresh_access_token(&refresh_token).await {
                 Ok(new_tokens) => {
+                    debug!("DEBUG: Successfully refreshed token");
                     *self.current_tokens.lock().await = Some(new_tokens.clone());
                     self.save_tokens(&new_tokens)?;
                     return Ok(new_tokens.access_token);
@@ -162,8 +226,11 @@ impl SchwabClient {
                     warn!("Failed to refresh token: {}", e);
                 }
             }
+        } else {
+            debug!("DEBUG: No tokens available in memory");
         }
 
+        debug!("DEBUG: Returning error - no valid access token");
         Err(anyhow!("No valid access token available. Please run initial authentication."))
     }
 

@@ -131,6 +131,20 @@ impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
         dotenvy::dotenv().ok(); // Load .env file if it exists
         
+        // Debug: Print all environment variables
+        println!("DEBUG: Current working directory: {:?}", std::env::current_dir());
+        println!("DEBUG: SCHWAB_API_KEY: {:?}", std::env::var("SCHWAB_API_KEY"));
+        println!("DEBUG: SCHWAB_APP_SECRET: {:?}", std::env::var("SCHWAB_APP_SECRET"));
+        println!("DEBUG: SCHWAB_CALLBACK_URL: {:?}", std::env::var("SCHWAB_CALLBACK_URL"));
+        println!("DEBUG: SCHWAB_TOKEN_PATH: {:?}", std::env::var("SCHWAB_TOKEN_PATH"));
+        println!("DEBUG: DATABASE_PATH: {:?}", std::env::var("DATABASE_PATH"));
+        
+        let schwab_token_path = std::env::var("SCHWAB_TOKEN_PATH")
+            .unwrap_or_else(|_| "schwab_tokens.json".to_string());
+        
+        println!("DEBUG: Final token path: {}", schwab_token_path);
+        println!("DEBUG: Token file exists: {}", std::path::Path::new(&schwab_token_path).exists());
+        
         Ok(Config {
             schwab_api_key: std::env::var("SCHWAB_API_KEY")
                 .map_err(|_| anyhow::anyhow!("SCHWAB_API_KEY environment variable required"))?,
@@ -138,8 +152,7 @@ impl Config {
                 .map_err(|_| anyhow::anyhow!("SCHWAB_APP_SECRET environment variable required"))?,
             schwab_callback_url: std::env::var("SCHWAB_CALLBACK_URL")
                 .unwrap_or_else(|_| "https://localhost:8080".to_string()),
-            schwab_token_path: std::env::var("SCHWAB_TOKEN_PATH")
-                .unwrap_or_else(|_| "schwab_tokens.json".to_string()),
+            schwab_token_path,
             database_path: std::env::var("DATABASE_PATH")
                 .unwrap_or_else(|_| "stocks.db".to_string()),
             rate_limit_per_minute: std::env::var("RATE_LIMIT_PER_MINUTE")

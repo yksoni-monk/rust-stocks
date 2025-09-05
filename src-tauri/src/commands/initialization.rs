@@ -43,8 +43,8 @@ pub async fn initialize_sp500_stocks() -> Result<String, String> {
         let record = result.map_err(|e| format!("CSV parsing error: {}", e))?;
         if record.len() >= 2 {
             let symbol = record[0].trim().to_string();
-            let name = record[1].trim().to_string();
-            let sector = record.get(2).unwrap_or("").trim().to_string();
+            let name = record[1].trim().to_string(); // "Security" column
+            let sector = record.get(2).unwrap_or("").trim().to_string(); // "GICS Sector" column
             
             companies.push(StockData {
                 symbol,

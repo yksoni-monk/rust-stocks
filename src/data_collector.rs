@@ -390,7 +390,7 @@ impl DataCollector {
         Ok(DataCollectionStats {
             total_stocks: stats.get("total_stocks").unwrap_or(&0).clone() as usize,
             total_price_records: stats.get("total_prices").unwrap_or(&0).clone() as usize,
-            last_update_date: None, // TODO: Add this to database stats
+            last_update_date: self.database.get_last_update_date().await.unwrap_or(None),
             earliest_data_date: earliest_date,
             latest_data_date: latest_date,
         })

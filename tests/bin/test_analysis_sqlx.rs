@@ -69,7 +69,7 @@ async fn test_analysis_functionality(database: DatabaseManagerSqlx) -> Result<()
 
     // Test 2: Get summary stats
     println!("📊 Testing summary statistics...");
-    let stats = analysis_engine.get_summary_stats().await?;
+    let stats = analysis_engine.get_database_stats().await?;
     println!("📈 Summary stats: {} stocks, {} price records", stats.total_stocks, stats.total_price_records);
 
     // Test 3: Get top P/E decliners (limit to 5 for performance)

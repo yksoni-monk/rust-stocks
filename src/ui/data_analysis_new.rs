@@ -137,18 +137,16 @@ impl DataAnalysisView {
                         if let Some(stock_id) = stock.id {
                             match database.get_stock_data_stats(stock_id).await {
                                 Ok(stats) => {
-                                    if stats.data_points > 0 {
-                                        stock_infos.push(StockInfo {
-                                            symbol: stock.symbol.clone(),
-                                            company_name: stock.company_name.clone(),
-                                            data_points: stats.data_points,
-                                            latest_date: stats.latest_date,
-                                            earliest_date: stats.earliest_date,
-                                        });
-                                    }
+                                    stock_infos.push(StockInfo {
+                                        symbol: stock.symbol.clone(),
+                                        company_name: stock.company_name.clone(),
+                                        data_points: stats.data_points,
+                                        latest_date: stats.latest_date,
+                                        earliest_date: stats.earliest_date,
+                                    });
                                 }
-                                Err(_) => {
-                                    // Ignore errors for individual stocks
+                                Err(e) => {
+                                    let _ = state_manager.add_log_message(LogLevel::Error, &format!("Failed to get stats for {}: {}", stock.symbol, e));
                                 }
                             }
                         }
@@ -197,9 +195,9 @@ impl DataAnalysisView {
                         // Get price data
                         match database.get_price_on_date(stock_id, date).await {
                             Ok(Some(price_data)) => {
-                                // Get fundamentals data (P/E ratio, market cap) - TODO: Implement in SQLX
-                                let pe_ratio = None; // database.get_pe_ratio_on_date(stock_id, date).ok().flatten();
-                                let market_cap = None; // database.get_market_cap_on_date(stock_id, date).ok().flatten();
+                                // Get fundamentals data (P/E ratio, market cap)
+                                let pe_ratio = database.get_pe_ratio_on_date(stock_id, date).await.ok().flatten();
+                                let market_cap = database.get_market_cap_on_date(stock_id, date).await.ok().flatten();
                                 
                                 let _stock_data = StockData {
                                     symbol: symbol.clone(),
@@ -749,9 +747,9 @@ async fn fetch_stock_data_for_date(
     let price_data = database.get_price_on_date(stock_id, date).await?
         .ok_or_else(|| anyhow::anyhow!("No price data for {} on {}", symbol, date))?;
     
-    // Get fundamentals data (P/E ratio, market cap) - TODO: Implement in SQLX
-    let pe_ratio = None; // database.get_pe_ratio_on_date(stock_id, date).ok().flatten();
-    let market_cap = None; // database.get_market_cap_on_date(stock_id, date).ok().flatten();
+    // Get fundamentals data (P/E ratio, market cap)
+    let pe_ratio = database.get_pe_ratio_on_date(stock_id, date).await.ok().flatten();
+    let market_cap = database.get_market_cap_on_date(stock_id, date).await.ok().flatten();
     
     Ok(StockData {
         symbol: symbol.to_string(),

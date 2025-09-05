@@ -442,6 +442,24 @@ impl DatabaseManagerSqlx {
         Ok(row.map(|r| r.get::<Option<f64>, _>("market_cap")).flatten())
     }
 
+    /// Get the oldest date in the database
+    pub async fn get_oldest_data_date(&self) -> Result<Option<NaiveDate>> {
+        let row = sqlx::query("SELECT MIN(date) as oldest_date FROM daily_prices")
+            .fetch_optional(&self.pool)
+            .await?;
+
+        Ok(row.and_then(|r| r.get::<Option<NaiveDate>, _>("oldest_date")))
+    }
+
+    /// Get the newest date in the database  
+    pub async fn get_newest_data_date(&self) -> Result<Option<NaiveDate>> {
+        let row = sqlx::query("SELECT MAX(date) as newest_date FROM daily_prices")
+            .fetch_optional(&self.pool)
+            .await?;
+
+        Ok(row.and_then(|r| r.get::<Option<NaiveDate>, _>("newest_date")))
+    }
+
     /// Close the database connection pool
     #[allow(dead_code)]
     pub async fn close(self) -> Result<()> {

@@ -5,7 +5,7 @@ use fuzzy_matcher::FuzzyMatcher;
 use tracing::{info, warn};
 
 use crate::database_sqlx::DatabaseManagerSqlx;
-use crate::models::{Stock, StockAnalysis, StockDetail, DailyPrice};
+use crate::models::{Stock, StockAnalysis, StockDetail, DailyPrice, DatabaseStats};
 
 #[allow(dead_code)]
 pub struct AnalysisEngine {
@@ -249,9 +249,9 @@ impl AnalysisEngine {
         Ok(history)
     }
 
-    /// Get summary statistics
+    /// Get comprehensive database statistics for analysis
     #[allow(dead_code)]
-    pub async fn get_summary_stats(&self) -> Result<SummaryStats> {
+    pub async fn get_database_stats(&self) -> Result<DatabaseStats> {
         let stats = self.database.get_stats().await?;
         
         // Get top P/E decliner
@@ -259,25 +259,29 @@ impl AnalysisEngine {
         let top_pe_decliner = top_decliners.first().map(|analysis| {
             (analysis.stock.symbol.clone(), analysis.pe_decline_percent)
         });
+        
+        let total_stocks = stats.get("total_stocks").unwrap_or(&0).clone() as usize;
+        let total_price_records = stats.get("total_prices").unwrap_or(&0).clone() as usize;
+        
+        // Calculate coverage percentage
+        let data_coverage_percentage = if total_stocks > 0 {
+            (total_price_records as f64 / (total_stocks * 1000) as f64) * 100.0 // Rough estimate
+        } else {
+            0.0
+        };
 
-        Ok(SummaryStats {
-            total_stocks: stats.get("total_stocks").unwrap_or(&0).clone() as usize,
-            total_price_records: stats.get("total_prices").unwrap_or(&0).clone() as usize,
-            last_update_date: None, // TODO: Add this to database stats
+        Ok(DatabaseStats {
+            total_stocks,
+            total_price_records,
+            data_coverage_percentage,
+            oldest_data_date: self.database.get_oldest_data_date().await.unwrap_or(None),
+            last_update_date: self.database.get_last_update_date().await.unwrap_or(None),
             top_pe_decliner,
         })
     }
 }
 
-/// Summary statistics for the dashboard
-#[derive(Debug)]
-#[allow(dead_code)]
-pub struct SummaryStats {
-    pub total_stocks: usize,
-    pub total_price_records: usize,
-    pub last_update_date: Option<NaiveDate>,
-    pub top_pe_decliner: Option<(String, f64)>, // (symbol, decline_percent)
-}
+// SummaryStats consolidated into DatabaseStats in models/mod.rs
 
 #[cfg(test)]
 mod tests {

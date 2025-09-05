@@ -176,3 +176,14 @@ pub struct StockDataStats {
     pub latest_date: Option<NaiveDate>,
 }
 
+/// Database statistics for dashboard and analysis
+#[derive(Debug, Clone)]
+pub struct DatabaseStats {
+    pub total_stocks: usize,
+    pub total_price_records: usize,
+    pub data_coverage_percentage: f64,
+    pub oldest_data_date: Option<NaiveDate>,
+    pub last_update_date: Option<NaiveDate>,
+    pub top_pe_decliner: Option<(String, f64)>, // (symbol, decline_percent) - for analysis views
+}
+

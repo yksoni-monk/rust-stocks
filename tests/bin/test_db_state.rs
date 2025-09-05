@@ -27,14 +27,34 @@ async fn main() -> Result<()> {
     println!("✅ Database initialized at: {}", config.database_path);
 
     // Initialize analysis engine
-    let analysis_engine = AnalysisEngine::new(database);
+    let analysis_engine = AnalysisEngine::new(database.clone());
     
     // Get database statistics
-    let stats = analysis_engine.get_summary_stats().await?;
+    let stats = analysis_engine.get_database_stats().await?;
     
     println!("\n📊 Current Database State:");
     println!("   Total Stocks: {}", stats.total_stocks);
     println!("   Total Price Records: {}", stats.total_price_records);
+    
+    // Test individual stock stats
+    println!("\n🔍 Testing individual stock data stats:");
+    let stocks = database.get_active_stocks().await?;
+    for stock in stocks.iter().take(3) {
+        if let Some(stock_id) = stock.id {
+            match database.get_stock_data_stats(stock_id).await {
+                Ok(stock_stats) => {
+                    println!("   {} (ID: {}): {} data points, {:?} to {:?}", 
+                            stock.symbol, stock_id, stock_stats.data_points, 
+                            stock_stats.earliest_date, stock_stats.latest_date);
+                }
+                Err(e) => {
+                    println!("   {} (ID: {}): ERROR - {}", stock.symbol, stock_id, e);
+                }
+            }
+        } else {
+            println!("   {}: No ID", stock.symbol);
+        }
+    }
     
     if let Some(last_update) = stats.last_update_date {
         println!("   Last Update: {}", last_update);

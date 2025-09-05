@@ -9,22 +9,14 @@ use chrono::NaiveDate;
 use anyhow::Result;
 
 use crate::database_sqlx::DatabaseManagerSqlx;
+use crate::models::DatabaseStats;
 
 #[allow(dead_code)]
 pub struct Dashboard {
     pub database_stats: Option<DatabaseStats>,
 }
 
-// Simple database stats structure
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct DatabaseStats {
-    pub total_stocks: usize,
-    pub total_price_records: usize,
-    pub data_coverage_percentage: f64,
-    pub oldest_data_date: Option<NaiveDate>,
-    pub last_update_date: Option<NaiveDate>,
-}
+// DatabaseStats moved to models/mod.rs to avoid duplication
 
 impl Dashboard {
     #[allow(dead_code)]
@@ -52,9 +44,9 @@ impl Dashboard {
             0.0
         };
         
-        // Get date ranges (simplified for now)
-        let oldest_data_date = None; // TODO: Add this to database stats
-        let last_update_date = None; // TODO: Add this to database stats
+        // Get date ranges from database
+        let oldest_data_date = database.get_oldest_data_date().await.unwrap_or(None);
+        let last_update_date = database.get_last_update_date().await.unwrap_or(None);
         
         self.database_stats = Some(DatabaseStats {
             total_stocks,
@@ -62,6 +54,7 @@ impl Dashboard {
             data_coverage_percentage,
             oldest_data_date,
             last_update_date,
+            top_pe_decliner: None, // Dashboard doesn't need PE decliner info
         });
         
         Ok(())

@@ -19,19 +19,20 @@ async fn get_database_connection() -> Result<SqlitePool, String> {
 }
 
 #[tauri::command]
-pub async fn get_price_history(stock_id: i64, start_date: String, end_date: String) -> Result<Vec<PriceData>, String> {
+pub async fn get_price_history(symbol: String, start_date: String, end_date: String) -> Result<Vec<PriceData>, String> {
     let pool = get_database_connection().await?;
     
     let query = "
-        SELECT date, open_price, high_price, low_price, close_price, volume, pe_ratio 
-        FROM daily_prices 
-        WHERE stock_id = ?1 AND date BETWEEN ?2 AND ?3 
-        ORDER BY date ASC
+        SELECT dp.date, dp.open_price, dp.high_price, dp.low_price, dp.close_price, dp.volume, dp.pe_ratio 
+        FROM daily_prices dp
+        JOIN stocks s ON dp.stock_id = s.id
+        WHERE s.symbol = ?1 AND dp.date BETWEEN ?2 AND ?3 
+        ORDER BY dp.date ASC
         LIMIT 1000
     ";
     
     match sqlx::query(query)
-        .bind(stock_id)
+        .bind(&symbol)
         .bind(&start_date)
         .bind(&end_date)
         .fetch_all(&pool).await 
@@ -79,21 +80,16 @@ pub async fn get_price_history(stock_id: i64, start_date: String, end_date: Stri
 }
 
 #[tauri::command]
-pub async fn export_data(stock_id: i64, format: String) -> Result<String, String> {
+pub async fn export_data(symbol: String, format: String) -> Result<String, String> {
     let pool = get_database_connection().await?;
     
-    // Get stock info
-    let stock_symbol = match sqlx::query("SELECT symbol FROM stocks WHERE id = ?1")
-        .bind(stock_id)
-        .fetch_one(&pool).await 
-    {
-        Ok(row) => row.get::<String, _>("symbol"),
-        Err(_) => format!("Stock_{}", stock_id),
-    };
-    
-    // Get count of records for this stock
-    let record_count = match sqlx::query("SELECT COUNT(*) as count FROM daily_prices WHERE stock_id = ?1")
-        .bind(stock_id)
+    // Get count of records for this stock by symbol
+    let record_count = match sqlx::query("
+        SELECT COUNT(*) as count 
+        FROM daily_prices dp
+        JOIN stocks s ON dp.stock_id = s.id
+        WHERE s.symbol = ?1")
+        .bind(&symbol)
         .fetch_one(&pool).await 
     {
         Ok(row) => row.get::<i64, _>("count"),
@@ -104,7 +100,7 @@ pub async fn export_data(stock_id: i64, format: String) -> Result<String, String
         "Export simulation: {} records for {} in {} format. \
         This feature will be enhanced to generate actual files in the next phase.",
         record_count,
-        stock_symbol,
+        symbol,
         format
     );
     

@@ -15,7 +15,7 @@ function AnalysisView({ stocks }) {
     setLoading(true);
     try {
       const history = await invoke('get_price_history', {
-        stockId: selectedStock.id,
+        symbol: selectedStock.symbol,
         startDate,
         endDate
       });
@@ -33,7 +33,7 @@ function AnalysisView({ stocks }) {
     
     try {
       const result = await invoke('export_data', {
-        stockId: selectedStock.id,
+        symbol: selectedStock.symbol,
         format
       });
       alert(result);
@@ -52,25 +52,50 @@ function AnalysisView({ stocks }) {
           <h3 className="text-lg font-semibold mb-4">Select Stock</h3>
           <select 
             className="w-full p-2 border border-gray-300 rounded"
-            value={selectedStock?.id || ''}
+            value={selectedStock?.symbol || ''}
             onChange={(e) => {
-              const stock = stocks.find(s => s.id === parseInt(e.target.value));
+              const stock = stocks.find(s => s.symbol === e.target.value);
               setSelectedStock(stock);
             }}
           >
             <option value="">Choose a stock...</option>
             {stocks.map(stock => (
-              <option key={stock.id} value={stock.id}>
-                {stock.symbol} - {stock.company_name}
+              <option key={stock.symbol || stock.id} value={stock.symbol || stock.id}>
+                {stock.has_data !== undefined ? (stock.has_data ? '📊' : '📋') : '🔍'} {stock.symbol} - {stock.company_name} 
+                {stock.has_data ? ` (${stock.data_count} records)` : stock.has_data === false ? ' (no data)' : ' (checking...)'}
               </option>
             ))}
           </select>
+          
+          <div className="mt-3 text-sm text-gray-600">
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-1">
+                <span>📊</span>
+                <span>Has price data</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <span>📋</span>
+                <span>No data yet</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <span>🔍</span>
+                <span>Checking data...</span>
+              </div>
+            </div>
+            <div className="mt-2 p-2 bg-gray-100 rounded text-xs">
+              Debug: {stocks.length} stocks loaded. First stock: {stocks[0] ? `${stocks[0].symbol} (has_data: ${stocks[0].has_data}, data_count: ${stocks[0].data_count})` : 'none'}
+            </div>
+          </div>
           
           {selectedStock && (
             <div className="mt-4 p-3 bg-blue-50 rounded">
               <p className="font-medium">{selectedStock.symbol}</p>
               <p className="text-sm text-gray-600">{selectedStock.company_name}</p>
-              <p className="text-sm text-gray-500">{selectedStock.sector}</p>
+              {selectedStock.has_data ? (
+                <p className="text-sm text-green-600 font-medium">✓ {selectedStock.data_count} price records available</p>
+              ) : (
+                <p className="text-sm text-orange-600">⚠ No price data - fetch data first</p>
+              )}
             </div>
           )}
         </div>
@@ -243,12 +268,25 @@ function DataFetchingView() {
   useEffect(() => {
     async function loadData() {
       try {
-        const [stocks, status] = await Promise.all([
-          invoke('get_available_stock_symbols'),
-          invoke('get_initialization_status')
-        ]);
-        setAvailableStocks(stocks);
-        setInitStatus(status);
+        try {
+          const [stocks, stocksWithData, status] = await Promise.all([
+            invoke('get_available_stock_symbols'),
+            invoke('get_stocks_with_data_status'),
+            invoke('get_initialization_status')
+          ]);
+          setAvailableStocks(stocksWithData); // Use enhanced data with has_data info
+          console.log('Loaded stocksWithData:', stocksWithData.slice(0, 3)); // Debug log
+          setInitStatus(status);
+        } catch (dataError) {
+          console.error('Error calling get_stocks_with_data_status:', dataError);
+          // Fallback to available symbols only
+          const [stocks, status] = await Promise.all([
+            invoke('get_available_stock_symbols'),
+            invoke('get_initialization_status')
+          ]);
+          setAvailableStocks(stocks); // Use old data structure as fallback
+          setInitStatus(status);
+        }
         if (stocks.length > 0 && stocks[0].symbol !== 'INIT') {
           setSelectedStock(stocks[0].symbol);
         }
@@ -268,11 +306,12 @@ function DataFetchingView() {
       setMessage(result);
       
       // Reload stocks and status after initialization
-      const [stocks, status] = await Promise.all([
+      const [stocks, stocksWithData, status] = await Promise.all([
         invoke('get_available_stock_symbols'),
+        invoke('get_stocks_with_data_status'),
         invoke('get_initialization_status')
       ]);
-      setAvailableStocks(stocks);
+      setAvailableStocks(stocksWithData);
       setInitStatus(status);
       if (stocks.length > 0) {
         setSelectedStock(stocks[0].symbol);
@@ -422,7 +461,8 @@ function DataFetchingView() {
             >
               {availableStocks.map((stock) => (
                 <option key={stock.symbol} value={stock.symbol}>
-                  {stock.symbol} - {stock.company_name}
+                  {stock.has_data !== undefined ? (stock.has_data ? '📊' : '📋') : '🔍'} {stock.symbol} - {stock.company_name}
+                  {stock.has_data ? ` (${stock.data_count} records)` : stock.has_data === false ? ' (no data)' : ' (checking...)'}
                 </option>
               ))}
             </select>
@@ -493,7 +533,7 @@ function App() {
     try {
       setLoading(true);
       const [stocksData, statsData] = await Promise.all([
-        invoke('get_all_stocks'),
+        invoke('get_stocks_with_data_status'),
         invoke('get_database_stats')
       ]);
       setStocks(stocksData);

@@ -9,6 +9,14 @@ pub struct StockInfo {
     pub sector: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StockWithData {
+    pub symbol: String,
+    pub company_name: String,
+    pub has_data: bool,
+    pub data_count: i64,
+}
+
 async fn get_database_connection() -> Result<SqlitePool, String> {
     let database_url = "sqlite:../stocks.db";
     SqlitePool::connect(database_url).await
@@ -96,6 +104,42 @@ pub async fn search_stocks(query: String) -> Result<Vec<StockInfo>, String> {
                 )
                 .collect();
             Ok(filtered)
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn get_stocks_with_data_status() -> Result<Vec<StockWithData>, String> {
+    let pool = get_database_connection().await?;
+    
+    let query = "
+        SELECT 
+            s.symbol, 
+            s.company_name, 
+            COUNT(dp.id) as data_count
+        FROM stocks s
+        LEFT JOIN daily_prices dp ON s.id = dp.stock_id
+        GROUP BY s.symbol, s.company_name
+        ORDER BY data_count DESC, s.symbol
+        LIMIT 100
+    ";
+    
+    match sqlx::query(query).fetch_all(&pool).await {
+        Ok(rows) => {
+            let stocks: Vec<StockWithData> = rows.into_iter().map(|row| {
+                let data_count = row.get::<i64, _>("data_count");
+                StockWithData {
+                    symbol: row.get::<String, _>("symbol"),
+                    company_name: row.get::<String, _>("company_name"),
+                    has_data: data_count > 0,
+                    data_count,
+                }
+            }).collect();
+            Ok(stocks)
+        }
+        Err(e) => {
+            eprintln!("Database query error: {}", e);
+            Err(format!("Failed to fetch stocks with data status: {}", e))
         }
     }
 }

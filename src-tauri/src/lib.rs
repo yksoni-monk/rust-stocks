@@ -1,6 +1,7 @@
 // Stock Analysis System - Tauri Backend
 pub mod commands;
 pub mod models;
+pub mod api;
 
 use commands::*;
 
@@ -39,7 +40,8 @@ pub fn run() {
             enhanced::fetch_comprehensive_data,
             enhanced::get_real_time_quote,
             enhanced::get_fundamentals,
-            enhanced::get_database_migration_status
+            enhanced::get_database_migration_status,
+            enhanced::populate_enhanced_stock_data
         ])
         .setup(|_app| {
             Ok(())

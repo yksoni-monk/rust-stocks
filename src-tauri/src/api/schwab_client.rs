@@ -10,7 +10,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{info, warn, debug};
 
-use crate::models::{Config, SchwabQuote, SchwabPriceBar};
+use crate::models::{Config, SchwabQuote, SchwabPriceBar, FundamentalData};
 use super::{ApiRateLimiter, StockDataProvider};
 
 /// Schwab OAuth token response
@@ -236,24 +236,66 @@ impl SchwabClient {
         Ok(json)
     }
 
-    /// Get fundamental data for a symbol
-    #[allow(dead_code)]
-    pub async fn get_fundamentals(&self, symbol: &str) -> Result<HashMap<String, Value>> {
+    /// Get comprehensive fundamental data for a symbol
+    pub async fn get_fundamentals(&self, symbol: &str) -> Result<FundamentalData> {
         let url = format!("https://api.schwabapi.com/marketdata/v1/instruments?symbol={}&projection=fundamental", symbol);
         let data = self.make_request(&url).await?;
         
-        // Parse the response and extract fundamental data
-        let mut fundamentals = HashMap::new();
+        let mut fundamental_data = FundamentalData {
+            symbol: symbol.to_string(),
+            pe_ratio: None,
+            pe_ratio_forward: None,
+            market_cap: None,
+            dividend_yield: None,
+            dividend_per_share: None,
+            eps: None,
+            eps_forward: None,
+            beta: None,
+            week_52_high: None,
+            week_52_low: None,
+            pb_ratio: None,
+            ps_ratio: None,
+            shares_outstanding: None,
+            float_shares: None,
+            revenue_ttm: None,
+            profit_margin: None,
+            operating_margin: None,
+            return_on_equity: None,
+            return_on_assets: None,
+            debt_to_equity: None,
+        };
         
         if let Some(instruments) = data.as_object() {
             if let Some((_, instrument_data)) = instruments.iter().next() {
                 if let Some(fundamental) = instrument_data.get("fundamental") {
-                    fundamentals.insert("fundamental".to_string(), fundamental.clone());
+                    if let Some(fund_obj) = fundamental.as_object() {
+                        // Map Schwab API fields to our FundamentalData structure
+                        fundamental_data.pe_ratio = fund_obj.get("peRatio").and_then(|v| v.as_f64());
+                        fundamental_data.pe_ratio_forward = fund_obj.get("peRatioForward").and_then(|v| v.as_f64());
+                        fundamental_data.market_cap = fund_obj.get("marketCap").and_then(|v| v.as_f64());
+                        fundamental_data.dividend_yield = fund_obj.get("divYield").and_then(|v| v.as_f64());
+                        fundamental_data.dividend_per_share = fund_obj.get("divPerShare").and_then(|v| v.as_f64());
+                        fundamental_data.eps = fund_obj.get("eps").and_then(|v| v.as_f64());
+                        fundamental_data.eps_forward = fund_obj.get("epsForward").and_then(|v| v.as_f64());
+                        fundamental_data.beta = fund_obj.get("beta").and_then(|v| v.as_f64());
+                        fundamental_data.week_52_high = fund_obj.get("high52").and_then(|v| v.as_f64());
+                        fundamental_data.week_52_low = fund_obj.get("low52").and_then(|v| v.as_f64());
+                        fundamental_data.pb_ratio = fund_obj.get("pbRatio").and_then(|v| v.as_f64());
+                        fundamental_data.ps_ratio = fund_obj.get("psRatio").and_then(|v| v.as_f64());
+                        fundamental_data.shares_outstanding = fund_obj.get("sharesOutstanding").and_then(|v| v.as_f64());
+                        fundamental_data.float_shares = fund_obj.get("floatShares").and_then(|v| v.as_f64());
+                        fundamental_data.revenue_ttm = fund_obj.get("revenueTtm").and_then(|v| v.as_f64());
+                        fundamental_data.profit_margin = fund_obj.get("profitMargin").and_then(|v| v.as_f64());
+                        fundamental_data.operating_margin = fund_obj.get("operatingMargin").and_then(|v| v.as_f64());
+                        fundamental_data.return_on_equity = fund_obj.get("roe").and_then(|v| v.as_f64());
+                        fundamental_data.return_on_assets = fund_obj.get("roa").and_then(|v| v.as_f64());
+                        fundamental_data.debt_to_equity = fund_obj.get("debtToEquity").and_then(|v| v.as_f64());
+                    }
                 }
             }
         }
         
-        Ok(fundamentals)
+        Ok(fundamental_data)
     }
 
     /// Get instrument data by symbol
@@ -275,6 +317,73 @@ impl SchwabClient {
     pub async fn get_market_hours_for_date(&self, market: &str, date: &str) -> Result<Value> {
         let url = format!("https://api.schwabapi.com/marketdata/v1/markets?markets={}&date={}", market, date);
         self.make_request(&url).await
+    }
+    
+    /// Get enhanced quotes with additional fundamental fields
+    pub async fn get_enhanced_quotes(&self, symbols: &[String]) -> Result<Vec<SchwabQuote>> {
+        if symbols.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let symbols_str = symbols.join(",");
+        let url = format!(
+            "https://api.schwabapi.com/marketdata/v1/quotes?symbols={}&fields=quote,fundamental", 
+            symbols_str
+        );
+        
+        let data = self.make_request(&url).await?;
+        let mut quotes = Vec::new();
+
+        if let Some(quotes_obj) = data.as_object() {
+            for (symbol, quote_data) in quotes_obj {
+                if let Some(quote_obj) = quote_data.as_object() {
+                    // Get basic quote data
+                    let mut quote = SchwabQuote {
+                        symbol: symbol.clone(),
+                        last_price: quote_obj.get("lastPrice")
+                            .and_then(|v| v.as_f64())
+                            .unwrap_or(0.0),
+                        open_price: quote_obj.get("openPrice")
+                            .and_then(|v| v.as_f64()),
+                        high_price: quote_obj.get("highPrice")
+                            .and_then(|v| v.as_f64()),
+                        low_price: quote_obj.get("lowPrice")
+                            .and_then(|v| v.as_f64()),
+                        close_price: quote_obj.get("closePrice")
+                            .and_then(|v| v.as_f64()),
+                        volume: quote_obj.get("totalVolume")
+                            .and_then(|v| v.as_i64()),
+                        pe_ratio: quote_obj.get("peRatio")
+                            .and_then(|v| v.as_f64()),
+                        market_cap: quote_obj.get("marketCap")
+                            .and_then(|v| v.as_f64()),
+                        dividend_yield: quote_obj.get("divYield")
+                            .and_then(|v| v.as_f64()),
+                    };
+                    
+                    // Try to get additional fundamental data if available
+                    if let Some(fundamental) = quote_obj.get("fundamental") {
+                        if let Some(fund_obj) = fundamental.as_object() {
+                            // Override with more detailed fundamental data if available
+                            if let Some(pe) = fund_obj.get("peRatio").and_then(|v| v.as_f64()) {
+                                quote.pe_ratio = Some(pe);
+                            }
+                            if let Some(mc) = fund_obj.get("marketCap").and_then(|v| v.as_f64()) {
+                                quote.market_cap = Some(mc);
+                            }
+                            if let Some(div_yield) = fund_obj.get("divYield").and_then(|v| v.as_f64()) {
+                                quote.dividend_yield = Some(div_yield);
+                            }
+                        }
+                    }
+                    
+                    quotes.push(quote);
+                }
+            }
+        }
+
+        debug!("Retrieved {} enhanced quotes for {} symbols", quotes.len(), symbols.len());
+        Ok(quotes)
     }
 }
 

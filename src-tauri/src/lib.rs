@@ -35,7 +35,8 @@ pub fn run() {
             initialization::check_database_schema,
             
             // Earnings commands
-            earnings::test_alpha_vantage_earnings
+            earnings::test_alpha_vantage_earnings,
+            earnings::test_alpha_vantage_daily
         ])
         .setup(|_app| {
             Ok(())

@@ -132,8 +132,10 @@ pub async fn fetch_single_stock_data(symbol: String, start_date: String, end_dat
         match sqlx::query(
             "INSERT OR IGNORE INTO daily_prices (
                 stock_id, date, open_price, high_price, low_price, close_price, volume,
-                pe_ratio, market_cap, dividend_yield
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
+                pe_ratio, market_cap, dividend_yield, eps, beta, week_52_high, week_52_low,
+                pb_ratio, ps_ratio, shares_outstanding, profit_margin, operating_margin,
+                return_on_equity, return_on_assets, debt_to_equity, dividend_per_share
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)"
         )
         .bind(stock_id)
         .bind(&price_bar.datetime)
@@ -145,6 +147,19 @@ pub async fn fetch_single_stock_data(symbol: String, start_date: String, end_dat
         .bind(fundamentals.pe_ratio)
         .bind(fundamentals.market_cap)
         .bind(fundamentals.dividend_yield)
+        .bind(fundamentals.eps)
+        .bind(fundamentals.beta)
+        .bind(fundamentals.week_52_high)
+        .bind(fundamentals.week_52_low)
+        .bind(fundamentals.pb_ratio)
+        .bind(fundamentals.ps_ratio)
+        .bind(fundamentals.shares_outstanding)
+        .bind(fundamentals.profit_margin)
+        .bind(fundamentals.operating_margin)
+        .bind(fundamentals.return_on_equity)
+        .bind(fundamentals.return_on_assets)
+        .bind(fundamentals.debt_to_equity)
+        .bind(fundamentals.dividend_per_share)
         .execute(&pool).await
         {
             Ok(result) => {

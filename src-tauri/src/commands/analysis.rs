@@ -22,6 +22,21 @@ async fn get_database_connection() -> Result<SqlitePool, String> {
 pub async fn get_price_history(symbol: String, start_date: String, end_date: String) -> Result<Vec<PriceData>, String> {
     let pool = get_database_connection().await?;
     
+    // Convert string dates to Unix timestamps for database query
+    let start_timestamp = chrono::NaiveDate::parse_from_str(&start_date, "%Y-%m-%d")
+        .map_err(|e| format!("Invalid start date format: {}", e))?
+        .and_hms_opt(0, 0, 0)
+        .unwrap()
+        .and_utc()
+        .timestamp_millis();
+    
+    let end_timestamp = chrono::NaiveDate::parse_from_str(&end_date, "%Y-%m-%d")
+        .map_err(|e| format!("Invalid end date format: {}", e))?
+        .and_hms_opt(23, 59, 59)
+        .unwrap()
+        .and_utc()
+        .timestamp_millis();
+    
     let query = "
         SELECT dp.date, dp.open_price, dp.high_price, dp.low_price, dp.close_price, dp.volume, dp.pe_ratio 
         FROM daily_prices dp
@@ -33,14 +48,20 @@ pub async fn get_price_history(symbol: String, start_date: String, end_date: Str
     
     match sqlx::query(query)
         .bind(&symbol)
-        .bind(&start_date)
-        .bind(&end_date)
+        .bind(start_timestamp)
+        .bind(end_timestamp)
         .fetch_all(&pool).await 
     {
         Ok(rows) => {
             let price_data: Vec<PriceData> = rows.into_iter().map(|row| {
+                let timestamp: i64 = row.get::<i64, _>("date");
+                let date_string = chrono::DateTime::from_timestamp_millis(timestamp)
+                    .unwrap_or_default()
+                    .format("%Y-%m-%d")
+                    .to_string();
+                
                 PriceData {
-                    date: row.get::<String, _>("date"),
+                    date: date_string,
                     open: row.get::<f64, _>("open_price"),
                     high: row.get::<f64, _>("high_price"),
                     low: row.get::<f64, _>("low_price"),

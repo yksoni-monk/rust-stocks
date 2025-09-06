@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
 function AnalysisPanel({ stock }) {
   const [selectedMetric, setSelectedMetric] = useState('price');
@@ -62,7 +63,6 @@ function AnalysisPanel({ stock }) {
       });
 
       setPriceHistory(history || []);
-      console.log('Loaded price history for', stock.symbol, ':', history?.length, 'records');
 
     } catch (err) {
       setError(err.toString());
@@ -122,14 +122,16 @@ function AnalysisPanel({ stock }) {
   };
 
   const getChartData = () => {
-    return priceHistory
+    const chartData = priceHistory
       .filter(record => getMetricValue(record, selectedMetric) !== null)
-      .slice(-20) // Show last 20 data points
       .map(record => ({
         date: record.date,
         value: getMetricValue(record, selectedMetric),
         formattedValue: formatMetricValue(getMetricValue(record, selectedMetric), selectedMetric)
       }));
+    
+    
+    return chartData;
   };
 
   const chartData = getChartData();
@@ -251,25 +253,61 @@ function AnalysisPanel({ stock }) {
               {metricOptions.find(m => m.value === selectedMetric)?.label} - {stock.symbol}
             </h3>
             
-            {/* Simple ASCII Chart */}
-            <div className="mb-4 p-4 bg-gray-50 rounded font-mono text-sm overflow-x-auto">
-              <div className="mb-2 text-gray-600">
-                {selectedMetric === 'price' ? 'Price' : metricOptions.find(m => m.value === selectedMetric)?.label} Trend (Latest {chartData.length} points)
-              </div>
-              {chartData.map((point, index) => (
-                <div key={index} className="flex items-center">
-                  <span className="w-20 text-xs text-gray-500 mr-2">{point.date}</span>
-                  <span className="w-16 text-right mr-2">{point.formattedValue}</span>
-                  <div className="flex-1 bg-gray-200 h-2 rounded">
-                    <div 
-                      className="bg-blue-600 h-2 rounded"
-                      style={{
-                        width: `${Math.max(5, (point.value / Math.max(...chartData.map(p => p.value))) * 100)}%`
+            {/* Professional Chart with Recharts */}
+            <div className="mb-6">
+              <h4 className="text-lg font-semibold mb-4">
+                {metricOptions.find(m => m.value === selectedMetric)?.label} over Time
+              </h4>
+              <div className="bg-white p-6 rounded-lg border shadow-sm">
+                <ResponsiveContainer width="100%" height={400}>
+                  <LineChart
+                    data={chartData.map(point => ({
+                      date: point.date,
+                      value: point.value,
+                      formattedValue: point.formattedValue
+                    }))}
+                    margin={{
+                      top: 20,
+                      right: 30,
+                      left: 20,
+                      bottom: 60,
+                    }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                    <XAxis 
+                      dataKey="date" 
+                      angle={-45}
+                      textAnchor="end"
+                      height={80}
+                      tick={{ fontSize: 12 }}
+                      tickFormatter={(value) => value.slice(5)} // Show MM-DD
+                    />
+                    <YAxis 
+                      tick={{ fontSize: 12 }}
+                      tickFormatter={(value) => formatMetricValue(value, selectedMetric)}
+                    />
+                    <Tooltip 
+                      formatter={(value) => [formatMetricValue(value, selectedMetric), metricOptions.find(m => m.value === selectedMetric)?.label]}
+                      labelFormatter={(label) => `Date: ${label}`}
+                      contentStyle={{
+                        backgroundColor: '#f8fafc',
+                        border: '1px solid #e2e8f0',
+                        borderRadius: '6px'
                       }}
-                    ></div>
-                  </div>
-                </div>
-              ))}
+                    />
+                    <Legend />
+                    <Line 
+                      type="monotone" 
+                      dataKey="value" 
+                      stroke="#3b82f6" 
+                      strokeWidth={3}
+                      dot={{ fill: '#3b82f6', strokeWidth: 2, r: 4 }}
+                      activeDot={{ r: 6, stroke: '#3b82f6', strokeWidth: 2 }}
+                      name={metricOptions.find(m => m.value === selectedMetric)?.label}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
             </div>
 
             {/* Data Table */}

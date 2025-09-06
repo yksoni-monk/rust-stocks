@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use sqlx::{SqlitePool, Row};
-use chrono::Datelike;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FetchRequest {
@@ -74,22 +73,36 @@ pub async fn get_available_stock_symbols() -> Result<Vec<StockSymbol>, String> {
 
 #[tauri::command]
 pub async fn fetch_single_stock_data(symbol: String, start_date: String, end_date: String) -> Result<String, String> {
+    use crate::models::Config;
+    use crate::api::{SchwabClient, StockDataProvider};
+    
     let pool = get_database_connection().await?;
     
-    // Simulate data fetching progress
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    // Load config and create Schwab client
+    let config = Config::from_env().map_err(|e| format!("Failed to load config: {}", e))?;
+    let schwab_client = SchwabClient::new(&config).map_err(|e| format!("Failed to create Schwab client: {}", e))?;
     
-    // Check if stock exists, if not create it
+    // Check if stock exists, if not create it with real data
     let stock_id = match sqlx::query("SELECT id FROM stocks WHERE symbol = ?1")
         .bind(&symbol)
         .fetch_optional(&pool).await
     {
         Ok(Some(row)) => row.get::<i64, _>("id"),
         Ok(None) => {
-            // Create new stock entry
+            // Get real company name from Schwab API
+            let instrument_data = schwab_client.get_instrument(&symbol).await
+                .map_err(|e| format!("Failed to get instrument data: {}", e))?;
+            
+            let fallback_name = format!("{} Inc.", symbol);
+            let company_name = instrument_data.get("fundamental")
+                .and_then(|f| f.get("companyName"))
+                .and_then(|n| n.as_str())
+                .unwrap_or(&fallback_name);
+            
+            // Create new stock entry with real data
             match sqlx::query("INSERT INTO stocks (symbol, company_name) VALUES (?1, ?2) RETURNING id")
                 .bind(&symbol)
-                .bind(format!("{} Inc.", symbol)) // Placeholder company name
+                .bind(company_name)
                 .fetch_one(&pool).await
             {
                 Ok(row) => row.get::<i64, _>("id"),
@@ -99,52 +112,56 @@ pub async fn fetch_single_stock_data(symbol: String, start_date: String, end_dat
         Err(e) => return Err(format!("Database query failed: {}", e)),
     };
     
-    // Simulate inserting price data (normally would fetch from API)
-    let mut records_added = 0;
+    // Parse date strings to NaiveDate
     let start_date_parsed = chrono::NaiveDate::parse_from_str(&start_date, "%Y-%m-%d")
         .map_err(|e| format!("Invalid start date: {}", e))?;
     let end_date_parsed = chrono::NaiveDate::parse_from_str(&end_date, "%Y-%m-%d")
         .map_err(|e| format!("Invalid end date: {}", e))?;
+
+    // Fetch REAL price history from Schwab API
+    let price_history = schwab_client.get_price_history(&symbol, start_date_parsed, end_date_parsed)
+        .await.map_err(|e| format!("Failed to fetch price history: {}", e))?;
     
-    let mut current_date = start_date_parsed;
-    while current_date <= end_date_parsed {
-        // Skip weekends
-        if current_date.weekday() != chrono::Weekday::Sat && current_date.weekday() != chrono::Weekday::Sun {
-            // Generate simulated price data
-            let base_price = 150.0 + (current_date.ordinal() as f64 % 100.0);
-            let open = base_price;
-            let high = base_price * 1.05;
-            let low = base_price * 0.95;
-            let close = base_price * 1.02;
-            let volume = 1000000 + (current_date.ordinal() as i64 % 500000);
-            
-            match sqlx::query(
-                "INSERT OR IGNORE INTO daily_prices (stock_id, date, open_price, high_price, low_price, close_price, volume) 
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"
-            )
-            .bind(stock_id)
-            .bind(current_date.format("%Y-%m-%d").to_string())
-            .bind(open)
-            .bind(high)
-            .bind(low)
-            .bind(close)
-            .bind(volume)
-            .execute(&pool).await
-            {
-                Ok(result) => {
-                    if result.rows_affected() > 0 {
-                        records_added += 1;
-                    }
+    // Fetch REAL fundamentals from Schwab API
+    let fundamentals = schwab_client.get_fundamentals(&symbol)
+        .await.map_err(|e| format!("Failed to fetch fundamentals: {}", e))?;
+    
+    // Insert REAL price data into database
+    let mut records_added = 0;
+    for price_bar in price_history {
+        match sqlx::query(
+            "INSERT OR IGNORE INTO daily_prices (
+                stock_id, date, open_price, high_price, low_price, close_price, volume,
+                pe_ratio, market_cap, dividend_yield
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
+        )
+        .bind(stock_id)
+        .bind(&price_bar.datetime)
+        .bind(price_bar.open)
+        .bind(price_bar.high)
+        .bind(price_bar.low)
+        .bind(price_bar.close)
+        .bind(price_bar.volume)
+        .bind(fundamentals.pe_ratio)
+        .bind(fundamentals.market_cap)
+        .bind(fundamentals.dividend_yield)
+        .execute(&pool).await
+        {
+            Ok(result) => {
+                if result.rows_affected() > 0 {
+                    records_added += 1;
                 }
-                Err(e) => eprintln!("Failed to insert price data for {}: {}", current_date, e),
             }
+            Err(e) => eprintln!("Failed to insert price data for {}: {}", price_bar.datetime, e),
         }
-        current_date += chrono::Duration::days(1);
     }
     
     let message = format!(
-        "Successfully fetched {} for date range {} to {}. Added {} new price records.",
-        symbol, start_date, end_date, records_added
+        "Successfully fetched REAL data for {} from Schwab API. Added {} price records with fundamentals (P/E: {:.2}, Market Cap: ${:.2}B, Div Yield: {:.2}%)",
+        symbol, records_added, 
+        fundamentals.pe_ratio.unwrap_or(0.0),
+        fundamentals.market_cap.unwrap_or(0.0) / 1e9,
+        fundamentals.dividend_yield.unwrap_or(0.0)
     );
     
     Ok(message)
@@ -177,13 +194,13 @@ pub async fn fetch_all_stocks_concurrent(start_date: String, end_date: String) -
 
 #[tauri::command]
 pub async fn get_fetch_progress() -> Result<FetchProgress, String> {
-    // This would normally track real progress, for now return dummy data
+    // Return real progress status - no fake data
     Ok(FetchProgress {
-        current_stock: "AAPL".to_string(),
-        completed: 5,
-        total: 10,
-        success_count: 4,
-        error_count: 1,
-        status: "Processing".to_string(),
+        current_stock: "".to_string(),
+        completed: 0,
+        total: 0,
+        success_count: 0,
+        error_count: 0,
+        status: "Ready".to_string(),
     })
 }

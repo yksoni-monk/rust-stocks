@@ -82,18 +82,13 @@ function App() {
     for (let i = 0; i < Math.min(stocks.length, 10); i++) { // Limit to first 10 for demo
       const stock = stocks[i];
       try {
-        const result = await invoke('populate_enhanced_stock_data', {
+        const result = await invoke('fetch_single_stock_data', {
           symbol: stock.symbol,
-          startDate: '2024-01-01',
-          endDate: '2024-12-31',
-          fetchFundamentals: true
+          start_date: '2024-01-01',
+          end_date: '2024-12-31'
         });
 
-        if (result.success) {
-          successCount++;
-        } else {
-          errorCount++;
-        }
+        successCount++;
       } catch (error) {
         errorCount++;
         console.error(`Error fetching ${stock.symbol}:`, error);

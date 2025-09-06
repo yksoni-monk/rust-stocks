@@ -17,12 +17,10 @@ function StockRow({ stock, isExpanded, expandedPanel, onToggleExpansion }) {
   };
 
   const handleAnalyzeClick = () => {
-    console.log('Analyze clicked for stock:', stock.symbol, 'Current expanded panel:', expandedPanel);
     onToggleExpansion(stock.id || stock.symbol, expandedPanel === 'analysis' ? null : 'analysis');
   };
 
   const handleFetchClick = () => {
-    console.log('Fetch clicked for stock:', stock.symbol, 'Current expanded panel:', expandedPanel);
     onToggleExpansion(stock.id || stock.symbol, expandedPanel === 'fetch' ? null : 'fetch');
   };
 
@@ -64,7 +62,7 @@ function StockRow({ stock, isExpanded, expandedPanel, onToggleExpansion }) {
             }`}
           >
             <span>📊</span>
-            <span>Analyze</span>
+            <span>{expandedPanel === 'analysis' ? 'Close' : 'Analyze'}</span>
           </button>
           
           <button
@@ -76,7 +74,7 @@ function StockRow({ stock, isExpanded, expandedPanel, onToggleExpansion }) {
             }`}
           >
             <span>📥</span>
-            <span>Fetch</span>
+            <span>{expandedPanel === 'fetch' ? 'Close' : 'Fetch'}</span>
           </button>
         </div>
       </div>

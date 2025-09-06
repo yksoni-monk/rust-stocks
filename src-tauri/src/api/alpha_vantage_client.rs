@@ -1,6 +1,73 @@
 use serde::Deserialize;
 use std::collections::HashMap;
 use chrono::NaiveDate;
+use std::time::Duration;
+
+#[derive(Debug, Clone)]
+pub enum DataFetchMode {
+    Compact,  // 100 days
+    Full,     // 20+ years
+}
+
+impl ToString for DataFetchMode {
+    fn to_string(&self) -> String {
+        match self {
+            DataFetchMode::Compact => "compact".to_string(),
+            DataFetchMode::Full => "full".to_string(),
+        }
+    }
+}
+
+impl From<String> for DataFetchMode {
+    fn from(s: String) -> Self {
+        match s.to_lowercase().as_str() {
+            "full" => DataFetchMode::Full,
+            _ => DataFetchMode::Compact,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ComprehensiveStockData {
+    pub symbol: String,
+    pub daily_prices: Vec<ConvertedDailyPrice>,
+    pub earnings_data: AlphaVantageEarningsResponse,
+    pub calculated_pe_ratios: Vec<DailyPERatio>,
+    pub data_quality: DataQualityReport,
+    pub fetch_metadata: FetchMetadata,
+}
+
+#[derive(Debug)]
+pub struct DailyPERatio {
+    pub date: NaiveDate,
+    pub pe_ratio: Option<f64>,
+    pub eps_used: Option<f64>,
+    pub closing_price: f64,
+    pub calculation_method: PECalculationMethod,
+}
+
+#[derive(Debug)]
+pub enum PECalculationMethod {
+    QuarterlyEPS(NaiveDate), // Date of the quarterly earnings used
+    DefaultValue(f64),       // Default value when no EPS available
+}
+
+#[derive(Debug)]
+pub struct DataQualityReport {
+    pub total_records: usize,
+    pub missing_data_points: Vec<NaiveDate>,
+    pub pe_calculation_coverage: f64, // Percentage of dates with calculated P/E
+    pub date_range_start: Option<NaiveDate>,
+    pub date_range_end: Option<NaiveDate>,
+}
+
+#[derive(Debug)]
+pub struct FetchMetadata {
+    pub fetch_mode: DataFetchMode,
+    pub api_calls_made: u32,
+    pub fetch_duration: Duration,
+    pub data_source: String,
+}
 
 /// Alpha Vantage earnings data structures
 #[derive(Debug, Deserialize)]
@@ -121,9 +188,14 @@ impl AlphaVantageClient {
 
         println!("DEBUG: Alpha Vantage response: {}", text);
 
+        // Check for rate limit or error messages
+        if text.contains("rate limit") || text.contains("Information") {
+            return Err(format!("Alpha Vantage API rate limit exceeded or error: {}", text));
+        }
+
         // Parse JSON response
         let earnings_data: AlphaVantageEarningsResponse = serde_json::from_str(&text)
-            .map_err(|e| format!("Failed to parse earnings data: {}", e))?;
+            .map_err(|e| format!("Failed to parse earnings data: {} | Response: {}", e, text))?;
 
         Ok(earnings_data)
     }
@@ -183,9 +255,14 @@ impl AlphaVantageClient {
 
         println!("DEBUG: Alpha Vantage daily response length: {} characters", text.len());
 
+        // Check for rate limit or error messages
+        if text.contains("rate limit") || text.contains("Information") {
+            return Err(format!("Alpha Vantage API rate limit exceeded or error: {}", text));
+        }
+
         // Parse JSON response
         let daily_data: AlphaVantageDailyResponse = serde_json::from_str(&text)
-            .map_err(|e| format!("Failed to parse daily data: {}", e))?;
+            .map_err(|e| format!("Failed to parse daily data: {} | Response: {}", e, text.chars().take(200).collect::<String>()))?;
 
         Ok(daily_data)
     }
@@ -338,5 +415,140 @@ impl AlphaVantageClient {
                          data.open, data.high, data.low, data.close, data.volume);
             }
         }
+    }
+
+    /// Comprehensive data fetching with P/E calculations
+    pub async fn fetch_comprehensive_daily_data(&self, symbol: &str, fetch_mode: DataFetchMode) -> Result<ComprehensiveStockData, String> {
+        use std::time::Instant;
+        
+        let start_time = Instant::now();
+        let mut api_calls = 0;
+        
+        println!("DEBUG: Starting comprehensive data fetch for {} in {:?} mode", symbol, fetch_mode);
+        
+        // 1. Fetch daily price data
+        let daily_data = self.get_daily_data(symbol, Some(&fetch_mode.to_string())).await?;
+        api_calls += 1;
+        
+        // 2. Convert daily data
+        let converted_prices = self.convert_daily_data(&daily_data)?;
+        
+        // 3. Fetch earnings data
+        let earnings_data = self.get_earnings(symbol).await?;
+        api_calls += 1;
+        
+        // 4. Calculate P/E ratios for all dates
+        let pe_ratios = self.calculate_pe_ratios_for_price_data(&earnings_data, &converted_prices)?;
+        
+        // 5. Generate data quality report
+        let data_quality = self.generate_data_quality_report(&converted_prices, &pe_ratios);
+        
+        // 6. Create metadata
+        let fetch_metadata = FetchMetadata {
+            fetch_mode: fetch_mode.clone(),
+            api_calls_made: api_calls,
+            fetch_duration: start_time.elapsed(),
+            data_source: "alpha_vantage".to_string(),
+        };
+        
+        println!("DEBUG: Comprehensive fetch completed for {} - {} price records, {} P/E calculations", 
+                symbol, converted_prices.len(), pe_ratios.len());
+        
+        Ok(ComprehensiveStockData {
+            symbol: symbol.to_string(),
+            daily_prices: converted_prices,
+            earnings_data,
+            calculated_pe_ratios: pe_ratios,
+            data_quality,
+            fetch_metadata,
+        })
+    }
+    
+    /// Calculate P/E ratios for a range of price data
+    pub fn calculate_pe_ratios_for_price_data(&self, earnings_data: &AlphaVantageEarningsResponse, price_data: &[ConvertedDailyPrice]) -> Result<Vec<DailyPERatio>, String> {
+        let mut pe_ratios = Vec::new();
+        
+        for price_point in price_data {
+            let pe_ratio = match self.get_eps_for_date(earnings_data, price_point.date) {
+                Ok(eps) => {
+                    if eps > 0.0 {
+                        let pe = price_point.close / eps;
+                        Some(pe)
+                    } else {
+                        None // Negative earnings
+                    }
+                }
+                Err(_) => None, // No EPS data available
+            };
+            
+            let calculation_method = match self.get_latest_eps_date_for_date(earnings_data, price_point.date) {
+                Ok(eps_date) => PECalculationMethod::QuarterlyEPS(eps_date),
+                Err(_) => PECalculationMethod::DefaultValue(0.0),
+            };
+            
+            pe_ratios.push(DailyPERatio {
+                date: price_point.date,
+                pe_ratio,
+                eps_used: self.get_eps_for_date(earnings_data, price_point.date).ok(),
+                closing_price: price_point.close,
+                calculation_method,
+            });
+        }
+        
+        Ok(pe_ratios)
+    }
+    
+    /// Get the date of the latest EPS used for a given date
+    pub fn get_latest_eps_date_for_date(&self, earnings_data: &AlphaVantageEarningsResponse, target_date: NaiveDate) -> Result<NaiveDate, String> {
+        // Parse quarterly earnings and sort by fiscal date (most recent first)
+        let mut quarterly_eps: Vec<NaiveDate> = Vec::new();
+        
+        for earning in &earnings_data.quarterly_earnings {
+            if let Ok(fiscal_date) = NaiveDate::parse_from_str(&earning.fiscal_date_ending, "%Y-%m-%d") {
+                quarterly_eps.push(fiscal_date);
+            }
+        }
+        
+        // Sort by fiscal date (most recent first)
+        quarterly_eps.sort_by(|a, b| b.cmp(&a));
+        
+        // Find the latest EPS date that is <= target_date
+        for fiscal_date in quarterly_eps {
+            if fiscal_date <= target_date {
+                return Ok(fiscal_date);
+            }
+        }
+        
+        Err(format!("No EPS date found for {} on or before {}", earnings_data.symbol, target_date))
+    }
+    
+    /// Generate data quality report
+    pub fn generate_data_quality_report(&self, price_data: &[ConvertedDailyPrice], pe_ratios: &[DailyPERatio]) -> DataQualityReport {
+        let total_records = price_data.len();
+        let successful_pe_calculations = pe_ratios.iter().filter(|pe| pe.pe_ratio.is_some()).count();
+        let pe_coverage = if total_records > 0 {
+            successful_pe_calculations as f64 / total_records as f64
+        } else {
+            0.0
+        };
+        
+        let date_range_start = price_data.first().map(|p| p.date);
+        let date_range_end = price_data.last().map(|p| p.date);
+        
+        // Find missing data points (if any gaps in date sequence)
+        let missing_data_points = Vec::new(); // TODO: Implement gap detection
+        
+        DataQualityReport {
+            total_records,
+            missing_data_points,
+            pe_calculation_coverage: pe_coverage,
+            date_range_start,
+            date_range_end,
+        }
+    }
+
+    /// Enhanced daily data fetching with mode parameter
+    pub async fn get_daily_data_with_mode(&self, symbol: &str, fetch_mode: DataFetchMode) -> Result<AlphaVantageDailyResponse, String> {
+        self.get_daily_data(symbol, Some(&fetch_mode.to_string())).await
     }
 }

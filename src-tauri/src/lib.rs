@@ -2,6 +2,7 @@
 pub mod commands;
 pub mod models;
 pub mod api;
+pub mod database;
 
 use commands::*;
 
@@ -28,6 +29,11 @@ pub fn run() {
             fetching::fetch_single_stock_data,
             fetching::fetch_all_stocks_concurrent,
             fetching::get_fetch_progress,
+            
+            // Enhanced comprehensive data fetching
+            fetching::fetch_stock_data_comprehensive,
+            fetching::fetch_all_stocks_comprehensive,
+            fetching::get_processing_status_for_stock,
             
             // Initialization commands
             initialization::initialize_sp500_stocks,

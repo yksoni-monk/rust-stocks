@@ -72,35 +72,33 @@ function App() {
     }
   }
 
-  async function handleBulkFetch() {
+  async function handleBulkFetch(fetchMode = 'compact') {
     if (stocks.length === 0) return;
 
+    const confirmed = confirm(
+      `This will fetch ${fetchMode} data for all ${stocks.length} stocks.\n\n` +
+      `⏱️ Estimated time: ${Math.ceil(stocks.length * 0.5)} minutes\n` +
+      `📊 Data: ${fetchMode === 'compact' ? '100 days per stock' : '20+ years per stock'}\n\n` +
+      `Continue?`
+    );
+
+    if (!confirmed) return;
+
     setLoading(true);
-    let successCount = 0;
-    let errorCount = 0;
 
-    for (let i = 0; i < Math.min(stocks.length, 10); i++) { // Limit to first 10 for demo
-      const stock = stocks[i];
-      try {
-        const result = await invoke('fetch_single_stock_data', {
-          symbol: stock.symbol,
-          start_date: '2024-01-01',
-          end_date: '2024-12-31'
-        });
+    try {
+      const result = await invoke('fetch_all_stocks_comprehensive', {
+        fetchMode: fetchMode
+      });
 
-        successCount++;
-      } catch (error) {
-        errorCount++;
-        console.error(`Error fetching ${stock.symbol}:`, error);
-      }
-
-      // Small delay to avoid overwhelming the API
-      await new Promise(resolve => setTimeout(resolve, 200));
+      alert(`✅ ${result}`);
+      await fetchInitialData(); // Refresh data
+    } catch (error) {
+      console.error('Bulk fetch failed:', error);
+      alert(`❌ Bulk fetch failed: ${error}`);
+    } finally {
+      setLoading(false);
     }
-
-    alert(`Bulk fetch completed: ${successCount} successful, ${errorCount} errors`);
-    await fetchInitialData(); // Refresh data
-    setLoading(false);
   }
 
   const handleToggleExpansion = (stockId, panelType) => {
@@ -199,13 +197,22 @@ function App() {
                 >
                   {initializing ? 'Initializing...' : 'Initialize S&P 500'}
                 </button>
-                <button
-                  onClick={handleBulkFetch}
-                  disabled={loading || stocks.length === 0}
-                  className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 disabled:bg-gray-400 text-sm"
-                >
-                  {loading ? 'Fetching...' : 'Bulk Fetch (10 stocks)'}
-                </button>
+                <div className="flex space-x-2">
+                  <button
+                    onClick={() => handleBulkFetch('compact')}
+                    disabled={loading || stocks.length === 0}
+                    className="bg-green-600 text-white px-3 py-2 rounded hover:bg-green-700 disabled:bg-gray-400 text-sm"
+                  >
+                    {loading ? 'Fetching...' : 'Bulk: Compact'}
+                  </button>
+                  <button
+                    onClick={() => handleBulkFetch('full')}
+                    disabled={loading || stocks.length === 0}
+                    className="bg-purple-600 text-white px-3 py-2 rounded hover:bg-purple-700 disabled:bg-gray-400 text-sm"
+                  >
+                    {loading ? 'Fetching...' : 'Bulk: Full'}
+                  </button>
+                </div>
               </div>
             </div>
             {initializing && (

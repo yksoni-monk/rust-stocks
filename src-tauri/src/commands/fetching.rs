@@ -1,5 +1,14 @@
 use serde::{Deserialize, Serialize};
 use sqlx::{SqlitePool, Row};
+use crate::api::alpha_vantage_client::{AlphaVantageClient, DataFetchMode};
+use crate::database::{
+    get_database_connection, get_stock_id_by_symbol, batch_insert_daily_prices,
+    store_earnings_data, batch_update_pe_ratios,
+    update_processing_status, set_processing_completed, set_processing_failed,
+    get_processing_status, ProcessingStatus
+};
+use crate::models::Config;
+use chrono::NaiveDate;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FetchRequest {
@@ -25,11 +34,6 @@ pub struct StockSymbol {
     pub company_name: String,
 }
 
-async fn get_database_connection() -> Result<SqlitePool, String> {
-    let database_url = "sqlite:../stocks.db";
-    SqlitePool::connect(database_url).await
-        .map_err(|e| format!("Database connection failed: {}", e))
-}
 
 #[tauri::command]
 pub async fn get_available_stock_symbols() -> Result<Vec<StockSymbol>, String> {
@@ -205,6 +209,232 @@ pub async fn fetch_all_stocks_concurrent(start_date: String, end_date: String) -
     );
     
     Ok(message)
+}
+
+#[tauri::command]
+pub async fn fetch_stock_data_comprehensive(
+    symbol: String, 
+    fetch_mode: String // "compact" or "full"
+) -> Result<String, String> {
+    use std::time::Instant;
+    
+    let start_time = Instant::now();
+    let fetch_mode: DataFetchMode = fetch_mode.into();
+    
+    println!("Starting comprehensive data fetch for {} in {:?} mode", symbol, fetch_mode);
+    
+    let pool = get_database_connection().await?;
+    
+    // Get stock ID
+    let stock_id = match get_stock_id_by_symbol(&pool, &symbol).await? {
+        Some(id) => id,
+        None => return Err(format!("Stock symbol {} not found in database", symbol)),
+    };
+    
+    // Update processing status to processing
+    update_processing_status(&pool, stock_id, "prices", "processing", Some(&fetch_mode.to_string())).await?;
+    
+    let result = fetch_comprehensive_data_internal(&pool, stock_id, &symbol, fetch_mode).await;
+    
+    match result {
+        Ok(message) => {
+            set_processing_completed(&pool, stock_id, "prices", 0).await
+                .map_err(|e| format!("Failed to update processing status: {}", e))?;
+            
+            let duration = start_time.elapsed();
+            println!("Comprehensive fetch completed for {} in {:?}", symbol, duration);
+            
+            Ok(format!("{}. Completed in {:.2}s", message, duration.as_secs_f64()))
+        }
+        Err(error) => {
+            set_processing_failed(&pool, stock_id, "prices", &error).await
+                .map_err(|e| format!("Failed to update processing status: {}", e))?;
+            
+            Err(error)
+        }
+    }
+}
+
+async fn fetch_comprehensive_data_internal(
+    pool: &SqlitePool,
+    stock_id: i64,
+    symbol: &str,
+    fetch_mode: DataFetchMode,
+) -> Result<String, String> {
+    // Load config and create Alpha Vantage client
+    let config = Config::from_env().map_err(|e| format!("Failed to load config: {}", e))?;
+    let alpha_client = AlphaVantageClient::new(config.alpha_vantage_api_key);
+    
+    println!("Step 1: Fetching comprehensive data for {} using Alpha Vantage", symbol);
+    
+    // Fetch comprehensive data using Alpha Vantage
+    let comprehensive_data = alpha_client.fetch_comprehensive_daily_data(symbol, fetch_mode).await?;
+    
+    println!("Step 2: Storing {} price records in database", comprehensive_data.daily_prices.len());
+    
+    // Store daily price data
+    let price_records_inserted = batch_insert_daily_prices(
+        pool,
+        stock_id,
+        &comprehensive_data.daily_prices,
+        "alpha_vantage"
+    ).await?;
+    
+    println!("Step 3: Storing earnings data in database");
+    
+    // Store earnings data
+    let earnings_records_inserted = store_earnings_data(
+        pool,
+        stock_id,
+        &comprehensive_data.earnings_data
+    ).await?;
+    
+    println!("Step 4: Updating P/E ratios for {} price records", comprehensive_data.calculated_pe_ratios.len());
+    
+    // Update P/E ratios
+    let pe_data: Vec<(NaiveDate, Option<f64>, Option<f64>)> = comprehensive_data.calculated_pe_ratios
+        .iter()
+        .map(|pe| (pe.date, pe.pe_ratio, pe.eps_used))
+        .collect();
+    
+    let pe_records_updated = batch_update_pe_ratios(pool, stock_id, &pe_data).await?;
+    
+    // Generate summary message
+    let quality = &comprehensive_data.data_quality;
+    let metadata = &comprehensive_data.fetch_metadata;
+    
+    let message = format!(
+        "Successfully fetched comprehensive data for {} using Alpha Vantage API.\n\
+        • Price Records: {} inserted\n\
+        • Earnings Records: {} inserted  \n\
+        • P/E Calculations: {} updated ({:.1}% coverage)\n\
+        • Date Range: {} to {}\n\
+        • API Calls: {}\n\
+        • Data Source: {}",
+        symbol,
+        price_records_inserted,
+        earnings_records_inserted,
+        pe_records_updated,
+        quality.pe_calculation_coverage * 100.0,
+        quality.date_range_start.map(|d| d.to_string()).unwrap_or("N/A".to_string()),
+        quality.date_range_end.map(|d| d.to_string()).unwrap_or("N/A".to_string()),
+        metadata.api_calls_made,
+        metadata.data_source
+    );
+    
+    Ok(message)
+}
+
+#[tauri::command]
+pub async fn fetch_all_stocks_comprehensive(
+    fetch_mode: String // "compact" or "full"
+) -> Result<String, String> {
+    use std::time::Instant;
+    use tokio::time::{sleep, Duration};
+    
+    let start_time = Instant::now();
+    let fetch_mode: DataFetchMode = fetch_mode.into();
+    
+    println!("Starting bulk comprehensive data fetch in {:?} mode", fetch_mode);
+    
+    let pool = get_database_connection().await?;
+    
+    // Get all available stocks
+    let stocks = get_available_stock_symbols().await?;
+    
+    if stocks.is_empty() {
+        return Err("No stocks available for fetching".to_string());
+    }
+    
+    let total_stocks = stocks.len();
+    let mut success_count = 0;
+    let mut error_count = 0;
+    let mut processed_count = 0;
+    
+    println!("Processing {} stocks with rate limiting (5 calls per minute)", total_stocks);
+    
+    // Process stocks with rate limiting (5 API calls per minute for Alpha Vantage free tier)
+    // Each stock needs 2 API calls (daily data + earnings), so we can process 2.5 stocks per minute
+    // We'll be conservative and process 2 stocks per minute
+    for (index, stock) in stocks.iter().enumerate() {
+        processed_count += 1;
+        
+        println!("Processing stock {}/{}: {}", processed_count, total_stocks, stock.symbol);
+        
+        // Get stock ID
+        let stock_id = match get_stock_id_by_symbol(&pool, &stock.symbol).await {
+            Ok(Some(id)) => id,
+            Ok(None) => {
+                eprintln!("Stock symbol {} not found in database", stock.symbol);
+                error_count += 1;
+                continue;
+            }
+            Err(e) => {
+                eprintln!("Failed to get stock ID for {}: {}", stock.symbol, e);
+                error_count += 1;
+                continue;
+            }
+        };
+        
+        // Set processing status
+        if let Err(e) = update_processing_status(&pool, stock_id, "prices", "processing", Some(&fetch_mode.to_string())).await {
+            eprintln!("Failed to update processing status for {}: {}", stock.symbol, e);
+        }
+        
+        // Fetch comprehensive data
+        match fetch_comprehensive_data_internal(&pool, stock_id, &stock.symbol, fetch_mode.clone()).await {
+            Ok(_) => {
+                success_count += 1;
+                println!("✅ Successfully processed {}", stock.symbol);
+                
+                if let Err(e) = set_processing_completed(&pool, stock_id, "prices", 0).await {
+                    eprintln!("Failed to update completion status for {}: {}", stock.symbol, e);
+                }
+            }
+            Err(e) => {
+                error_count += 1;
+                eprintln!("❌ Failed to process {}: {}", stock.symbol, e);
+                
+                if let Err(e) = set_processing_failed(&pool, stock_id, "prices", &e).await {
+                    eprintln!("Failed to update failure status for {}: {}", stock.symbol, e);
+                }
+            }
+        }
+        
+        // Rate limiting: wait 30 seconds between stocks (2 stocks per minute)
+        // This ensures we stay well under the 5 API calls per minute limit
+        if index < total_stocks - 1 { // Don't wait after the last stock
+            println!("Rate limiting: waiting 30 seconds before next stock...");
+            sleep(Duration::from_secs(30)).await;
+        }
+    }
+    
+    let duration = start_time.elapsed();
+    let success_rate = (success_count as f64 / total_stocks as f64) * 100.0;
+    
+    let message = format!(
+        "Bulk comprehensive fetch completed!\n\
+        • Total stocks: {}\n\
+        • Successful: {} ({:.1}%)\n\
+        • Failed: {}\n\
+        • Total time: {:.1} minutes\n\
+        • Average time per stock: {:.1} seconds",
+        total_stocks,
+        success_count,
+        success_rate,
+        error_count,
+        duration.as_secs_f64() / 60.0,
+        duration.as_secs_f64() / total_stocks as f64
+    );
+    
+    println!("{}", message);
+    Ok(message)
+}
+
+#[tauri::command]
+pub async fn get_processing_status_for_stock(stock_id: i64) -> Result<Option<ProcessingStatus>, String> {
+    let pool = get_database_connection().await?;
+    get_processing_status(&pool, stock_id, "prices").await
 }
 
 #[tauri::command]

@@ -120,6 +120,7 @@ pub struct Config {
     pub schwab_app_secret: String,
     pub schwab_callback_url: String,
     pub schwab_token_path: String,
+    pub alpha_vantage_api_key: String,
     pub database_path: String,
     pub rate_limit_per_minute: u32,
     #[allow(dead_code)]
@@ -137,6 +138,7 @@ impl Config {
         println!("DEBUG: SCHWAB_APP_SECRET: {:?}", std::env::var("SCHWAB_APP_SECRET"));
         println!("DEBUG: SCHWAB_CALLBACK_URL: {:?}", std::env::var("SCHWAB_CALLBACK_URL"));
         println!("DEBUG: SCHWAB_TOKEN_PATH: {:?}", std::env::var("SCHWAB_TOKEN_PATH"));
+        println!("DEBUG: ALPHA_VANTAGE_API_KEY: {:?}", std::env::var("ALPHA_VANTAGE_API_KEY"));
         println!("DEBUG: DATABASE_PATH: {:?}", std::env::var("DATABASE_PATH"));
         
         let schwab_token_path = std::env::var("SCHWAB_TOKEN_PATH")
@@ -153,6 +155,8 @@ impl Config {
             schwab_callback_url: std::env::var("SCHWAB_CALLBACK_URL")
                 .unwrap_or_else(|_| "https://localhost:8080".to_string()),
             schwab_token_path,
+            alpha_vantage_api_key: std::env::var("ALPHA_VANTAGE_API_KEY")
+                .unwrap_or_else(|_| "demo".to_string()),
             database_path: std::env::var("DATABASE_PATH")
                 .unwrap_or_else(|_| "stocks.db".to_string()),
             rate_limit_per_minute: std::env::var("RATE_LIMIT_PER_MINUTE")

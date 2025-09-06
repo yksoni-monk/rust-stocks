@@ -32,7 +32,10 @@ pub fn run() {
             // Initialization commands
             initialization::initialize_sp500_stocks,
             initialization::get_initialization_status,
-            initialization::check_database_schema
+            initialization::check_database_schema,
+            
+            // Earnings commands
+            earnings::test_alpha_vantage_earnings
         ])
         .setup(|_app| {
             Ok(())

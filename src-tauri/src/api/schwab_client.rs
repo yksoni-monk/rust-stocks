@@ -4,7 +4,6 @@ use chrono::{DateTime, NaiveDate, Utc};
 use reqwest::{Client, header::{HeaderMap, HeaderValue}};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
 use tokio::sync::Mutex;

@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::HashMap;
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::NaiveDate;
 
 /// Alpha Vantage earnings data structures
 #[derive(Debug, Deserialize)]
@@ -270,7 +270,7 @@ impl AlphaVantageClient {
         println!("DEBUG: Calculating P/E ratio for {} on {}", symbol, date.format("%Y-%m-%d"));
         
         // 1. Get earnings data
-        let earnings_data = self.get_earnings_history(symbol).await
+        let earnings_data = self.get_earnings(symbol).await
             .map_err(|e| format!("Failed to fetch earnings data: {}", e))?;
         
         // 2. Find latest EPS for the date

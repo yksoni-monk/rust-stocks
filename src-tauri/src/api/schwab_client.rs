@@ -332,31 +332,47 @@ impl SchwabClient {
             debt_to_equity: None,
         };
         
-        if let Some(instruments) = data.as_object() {
-            if let Some((_, instrument_data)) = instruments.iter().next() {
-                if let Some(fundamental) = instrument_data.get("fundamental") {
-                    if let Some(fund_obj) = fundamental.as_object() {
-                        // Map Schwab API fields to our FundamentalData structure
-                        fundamental_data.pe_ratio = fund_obj.get("peRatio").and_then(|v| v.as_f64());
-                        fundamental_data.pe_ratio_forward = fund_obj.get("peRatioForward").and_then(|v| v.as_f64());
-                        fundamental_data.market_cap = fund_obj.get("marketCap").and_then(|v| v.as_f64());
-                        fundamental_data.dividend_yield = fund_obj.get("divYield").and_then(|v| v.as_f64());
-                        fundamental_data.dividend_per_share = fund_obj.get("divPerShare").and_then(|v| v.as_f64());
-                        fundamental_data.eps = fund_obj.get("eps").and_then(|v| v.as_f64());
-                        fundamental_data.eps_forward = fund_obj.get("epsForward").and_then(|v| v.as_f64());
-                        fundamental_data.beta = fund_obj.get("beta").and_then(|v| v.as_f64());
-                        fundamental_data.week_52_high = fund_obj.get("high52").and_then(|v| v.as_f64());
-                        fundamental_data.week_52_low = fund_obj.get("low52").and_then(|v| v.as_f64());
-                        fundamental_data.pb_ratio = fund_obj.get("pbRatio").and_then(|v| v.as_f64());
-                        fundamental_data.ps_ratio = fund_obj.get("psRatio").and_then(|v| v.as_f64());
-                        fundamental_data.shares_outstanding = fund_obj.get("sharesOutstanding").and_then(|v| v.as_f64());
-                        fundamental_data.float_shares = fund_obj.get("floatShares").and_then(|v| v.as_f64());
-                        fundamental_data.revenue_ttm = fund_obj.get("revenueTtm").and_then(|v| v.as_f64());
-                        fundamental_data.profit_margin = fund_obj.get("profitMargin").and_then(|v| v.as_f64());
-                        fundamental_data.operating_margin = fund_obj.get("operatingMargin").and_then(|v| v.as_f64());
-                        fundamental_data.return_on_equity = fund_obj.get("roe").and_then(|v| v.as_f64());
-                        fundamental_data.return_on_assets = fund_obj.get("roa").and_then(|v| v.as_f64());
-                        fundamental_data.debt_to_equity = fund_obj.get("debtToEquity").and_then(|v| v.as_f64());
+        // Parse the Schwab API response structure: {"instruments": [{"fundamental": {...}}]}
+        if let Some(instruments_array) = data.get("instruments") {
+            if let Some(instruments) = instruments_array.as_array() {
+                if let Some(first_instrument) = instruments.first() {
+                    if let Some(fundamental) = first_instrument.get("fundamental") {
+                        if let Some(fund_obj) = fundamental.as_object() {
+                            debug!("DEBUG: Parsing fundamental data for {}", symbol);
+                            debug!("DEBUG: Available fields: {:?}", fund_obj.keys().collect::<Vec<_>>());
+                            
+                            // Map Schwab API fields to our FundamentalData structure
+                            // Core metrics
+                            fundamental_data.pe_ratio = fund_obj.get("peRatio").and_then(|v| v.as_f64());
+                            fundamental_data.market_cap = fund_obj.get("marketCap").and_then(|v| v.as_f64());
+                            fundamental_data.dividend_yield = fund_obj.get("dividendYield").and_then(|v| v.as_f64());
+                            fundamental_data.dividend_per_share = fund_obj.get("dividendAmount").and_then(|v| v.as_f64());
+                            fundamental_data.eps = fund_obj.get("eps").and_then(|v| v.as_f64());
+                            fundamental_data.beta = fund_obj.get("beta").and_then(|v| v.as_f64());
+                            
+                            // 52-week high/low
+                            fundamental_data.week_52_high = fund_obj.get("high52").and_then(|v| v.as_f64());
+                            fundamental_data.week_52_low = fund_obj.get("low52").and_then(|v| v.as_f64());
+                            
+                            // Ratios
+                            fundamental_data.pb_ratio = fund_obj.get("pbRatio").and_then(|v| v.as_f64());
+                            fundamental_data.ps_ratio = fund_obj.get("prRatio").and_then(|v| v.as_f64());
+                            
+                            // Shares
+                            fundamental_data.shares_outstanding = fund_obj.get("sharesOutstanding").and_then(|v| v.as_f64());
+                            
+                            // Margins and returns
+                            fundamental_data.profit_margin = fund_obj.get("netProfitMarginTTM").and_then(|v| v.as_f64());
+                            fundamental_data.operating_margin = fund_obj.get("operatingMarginTTM").and_then(|v| v.as_f64());
+                            fundamental_data.return_on_equity = fund_obj.get("returnOnEquity").and_then(|v| v.as_f64());
+                            fundamental_data.return_on_assets = fund_obj.get("returnOnAssets").and_then(|v| v.as_f64());
+                            
+                            // Debt ratios
+                            fundamental_data.debt_to_equity = fund_obj.get("totalDebtToEquity").and_then(|v| v.as_f64());
+                            
+                            debug!("DEBUG: Parsed fundamental data: P/E={:?}, Market Cap={:?}, Div Yield={:?}", 
+                                   fundamental_data.pe_ratio, fundamental_data.market_cap, fundamental_data.dividend_yield);
+                        }
                     }
                 }
             }

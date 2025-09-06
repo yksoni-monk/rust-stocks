@@ -1,5 +1,6 @@
 use crate::api::AlphaVantageClient;
 use crate::models::Config;
+use chrono::NaiveDate;
 
 /// Test command to fetch and print earnings data from Alpha Vantage
 #[tauri::command]
@@ -67,4 +68,34 @@ pub async fn test_alpha_vantage_daily(symbol: String, output_size: Option<String
         "Successfully fetched daily data for {}. Found {} records from {}. Check console for detailed output.",
         symbol, total_records, date_range
     ))
+}
+
+/// Calculate daily P/E ratio for a given symbol and date
+#[tauri::command]
+pub async fn calculate_daily_pe_ratio(symbol: String, date_str: String) -> Result<String, String> {
+    println!("Calculating P/E ratio for {} on {}", symbol, date_str);
+    
+    // Parse the date string
+    let date = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")
+        .map_err(|e| format!("Invalid date format '{}'. Expected YYYY-MM-DD: {}", date_str, e))?;
+    
+    // Load configuration
+    let config = Config::from_env()
+        .map_err(|e| format!("Failed to load configuration: {}", e))?;
+    
+    // Create Alpha Vantage client
+    let client = AlphaVantageClient::new(config.alpha_vantage_api_key);
+    
+    // Calculate P/E ratio
+    let pe_ratio = client.calculate_daily_pe_ratio(&symbol, date).await
+        .map_err(|e| format!("Failed to calculate P/E ratio: {}", e))?;
+    
+    let result_message = format!(
+        "P/E Ratio for {} on {}: {:.2}",
+        symbol, date_str, pe_ratio
+    );
+    
+    println!("{}", result_message);
+    
+    Ok(result_message)
 }

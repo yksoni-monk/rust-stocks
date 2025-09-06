@@ -227,6 +227,76 @@ impl AlphaVantageClient {
         Ok(converted_data)
     }
 
+    /// Get the latest EPS for a given date from earnings data
+    pub fn get_eps_for_date(&self, earnings_data: &AlphaVantageEarningsResponse, target_date: NaiveDate) -> Result<f64, String> {
+        // Parse quarterly earnings and sort by fiscal date (most recent first)
+        let mut quarterly_eps: Vec<(NaiveDate, f64)> = Vec::new();
+        
+        for earning in &earnings_data.quarterly_earnings {
+            if let Ok(fiscal_date) = NaiveDate::parse_from_str(&earning.fiscal_date_ending, "%Y-%m-%d") {
+                if let Ok(eps) = earning.reported_eps.parse::<f64>() {
+                    quarterly_eps.push((fiscal_date, eps));
+                }
+            }
+        }
+        
+        // Sort by fiscal date (most recent first)
+        quarterly_eps.sort_by(|a, b| b.0.cmp(&a.0));
+        
+        // Find the latest EPS that is <= target_date
+        for (fiscal_date, eps) in quarterly_eps {
+            if fiscal_date <= target_date {
+                return Ok(eps);
+            }
+        }
+        
+        Err(format!("No EPS data found for {} on or before {}", earnings_data.symbol, target_date))
+    }
+
+    /// Get closing price for a specific date from daily data
+    pub fn get_closing_price_for_date(&self, daily_data: &AlphaVantageDailyResponse, target_date: NaiveDate) -> Result<f64, String> {
+        let date_str = target_date.format("%Y-%m-%d").to_string();
+        
+        if let Some(price_data) = daily_data.time_series.get(&date_str) {
+            price_data.close.parse::<f64>()
+                .map_err(|e| format!("Failed to parse close price '{}': {}", price_data.close, e))
+        } else {
+            Err(format!("No price data found for {} on {}", daily_data.meta_data.symbol, date_str))
+        }
+    }
+
+    /// Calculate daily P/E ratio for a given symbol and date
+    pub async fn calculate_daily_pe_ratio(&self, symbol: &str, date: NaiveDate) -> Result<f64, String> {
+        println!("DEBUG: Calculating P/E ratio for {} on {}", symbol, date.format("%Y-%m-%d"));
+        
+        // 1. Get earnings data
+        let earnings_data = self.get_earnings_history(symbol).await
+            .map_err(|e| format!("Failed to fetch earnings data: {}", e))?;
+        
+        // 2. Find latest EPS for the date
+        let eps = self.get_eps_for_date(&earnings_data, date)
+            .map_err(|e| format!("Failed to get EPS for date: {}", e))?;
+        
+        println!("DEBUG: Found EPS {} for {} on {}", eps, symbol, date.format("%Y-%m-%d"));
+        
+        // 3. Get daily price data
+        let daily_data = self.get_daily_data(symbol, Some("compact")).await
+            .map_err(|e| format!("Failed to fetch daily data: {}", e))?;
+        
+        // 4. Find closing price for the date
+        let closing_price = self.get_closing_price_for_date(&daily_data, date)
+            .map_err(|e| format!("Failed to get closing price: {}", e))?;
+        
+        println!("DEBUG: Found closing price {} for {} on {}", closing_price, symbol, date.format("%Y-%m-%d"));
+        
+        // 5. Calculate P/E ratio
+        let pe_ratio = closing_price / eps;
+        
+        println!("DEBUG: Calculated P/E ratio: {:.2} for {} on {}", pe_ratio, symbol, date.format("%Y-%m-%d"));
+        
+        Ok(pe_ratio)
+    }
+
     /// Print daily price data to console
     pub fn print_daily_data(&self, daily_data: &AlphaVantageDailyResponse, converted_data: &[ConvertedDailyPrice]) {
         println!("\n=== Daily Price Data for {} ===", daily_data.meta_data.symbol);

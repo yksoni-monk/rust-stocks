@@ -36,7 +36,8 @@ pub fn run() {
             
             // Earnings commands
             earnings::test_alpha_vantage_earnings,
-            earnings::test_alpha_vantage_daily
+            earnings::test_alpha_vantage_daily,
+            earnings::calculate_daily_pe_ratio
         ])
         .setup(|_app| {
             Ok(())

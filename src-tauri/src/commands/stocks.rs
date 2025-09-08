@@ -167,3 +167,112 @@ pub async fn get_stocks_paginated(limit: i64, offset: i64) -> Result<Vec<StockWi
         }
     }
 }
+
+#[tauri::command]
+pub async fn get_sp500_symbols() -> Result<Vec<String>, String> {
+    let pool = get_database_connection().await?;
+    
+    // Try to fetch fresh data from GitHub with timeout
+    let symbols = match fetch_sp500_from_github_with_timeout().await {
+        Ok(fresh_symbols) => {
+            // Update database with fresh data
+            update_sp500_in_database(&pool, &fresh_symbols).await?;
+            fresh_symbols
+        }
+        Err(e) => {
+            println!("⚠️ Failed to fetch fresh S&P 500 data: {}", e);
+            println!("📱 Using cached data from database...");
+            
+            // Fall back to database
+            get_sp500_from_database(&pool).await?
+        }
+    };
+    
+    Ok(symbols)
+}
+
+async fn fetch_sp500_from_github_with_timeout() -> Result<Vec<String>, String> {
+    let url = "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv";
+    
+    // Create client with timeout
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
+    let response = client.get(url)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch S&P 500 data: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("HTTP error: {}", response.status()));
+    }
+    
+    let csv_content = response.text()
+        .await
+        .map_err(|e| format!("Failed to read response: {}", e))?;
+    
+    let mut symbols = Vec::new();
+    let mut lines = csv_content.lines();
+    
+    // Skip header
+    if let Some(_header) = lines.next() {
+        for line in lines {
+            if line.trim().is_empty() {
+                continue;
+            }
+            
+            let fields: Vec<&str> = line.split(',').collect();
+            if fields.len() >= 1 {
+                let symbol = fields[0].trim().to_string();
+                symbols.push(symbol);
+            }
+        }
+    }
+    
+    println!("✅ Fetched {} S&P 500 symbols from GitHub", symbols.len());
+    Ok(symbols)
+}
+
+async fn update_sp500_in_database(pool: &SqlitePool, symbols: &[String]) -> Result<(), String> {
+    // Clear existing S&P 500 symbols
+    sqlx::query("DELETE FROM sp500_symbols")
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to clear S&P 500 symbols: {}", e))?;
+    
+    // Insert new symbols
+    for symbol in symbols {
+        sqlx::query("INSERT INTO sp500_symbols (symbol) VALUES (?)")
+            .bind(symbol)
+            .execute(pool)
+            .await
+            .map_err(|e| format!("Failed to insert symbol {}: {}", symbol, e))?;
+    }
+    
+    // Update metadata
+    let now = chrono::Utc::now().to_rfc3339();
+    sqlx::query("INSERT OR REPLACE INTO metadata (key, value) VALUES ('sp500_symbols_updated', ?)")
+        .bind(&now)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to update metadata: {}", e))?;
+    
+    println!("💾 Updated database with {} S&P 500 symbols", symbols.len());
+    Ok(())
+}
+
+async fn get_sp500_from_database(pool: &SqlitePool) -> Result<Vec<String>, String> {
+    let rows = sqlx::query("SELECT symbol FROM sp500_symbols ORDER BY symbol")
+        .fetch_all(pool)
+        .await
+        .map_err(|e| format!("Failed to fetch S&P 500 symbols from database: {}", e))?;
+    
+    let symbols: Vec<String> = rows.into_iter()
+        .map(|row| row.get::<String, _>("symbol"))
+        .collect();
+    
+    println!("📱 Retrieved {} S&P 500 symbols from database", symbols.len());
+    Ok(symbols)
+}

@@ -17,6 +17,7 @@ pub fn run() {
             stocks::search_stocks,
             stocks::get_stocks_with_data_status,
             stocks::get_stocks_paginated,
+            stocks::get_sp500_symbols,
             
             // Data collection commands
             data::get_database_stats,

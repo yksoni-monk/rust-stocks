@@ -13,12 +13,15 @@ function App() {
   const [currentPage, setCurrentPage] = useState(0);
   const [hasMoreStocks, setHasMoreStocks] = useState(true);
   const [totalStocks, setTotalStocks] = useState(0);
+  const [sp500Filter, setSp500Filter] = useState(false);
+  const [sp500Symbols, setSp500Symbols] = useState([]);
   
   const STOCKS_PER_PAGE = 50;
 
   useEffect(() => {
     fetchInitialData();
     loadInitializationStatus();
+    loadSp500Symbols();
   }, []);
 
   async function fetchInitialData() {
@@ -79,6 +82,58 @@ function App() {
     }
   }
 
+  async function loadSp500Symbols() {
+    try {
+      const symbols = await invoke('get_sp500_symbols');
+      setSp500Symbols(symbols);
+    } catch (err) {
+      console.error('Failed to load S&P 500 symbols:', err);
+    }
+  }
+
+  async function handleSp500Filter() {
+    setSp500Filter(!sp500Filter);
+    setCurrentPage(0);
+    setStocks([]);
+    
+    try {
+      setLoading(true);
+      
+      // Load first page of stocks
+      const stocksData = await invoke('get_stocks_paginated', { 
+        limit: STOCKS_PER_PAGE, 
+        offset: 0 
+      });
+      
+      // Apply S&P 500 filter if enabled
+      let filteredStocks = stocksData;
+      if (!sp500Filter) { // If we're turning ON the filter
+        filteredStocks = stocksData.filter(stock => 
+          sp500Symbols.includes(stock.symbol)
+        );
+      }
+      
+      setStocks(filteredStocks);
+      setHasMoreStocks(filteredStocks.length === STOCKS_PER_PAGE);
+      
+      // Get total count for display
+      const allStocks = await invoke('get_stocks_with_data_status');
+      let totalCount = allStocks.length;
+      if (!sp500Filter) { // If we're turning ON the filter
+        totalCount = allStocks.filter(stock => 
+          sp500Symbols.includes(stock.symbol)
+        ).length;
+      }
+      setTotalStocks(totalCount);
+      
+    } catch (err) {
+      setError(`Failed to apply filter: ${err}`);
+      console.error('Error applying filter:', err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function handleSearch() {
     if (!searchQuery.trim()) {
       fetchInitialData();
@@ -91,52 +146,6 @@ function App() {
       setStocks(results);
     } catch (err) {
       setError(`Search failed: ${err}`);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function handleInitializeStocks() {
-    setInitializing(true);
-    
-    try {
-      const result = await invoke('initialize_sp500_stocks');
-      console.log('Initialization result:', result);
-      
-      // Reload stocks and status after initialization
-      await fetchInitialData();
-      await loadInitializationStatus();
-    } catch (error) {
-      setError(`Initialization failed: ${error}`);
-    } finally {
-      setInitializing(false);
-    }
-  }
-
-  async function handleBulkFetch(fetchMode = 'compact') {
-    if (stocks.length === 0) return;
-
-    const confirmed = confirm(
-      `This will fetch ${fetchMode} data for all ${stocks.length} stocks.\n\n` +
-      `⏱️ Estimated time: ${Math.ceil(stocks.length * 0.5)} minutes\n` +
-      `📊 Data: ${fetchMode === 'compact' ? '100 days per stock' : '20+ years per stock'}\n\n` +
-      `Continue?`
-    );
-
-    if (!confirmed) return;
-
-    setLoading(true);
-
-    try {
-      const result = await invoke('fetch_all_stocks_comprehensive', {
-        fetchMode: fetchMode
-      });
-
-      alert(`✅ ${result}`);
-      await fetchInitialData(); // Refresh data
-    } catch (error) {
-      console.error('Bulk fetch failed:', error);
-      alert(`❌ Bulk fetch failed: ${error}`);
     } finally {
       setLoading(false);
     }
@@ -219,51 +228,30 @@ function App() {
       </header>
 
       <div className="container mx-auto px-4 py-8">
-        {/* S&P 500 Initialization Status */}
-        {initStatus && (
-          <div className="bg-blue-50 p-4 rounded-lg border border-blue-200 mb-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="font-semibold text-blue-800">S&P 500 Database Status</h3>
-                <p className="text-sm text-blue-700">{initStatus.status}</p>
-                <p className="text-xs text-blue-600">
-                  Companies: {initStatus.companies_processed} / {initStatus.total_companies}
-                </p>
-              </div>
-              <div className="flex space-x-2">
-                <button
-                  onClick={handleInitializeStocks}
-                  disabled={initializing}
-                  className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:bg-gray-400 text-sm"
-                >
-                  {initializing ? 'Initializing...' : 'Initialize S&P 500'}
-                </button>
-                <div className="flex space-x-2">
-                  <button
-                    onClick={() => handleBulkFetch('compact')}
-                    disabled={loading || stocks.length === 0}
-                    className="bg-green-600 text-white px-3 py-2 rounded hover:bg-green-700 disabled:bg-gray-400 text-sm"
-                  >
-                    {loading ? 'Fetching...' : 'Bulk: Compact'}
-                  </button>
-                  <button
-                    onClick={() => handleBulkFetch('full')}
-                    disabled={loading || stocks.length === 0}
-                    className="bg-purple-600 text-white px-3 py-2 rounded hover:bg-purple-700 disabled:bg-gray-400 text-sm"
-                  >
-                    {loading ? 'Fetching...' : 'Bulk: Full'}
-                  </button>
-                </div>
-              </div>
+        {/* S&P 500 Filter */}
+        <div className="bg-blue-50 p-4 rounded-lg border border-blue-200 mb-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="font-semibold text-blue-800">S&P 500 Filter</h3>
+              <p className="text-sm text-blue-700">
+                {sp500Filter ? 'Showing only S&P 500 stocks' : 'Showing all stocks'}
+              </p>
+              <p className="text-xs text-blue-600">
+                {sp500Symbols.length} S&P 500 symbols loaded
+              </p>
             </div>
-            {initializing && (
-              <div className="mt-3 flex items-center gap-2">
-                <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-                <span className="text-sm text-blue-700">Fetching S&P 500 companies...</span>
-              </div>
-            )}
+            <button
+              onClick={handleSp500Filter}
+              className={`px-4 py-2 rounded text-sm font-medium ${
+                sp500Filter 
+                  ? 'bg-blue-600 text-white hover:bg-blue-700' 
+                  : 'bg-white text-blue-600 border border-blue-600 hover:bg-blue-50'
+              }`}
+            >
+              {sp500Filter ? 'Show All Stocks' : 'Filter S&P 500'}
+            </button>
           </div>
-        )}
+        </div>
 
         {/* Stock Count and Status */}
         <div className="mb-6 flex justify-between items-center">
@@ -331,18 +319,11 @@ function App() {
             <p className="text-gray-600 mb-4">
               {searchQuery 
                 ? `No stocks match "${searchQuery}". Try a different search term.`
-                : 'No stocks available. Initialize the S&P 500 database to get started.'
+                : sp500Filter 
+                  ? 'No S&P 500 stocks found. Try adjusting your filter or search.'
+                  : 'No stocks available in the database.'
               }
             </p>
-            {!searchQuery && (
-              <button
-                onClick={handleInitializeStocks}
-                disabled={initializing}
-                className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 disabled:bg-gray-400"
-              >
-                {initializing ? 'Initializing...' : 'Initialize S&P 500 Stocks'}
-              </button>
-            )}
           </div>
         )}
 

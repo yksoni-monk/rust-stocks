@@ -16,6 +16,7 @@ path = "src/main.rs"
 name = "import_simfin"
 path = "src/bin/import_simfin.rs"
 
+
 [lib]
 name = "rust_stocks_tauri_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]

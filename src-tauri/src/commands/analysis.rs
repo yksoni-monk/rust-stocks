@@ -12,6 +12,15 @@ pub struct PriceData {
     pub pe_ratio: Option<f64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DateRangeInfo {
+    pub symbol: String,
+    pub earliest_date: String,
+    pub latest_date: String,
+    pub total_records: i64,
+    pub data_source: String,
+}
+
 async fn get_database_connection() -> Result<SqlitePool, String> {
     let database_url = "sqlite:../stocks.db";
     SqlitePool::connect(database_url).await
@@ -22,20 +31,12 @@ async fn get_database_connection() -> Result<SqlitePool, String> {
 pub async fn get_price_history(symbol: String, start_date: String, end_date: String) -> Result<Vec<PriceData>, String> {
     let pool = get_database_connection().await?;
     
-    // Convert string dates to Unix timestamps for database query
-    let start_timestamp = chrono::NaiveDate::parse_from_str(&start_date, "%Y-%m-%d")
-        .map_err(|e| format!("Invalid start date format: {}", e))?
-        .and_hms_opt(0, 0, 0)
-        .unwrap()
-        .and_utc()
-        .timestamp_millis();
+    // Validate date format but use as strings since database stores DATE format
+    chrono::NaiveDate::parse_from_str(&start_date, "%Y-%m-%d")
+        .map_err(|e| format!("Invalid start date format: {}", e))?;
     
-    let end_timestamp = chrono::NaiveDate::parse_from_str(&end_date, "%Y-%m-%d")
-        .map_err(|e| format!("Invalid end date format: {}", e))?
-        .and_hms_opt(23, 59, 59)
-        .unwrap()
-        .and_utc()
-        .timestamp_millis();
+    chrono::NaiveDate::parse_from_str(&end_date, "%Y-%m-%d")
+        .map_err(|e| format!("Invalid end date format: {}", e))?;
     
     let query = "
         SELECT dp.date, dp.open_price, dp.high_price, dp.low_price, dp.close_price, dp.volume, dp.pe_ratio 
@@ -48,17 +49,14 @@ pub async fn get_price_history(symbol: String, start_date: String, end_date: Str
     
     match sqlx::query(query)
         .bind(&symbol)
-        .bind(start_timestamp)
-        .bind(end_timestamp)
+        .bind(&start_date)
+        .bind(&end_date)
         .fetch_all(&pool).await 
     {
         Ok(rows) => {
             let price_data: Vec<PriceData> = rows.into_iter().map(|row| {
-                let timestamp: i64 = row.get::<i64, _>("date");
-                let date_string = chrono::DateTime::from_timestamp_millis(timestamp)
-                    .unwrap_or_default()
-                    .format("%Y-%m-%d")
-                    .to_string();
+                // Date is stored as DATE string in database, not timestamp
+                let date_string: String = row.get("date");
                 
                 PriceData {
                     date: date_string,
@@ -75,27 +73,7 @@ pub async fn get_price_history(symbol: String, start_date: String, end_date: Str
         }
         Err(e) => {
             eprintln!("Price history query error: {}", e);
-            // Return dummy data as fallback
-            Ok(vec![
-                PriceData {
-                    date: "2024-01-01".to_string(),
-                    open: 150.0,
-                    high: 155.0,
-                    low: 148.0,
-                    close: 153.0,
-                    volume: 1000000,
-                    pe_ratio: Some(25.5),
-                },
-                PriceData {
-                    date: "2024-01-02".to_string(),
-                    open: 153.0,
-                    high: 158.0,
-                    low: 151.0,
-                    close: 157.0,
-                    volume: 1200000,
-                    pe_ratio: Some(26.1),
-                },
-            ])
+            Err(format!("Database query failed: {}", e))
         }
     }
 }
@@ -126,4 +104,41 @@ pub async fn export_data(symbol: String, format: String) -> Result<String, Strin
     );
     
     Ok(message)
+}
+
+#[tauri::command]
+pub async fn get_stock_date_range(symbol: String) -> Result<DateRangeInfo, String> {
+    let pool = get_database_connection().await?;
+    
+    let result = sqlx::query("
+        SELECT s.symbol, MIN(dp.date) as earliest_date, MAX(dp.date) as latest_date, 
+               COUNT(*) as total_records, COALESCE(dp.data_source, 'simfin') as data_source
+        FROM daily_prices dp
+        JOIN stocks s ON dp.stock_id = s.id
+        WHERE s.symbol = ?1
+        GROUP BY s.symbol, dp.data_source")
+        .bind(&symbol)
+        .fetch_optional(&pool).await;
+    
+    match result {
+        Ok(Some(row)) => {
+            // Convert date strings to proper format
+            let earliest_date: String = row.get("earliest_date");
+            let latest_date: String = row.get("latest_date");
+            
+            Ok(DateRangeInfo {
+                symbol: row.get("symbol"),
+                earliest_date,
+                latest_date,
+                total_records: row.get("total_records"),
+                data_source: row.get("data_source"),
+            })
+        }
+        Ok(None) => {
+            Err(format!("No data found for symbol: {}", symbol))
+        }
+        Err(e) => {
+            Err(format!("Database error: {}", e))
+        }
+    }
 }

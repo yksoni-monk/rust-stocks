@@ -41,6 +41,7 @@ function EnhancedStockDetails({ selectedStock, onBack }) {
   const [stockInfo, setStockInfo] = useState(null);
   const [fundamentals, setFundamentals] = useState(null);
   const [priceHistory, setPriceHistory] = useState([]);
+  const [dateRange, setDateRange] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState('overview');
@@ -85,6 +86,17 @@ function EnhancedStockDetails({ selectedStock, onBack }) {
 
       if (priceResponse.success) {
         setPriceHistory(priceResponse.data || []);
+      }
+
+      // Load date range information
+      try {
+        const dateRangeResponse = await invoke('get_stock_date_range', {
+          symbol: selectedStock.symbol
+        });
+        setDateRange(dateRangeResponse);
+      } catch (dateErr) {
+        console.error('Failed to load date range:', dateErr);
+        // Don't fail the whole component if date range fails
       }
 
     } catch (err) {
@@ -145,6 +157,19 @@ function EnhancedStockDetails({ selectedStock, onBack }) {
           <div>
             <h1 className="text-3xl font-bold">{selectedStock.symbol}</h1>
             <p className="text-gray-600">{stockInfo?.company_name || selectedStock.company_name}</p>
+            {dateRange && (
+              <div className="mt-2 flex items-center gap-4 text-sm">
+                <div className="bg-blue-100 text-blue-800 px-3 py-1 rounded-full">
+                  📅 {dateRange.earliest_date} to {dateRange.latest_date}
+                </div>
+                <div className="bg-green-100 text-green-800 px-3 py-1 rounded-full">
+                  📊 {dateRange.total_records.toLocaleString()} records
+                </div>
+                <div className="bg-purple-100 text-purple-800 px-3 py-1 rounded-full">
+                  🗂️ {dateRange.data_source}
+                </div>
+              </div>
+            )}
           </div>
         </div>
         <div className="flex gap-2">

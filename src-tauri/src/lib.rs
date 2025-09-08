@@ -24,6 +24,7 @@ pub fn run() {
             // Analysis commands
             analysis::get_price_history,
             analysis::export_data,
+            analysis::get_stock_date_range,
             
             // Data fetching commands
             fetching::get_available_stock_symbols,

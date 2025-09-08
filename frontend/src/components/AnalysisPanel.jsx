@@ -23,6 +23,7 @@ function AnalysisPanel({ stock }) {
   const metricOptions = [
     { value: 'price', label: 'Price History' },
     { value: 'pe_ratio', label: 'P/E Ratio Trend' },
+    { value: 'mix_mode', label: 'Mix Mode (Price + P/E)' },
     { value: 'eps', label: 'Earnings Per Share' },
     { value: 'dividend_yield', label: 'Dividend Yield' },
     { value: 'volume', label: 'Trading Volume' },
@@ -228,6 +229,20 @@ function AnalysisPanel({ stock }) {
   };
 
   const getChartData = () => {
+    if (selectedMetric === 'mix_mode') {
+      // For mix mode, combine price and P/E data
+      const chartData = priceHistory
+        .filter(record => record.pe_ratio !== null && record.pe_ratio !== undefined)
+        .map(record => ({
+          date: record.date,
+          price: record.close || record.close_price,
+          pe_ratio: record.pe_ratio,
+          formattedPrice: formatMetricValue(record.close || record.close_price, 'price'),
+          formattedPeRatio: formatMetricValue(record.pe_ratio, 'pe_ratio')
+        }));
+      return chartData;
+    }
+    
     const chartData = priceHistory
       .filter(record => getMetricValue(record, selectedMetric) !== null)
       .map(record => ({
@@ -235,7 +250,6 @@ function AnalysisPanel({ stock }) {
         value: getMetricValue(record, selectedMetric),
         formattedValue: formatMetricValue(getMetricValue(record, selectedMetric), selectedMetric)
       }));
-    
     
     return chartData;
   };
@@ -377,52 +391,121 @@ function AnalysisPanel({ stock }) {
               </h4>
               <div className="bg-white p-6 rounded-lg border shadow-sm">
                 <ResponsiveContainer width="100%" height={400}>
-                  <LineChart
-                    data={chartData.map(point => ({
-                      date: point.date,
-                      value: point.value,
-                      formattedValue: point.formattedValue
-                    }))}
-                    margin={{
-                      top: 20,
-                      right: 30,
-                      left: 20,
-                      bottom: 60,
-                    }}
-                  >
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis 
-                      dataKey="date" 
-                      angle={-45}
-                      textAnchor="end"
-                      height={80}
-                      tick={{ fontSize: 12 }}
-                      tickFormatter={(value) => value.slice(5)} // Show MM-DD
-                    />
-                    <YAxis 
-                      tick={{ fontSize: 12 }}
-                      tickFormatter={(value) => formatMetricValue(value, selectedMetric)}
-                    />
-                    <Tooltip 
-                      formatter={(value) => [formatMetricValue(value, selectedMetric), metricOptions.find(m => m.value === selectedMetric)?.label]}
-                      labelFormatter={(label) => `Date: ${label}`}
-                      contentStyle={{
-                        backgroundColor: '#f8fafc',
-                        border: '1px solid #e2e8f0',
-                        borderRadius: '6px'
+                  {selectedMetric === 'mix_mode' ? (
+                    <LineChart
+                      data={chartData}
+                      margin={{
+                        top: 20,
+                        right: 30,
+                        left: 20,
+                        bottom: 60,
                       }}
-                    />
-                    <Legend />
-                    <Line 
-                      type="monotone" 
-                      dataKey="value" 
-                      stroke="#3b82f6" 
-                      strokeWidth={3}
-                      dot={{ fill: '#3b82f6', strokeWidth: 2, r: 4 }}
-                      activeDot={{ r: 6, stroke: '#3b82f6', strokeWidth: 2 }}
-                      name={metricOptions.find(m => m.value === selectedMetric)?.label}
-                    />
-                  </LineChart>
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                      <XAxis 
+                        dataKey="date" 
+                        angle={-45}
+                        textAnchor="end"
+                        height={80}
+                        tick={{ fontSize: 12 }}
+                        tickFormatter={(value) => value.slice(5)} // Show MM-DD
+                      />
+                      <YAxis 
+                        yAxisId="price"
+                        orientation="left"
+                        tick={{ fontSize: 12 }}
+                        tickFormatter={(value) => `$${value.toFixed(2)}`}
+                        stroke="#3b82f6"
+                      />
+                      <YAxis 
+                        yAxisId="pe"
+                        orientation="right"
+                        tick={{ fontSize: 12 }}
+                        tickFormatter={(value) => value.toFixed(1)}
+                        stroke="#10b981"
+                      />
+                      <Tooltip 
+                        formatter={(value, name) => [
+                          name === 'price' ? `$${value.toFixed(2)}` : value.toFixed(2),
+                          name === 'price' ? 'Price' : 'P/E Ratio'
+                        ]}
+                        labelFormatter={(label) => `Date: ${label}`}
+                        contentStyle={{
+                          backgroundColor: '#f8fafc',
+                          border: '1px solid #e2e8f0',
+                          borderRadius: '6px'
+                        }}
+                      />
+                      <Legend />
+                      <Line 
+                        yAxisId="price"
+                        type="monotone" 
+                        dataKey="price" 
+                        stroke="#3b82f6" 
+                        strokeWidth={2}
+                        dot={{ fill: '#3b82f6', strokeWidth: 1, r: 2 }}
+                        activeDot={{ r: 4, stroke: '#3b82f6', strokeWidth: 2 }}
+                        name="Price"
+                      />
+                      <Line 
+                        yAxisId="pe"
+                        type="monotone" 
+                        dataKey="pe_ratio" 
+                        stroke="#10b981" 
+                        strokeWidth={2}
+                        dot={{ fill: '#10b981', strokeWidth: 1, r: 2 }}
+                        activeDot={{ r: 4, stroke: '#10b981', strokeWidth: 2 }}
+                        name="P/E Ratio"
+                      />
+                    </LineChart>
+                  ) : (
+                    <LineChart
+                      data={chartData.map(point => ({
+                        date: point.date,
+                        value: point.value,
+                        formattedValue: point.formattedValue
+                      }))}
+                      margin={{
+                        top: 20,
+                        right: 30,
+                        left: 20,
+                        bottom: 60,
+                      }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                      <XAxis 
+                        dataKey="date" 
+                        angle={-45}
+                        textAnchor="end"
+                        height={80}
+                        tick={{ fontSize: 12 }}
+                        tickFormatter={(value) => value.slice(5)} // Show MM-DD
+                      />
+                      <YAxis 
+                        tick={{ fontSize: 12 }}
+                        tickFormatter={(value) => formatMetricValue(value, selectedMetric)}
+                      />
+                      <Tooltip 
+                        formatter={(value) => [formatMetricValue(value, selectedMetric), metricOptions.find(m => m.value === selectedMetric)?.label]}
+                        labelFormatter={(label) => `Date: ${label}`}
+                        contentStyle={{
+                          backgroundColor: '#f8fafc',
+                          border: '1px solid #e2e8f0',
+                          borderRadius: '6px'
+                        }}
+                      />
+                      <Legend />
+                      <Line 
+                        type="monotone" 
+                        dataKey="value" 
+                        stroke="#3b82f6" 
+                        strokeWidth={2}
+                        dot={{ fill: '#3b82f6', strokeWidth: 1, r: 2 }}
+                        activeDot={{ r: 4, stroke: '#3b82f6', strokeWidth: 2 }}
+                        name={metricOptions.find(m => m.value === selectedMetric)?.label}
+                      />
+                    </LineChart>
+                  )}
                 </ResponsiveContainer>
               </div>
             </div>
@@ -433,13 +516,23 @@ function AnalysisPanel({ stock }) {
                 <thead className="bg-gray-50">
                   <tr>
                     <th className="px-3 py-2 text-left font-medium text-gray-500">Date</th>
-                    <th className="px-3 py-2 text-left font-medium text-gray-500">
-                      {metricOptions.find(m => m.value === selectedMetric)?.label}
-                    </th>
-                    {selectedMetric === 'price' && (
+                    {selectedMetric === 'mix_mode' ? (
                       <>
-                        <th className="px-3 py-2 text-left font-medium text-gray-500">Volume</th>
+                        <th className="px-3 py-2 text-left font-medium text-gray-500">Price</th>
                         <th className="px-3 py-2 text-left font-medium text-gray-500">P/E Ratio</th>
+                        <th className="px-3 py-2 text-left font-medium text-gray-500">Volume</th>
+                      </>
+                    ) : (
+                      <>
+                        <th className="px-3 py-2 text-left font-medium text-gray-500">
+                          {metricOptions.find(m => m.value === selectedMetric)?.label}
+                        </th>
+                        {selectedMetric === 'price' && (
+                          <>
+                            <th className="px-3 py-2 text-left font-medium text-gray-500">Volume</th>
+                            <th className="px-3 py-2 text-left font-medium text-gray-500">P/E Ratio</th>
+                          </>
+                        )}
                       </>
                     )}
                   </tr>
@@ -450,11 +543,21 @@ function AnalysisPanel({ stock }) {
                     return (
                       <tr key={index} className="hover:bg-gray-50">
                         <td className="px-3 py-2">{point.date}</td>
-                        <td className="px-3 py-2 font-medium">{point.formattedValue}</td>
-                        {selectedMetric === 'price' && record && (
+                        {selectedMetric === 'mix_mode' ? (
                           <>
-                            <td className="px-3 py-2">{record.volume?.toLocaleString() || 'N/A'}</td>
-                            <td className="px-3 py-2">{record.pe_ratio ? record.pe_ratio.toFixed(2) : 'N/A'}</td>
+                            <td className="px-3 py-2 font-medium text-blue-600">${point.price.toFixed(2)}</td>
+                            <td className="px-3 py-2 font-medium text-green-600">{point.pe_ratio.toFixed(2)}</td>
+                            <td className="px-3 py-2">{record?.volume?.toLocaleString() || 'N/A'}</td>
+                          </>
+                        ) : (
+                          <>
+                            <td className="px-3 py-2 font-medium">{point.formattedValue}</td>
+                            {selectedMetric === 'price' && record && (
+                              <>
+                                <td className="px-3 py-2">{record.volume?.toLocaleString() || 'N/A'}</td>
+                                <td className="px-3 py-2">{record.pe_ratio ? record.pe_ratio.toFixed(2) : 'N/A'}</td>
+                              </>
+                            )}
                           </>
                         )}
                       </tr>
@@ -575,9 +678,9 @@ function AnalysisPanel({ stock }) {
                       type="monotone" 
                       dataKey="pe_ratio" 
                       stroke="#10b981" 
-                      strokeWidth={3}
-                      dot={{ fill: '#10b981', strokeWidth: 2, r: 4 }}
-                      activeDot={{ r: 6, stroke: '#10b981', strokeWidth: 2 }}
+                      strokeWidth={2}
+                      dot={{ fill: '#10b981', strokeWidth: 1, r: 2 }}
+                      activeDot={{ r: 4, stroke: '#10b981', strokeWidth: 2 }}
                       name="P/E Ratio"
                     />
                   </LineChart>

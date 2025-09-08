@@ -21,33 +21,15 @@ pub fn run() {
             
             // Data collection commands
             data::get_database_stats,
-            data::fetch_stock_data,
             
             // Analysis commands
             analysis::get_price_history,
             analysis::export_data,
             analysis::get_stock_date_range,
             
-            // Data fetching commands
-            fetching::get_available_stock_symbols,
-            fetching::fetch_single_stock_data,
-            fetching::fetch_all_stocks_concurrent,
-            fetching::get_fetch_progress,
-            
-            // Enhanced comprehensive data fetching
-            fetching::fetch_stock_data_comprehensive,
-            fetching::fetch_all_stocks_comprehensive,
-            fetching::get_processing_status_for_stock,
-            
             // Initialization commands
-            initialization::initialize_sp500_stocks,
             initialization::get_initialization_status,
-            initialization::check_database_schema,
-            
-            // Earnings commands
-            earnings::test_alpha_vantage_earnings,
-            earnings::test_alpha_vantage_daily,
-            earnings::calculate_daily_pe_ratio
+            initialization::check_database_schema
         ])
         .setup(|_app| {
             Ok(())

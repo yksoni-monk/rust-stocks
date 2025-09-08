@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import ExpandablePanel from './ExpandablePanel';
 import AnalysisPanel from './AnalysisPanel';
-import DataFetchingPanel from './DataFetchingPanel';
 
 function StockRow({ stock, isExpanded, expandedPanel, onToggleExpansion }) {
   const getDataStatusIcon = (stock) => {
@@ -11,8 +10,8 @@ function StockRow({ stock, isExpanded, expandedPanel, onToggleExpansion }) {
   };
 
   const getDataStatusText = (stock) => {
-    if (stock.has_data === true) return `${stock.data_count || 0} records`;
-    if (stock.has_data === false) return 'No data';
+    if (stock.has_data === true) return '';
+    if (stock.has_data === false) return '';
     return 'Checking...';
   };
 
@@ -20,9 +19,6 @@ function StockRow({ stock, isExpanded, expandedPanel, onToggleExpansion }) {
     onToggleExpansion(stock.id || stock.symbol, expandedPanel === 'analysis' ? null : 'analysis');
   };
 
-  const handleFetchClick = () => {
-    onToggleExpansion(stock.id || stock.symbol, expandedPanel === 'fetch' ? null : 'fetch');
-  };
 
   return (
     <div className="bg-white border border-gray-200 rounded-lg shadow-sm mb-2 overflow-hidden">
@@ -64,18 +60,6 @@ function StockRow({ stock, isExpanded, expandedPanel, onToggleExpansion }) {
             <span>📊</span>
             <span>{expandedPanel === 'analysis' ? 'Close' : 'Analyze'}</span>
           </button>
-          
-          <button
-            onClick={handleFetchClick}
-            className={`flex items-center space-x-1 px-3 py-2 text-sm rounded-lg transition-colors ${
-              expandedPanel === 'fetch'
-                ? 'bg-green-100 text-green-700 border border-green-300'
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-            }`}
-          >
-            <span>📥</span>
-            <span>{expandedPanel === 'fetch' ? 'Close' : 'Fetch'}</span>
-          </button>
         </div>
       </div>
 
@@ -84,9 +68,6 @@ function StockRow({ stock, isExpanded, expandedPanel, onToggleExpansion }) {
         <div className="border-t border-gray-200 bg-gray-50 p-4">
           {expandedPanel === 'analysis' && (
             <AnalysisPanel stock={stock} />
-          )}
-          {expandedPanel === 'fetch' && (
-            <DataFetchingPanel stock={stock} />
           )}
         </div>
       </ExpandablePanel>

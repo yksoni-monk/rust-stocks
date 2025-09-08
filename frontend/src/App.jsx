@@ -62,9 +62,17 @@ function App() {
         offset: nextPage * STOCKS_PER_PAGE 
       });
       
-      setStocks(prev => [...prev, ...stocksData]);
+      // Apply S&P 500 filter if active
+      let filteredStocks = stocksData;
+      if (sp500Filter) {
+        filteredStocks = stocksData.filter(stock => 
+          sp500Symbols.includes(stock.symbol)
+        );
+      }
+      
+      setStocks(prev => [...prev, ...filteredStocks]);
       setCurrentPage(nextPage);
-      setHasMoreStocks(stocksData.length === STOCKS_PER_PAGE);
+      setHasMoreStocks(filteredStocks.length === STOCKS_PER_PAGE);
       
     } catch (err) {
       setError(`Failed to load more stocks: ${err}`);

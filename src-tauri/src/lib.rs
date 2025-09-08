@@ -3,6 +3,7 @@ pub mod commands;
 pub mod models;
 pub mod api;
 pub mod database;
+pub mod tools;
 
 use commands::*;
 

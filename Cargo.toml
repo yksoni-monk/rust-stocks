@@ -3,6 +3,7 @@ name = "rust-stocks"
 version = "0.1.0"
 edition = "2021"
 description = "Stock Analysis System - Utilities and Tools"
+default-run = "stock-analysis"
 
 [dependencies]
 # Keep only utility dependencies for tools and tests
@@ -35,4 +36,10 @@ wiremock = "0.5"
 assert_matches = "1.5"
 pretty_assertions = "1.4"
 
-# No utility binaries needed - functionality moved to Tauri backend
+[[bin]]
+name = "stock-analysis"
+path = "src/main.rs"
+
+[[bin]]
+name = "import-simfin"
+path = "src/import_simfin_launcher.rs"

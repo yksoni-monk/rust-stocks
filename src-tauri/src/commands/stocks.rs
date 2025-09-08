@@ -44,67 +44,50 @@ pub async fn get_all_stocks() -> Result<Vec<StockInfo>, String> {
         }
         Err(e) => {
             eprintln!("Database query error: {}", e);
-            // Return dummy data as fallback
-            Ok(vec![
-                StockInfo {
-                    id: 1,
-                    symbol: "AAPL".to_string(),
-                    company_name: "Apple Inc.".to_string(),
-                    sector: Some("Technology".to_string()),
-                },
-                StockInfo {
-                    id: 2,
-                    symbol: "MSFT".to_string(),
-                    company_name: "Microsoft Corporation".to_string(),
-                    sector: Some("Technology".to_string()),
-                },
-                StockInfo {
-                    id: 3,
-                    symbol: "GOOGL".to_string(),
-                    company_name: "Alphabet Inc.".to_string(),
-                    sector: Some("Technology".to_string()),
-                },
-            ])
+            Err(format!("Failed to fetch all stocks: {}", e))
         }
     }
 }
 
 #[tauri::command]
-pub async fn search_stocks(query: String) -> Result<Vec<StockInfo>, String> {
+pub async fn search_stocks(query: String) -> Result<Vec<StockWithData>, String> {
     let pool = get_database_connection().await?;
     
-    let sql_query = "SELECT id, symbol, company_name, sector FROM stocks 
-                     WHERE symbol LIKE ?1 OR company_name LIKE ?1 
-                     LIMIT 50";
-    
-    let search_pattern = format!("%{}%", query);
+    let search_query = format!("%{}%", query);
+    let sql_query = "
+        SELECT 
+            s.id,
+            s.symbol, 
+            s.company_name,
+            CASE WHEN EXISTS(SELECT 1 FROM daily_prices dp WHERE dp.stock_id = s.id) THEN 1 ELSE 0 END as has_data
+        FROM stocks s
+        WHERE s.symbol LIKE ? OR s.company_name LIKE ?
+        ORDER BY s.symbol
+        LIMIT 100
+    ";
     
     match sqlx::query(sql_query)
-        .bind(&search_pattern)
-        .fetch_all(&pool).await 
+        .bind(&search_query)
+        .bind(&search_query)
+        .fetch_all(&pool)
+        .await 
     {
         Ok(rows) => {
-            let stocks: Vec<StockInfo> = rows.into_iter().map(|row| {
-                StockInfo {
+            let stocks: Vec<StockWithData> = rows.into_iter().map(|row| {
+                let has_data = row.get::<i64, _>("has_data") > 0;
+                StockWithData {
                     id: row.get::<i64, _>("id"),
                     symbol: row.get::<String, _>("symbol"),
                     company_name: row.get::<String, _>("company_name"),
-                    sector: row.try_get::<Option<String>, _>("sector").unwrap_or(None),
+                    has_data,
+                    data_count: if has_data { 1 } else { 0 }, // Simplified for performance
                 }
             }).collect();
             Ok(stocks)
         }
         Err(e) => {
-            eprintln!("Search query error: {}", e);
-            // Fallback to dummy filtered data
-            let all_stocks = get_all_stocks().await?;
-            let filtered = all_stocks.into_iter()
-                .filter(|stock| 
-                    stock.symbol.to_lowercase().contains(&query.to_lowercase()) ||
-                    stock.company_name.to_lowercase().contains(&query.to_lowercase())
-                )
-                .collect();
-            Ok(filtered)
+            eprintln!("Database query error: {}", e);
+            Err(format!("Failed to search stocks: {}", e))
         }
     }
 }
@@ -117,24 +100,22 @@ pub async fn get_stocks_with_data_status() -> Result<Vec<StockWithData>, String>
         SELECT 
             s.id,
             s.symbol, 
-            s.company_name, 
-            COUNT(dp.id) as data_count
+            s.company_name,
+            CASE WHEN EXISTS(SELECT 1 FROM daily_prices dp WHERE dp.stock_id = s.id) THEN 1 ELSE 0 END as has_data
         FROM stocks s
-        LEFT JOIN daily_prices dp ON s.id = dp.stock_id
-        GROUP BY s.id, s.symbol, s.company_name
-        ORDER BY data_count DESC, s.symbol
+        ORDER BY has_data DESC, s.symbol
     ";
     
     match sqlx::query(query).fetch_all(&pool).await {
         Ok(rows) => {
             let stocks: Vec<StockWithData> = rows.into_iter().map(|row| {
-                let data_count = row.get::<i64, _>("data_count");
+                let has_data = row.get::<i64, _>("has_data") > 0;
                 StockWithData {
                     id: row.get::<i64, _>("id"),
                     symbol: row.get::<String, _>("symbol"),
                     company_name: row.get::<String, _>("company_name"),
-                    has_data: data_count > 0,
-                    data_count,
+                    has_data,
+                    data_count: if has_data { 1 } else { 0 }, // Simplified for performance
                 }
             }).collect();
             Ok(stocks)
@@ -142,6 +123,47 @@ pub async fn get_stocks_with_data_status() -> Result<Vec<StockWithData>, String>
         Err(e) => {
             eprintln!("Database query error: {}", e);
             Err(format!("Failed to fetch stocks with data status: {}", e))
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn get_stocks_paginated(limit: i64, offset: i64) -> Result<Vec<StockWithData>, String> {
+    let pool = get_database_connection().await?;
+    
+    let query = "
+        SELECT 
+            s.id,
+            s.symbol, 
+            s.company_name,
+            CASE WHEN EXISTS(SELECT 1 FROM daily_prices dp WHERE dp.stock_id = s.id) THEN 1 ELSE 0 END as has_data
+        FROM stocks s
+        ORDER BY has_data DESC, s.symbol
+        LIMIT ? OFFSET ?
+    ";
+    
+    match sqlx::query(query)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&pool)
+        .await 
+    {
+        Ok(rows) => {
+            let stocks: Vec<StockWithData> = rows.into_iter().map(|row| {
+                let has_data = row.get::<i64, _>("has_data") > 0;
+                StockWithData {
+                    id: row.get::<i64, _>("id"),
+                    symbol: row.get::<String, _>("symbol"),
+                    company_name: row.get::<String, _>("company_name"),
+                    has_data,
+                    data_count: if has_data { 1 } else { 0 }, // Simplified for performance
+                }
+            }).collect();
+            Ok(stocks)
+        }
+        Err(e) => {
+            eprintln!("Database query error: {}", e);
+            Err(format!("Failed to fetch paginated stocks: {}", e))
         }
     }
 }

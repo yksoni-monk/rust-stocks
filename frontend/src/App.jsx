@@ -10,6 +10,11 @@ function App() {
   const [expandedPanels, setExpandedPanels] = useState({});
   const [initStatus, setInitStatus] = useState(null);
   const [initializing, setInitializing] = useState(false);
+  const [currentPage, setCurrentPage] = useState(0);
+  const [hasMoreStocks, setHasMoreStocks] = useState(true);
+  const [totalStocks, setTotalStocks] = useState(0);
+  
+  const STOCKS_PER_PAGE = 50;
 
   useEffect(() => {
     fetchInitialData();
@@ -19,11 +24,47 @@ function App() {
   async function fetchInitialData() {
     try {
       setLoading(true);
-      const stocksData = await invoke('get_stocks_with_data_status');
+      setCurrentPage(0);
+      setStocks([]);
+      
+      // Load first page of stocks
+      const stocksData = await invoke('get_stocks_paginated', { 
+        limit: STOCKS_PER_PAGE, 
+        offset: 0 
+      });
+      
       setStocks(stocksData);
+      setHasMoreStocks(stocksData.length === STOCKS_PER_PAGE);
+      
+      // Get total count for display
+      const allStocks = await invoke('get_stocks_with_data_status');
+      setTotalStocks(allStocks.length);
+      
     } catch (err) {
       setError(`Failed to fetch data: ${err}`);
       console.error('Error fetching data:', err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadMoreStocks() {
+    if (loading || !hasMoreStocks) return;
+    
+    try {
+      setLoading(true);
+      const nextPage = currentPage + 1;
+      const stocksData = await invoke('get_stocks_paginated', { 
+        limit: STOCKS_PER_PAGE, 
+        offset: nextPage * STOCKS_PER_PAGE 
+      });
+      
+      setStocks(prev => [...prev, ...stocksData]);
+      setCurrentPage(nextPage);
+      setHasMoreStocks(stocksData.length === STOCKS_PER_PAGE);
+      
+    } catch (err) {
+      setError(`Failed to load more stocks: ${err}`);
     } finally {
       setLoading(false);
     }
@@ -227,7 +268,7 @@ function App() {
         {/* Stock Count and Status */}
         <div className="mb-6 flex justify-between items-center">
           <div className="text-gray-600">
-            <span className="text-lg font-medium">{stocks.length}</span> stocks available
+            <span className="text-lg font-medium">{stocks.length}</span> of <span className="text-lg font-medium">{totalStocks}</span> stocks loaded
             {stocks.filter(s => s.has_data).length > 0 && (
               <span className="ml-2 text-sm">
                 • {stocks.filter(s => s.has_data).length} with data
@@ -264,6 +305,19 @@ function App() {
             />
           ))}
         </div>
+
+        {/* Load More Button */}
+        {hasMoreStocks && stocks.length > 0 && (
+          <div className="mt-6 text-center">
+            <button
+              onClick={loadMoreStocks}
+              disabled={loading}
+              className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+            >
+              {loading ? 'Loading...' : `Load More Stocks (${totalStocks - stocks.length} remaining)`}
+            </button>
+          </div>
+        )}
 
         {/* Empty State */}
         {stocks.length === 0 && !loading && (

@@ -4,13 +4,14 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsi
 
 function AnalysisPanel({ stock }) {
   const [selectedMetric, setSelectedMetric] = useState('price');
-  const [selectedPeriod, setSelectedPeriod] = useState('1Y');
+  const [selectedPeriod, setSelectedPeriod] = useState('all_time');
   const [customStartDate, setCustomStartDate] = useState('2024-01-01');
   const [customEndDate, setCustomEndDate] = useState('2024-12-31');
   const [priceHistory, setPriceHistory] = useState([]);
   const [quickMetrics, setQuickMetrics] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [stockDateRange, setStockDateRange] = useState(null);
 
   const metricOptions = [
     { value: 'price', label: 'Price History' },
@@ -28,12 +29,20 @@ function AnalysisPanel({ stock }) {
     { value: '6M', label: '6 Months', days: 180 },
     { value: '1Y', label: '1 Year', days: 365 },
     { value: '2Y', label: '2 Years', days: 730 },
+    { value: 'all_time', label: 'All Time', days: null },
     { value: 'custom', label: 'Custom Range' },
   ];
 
   const getDateRange = () => {
     if (selectedPeriod === 'custom') {
       return { startDate: customStartDate, endDate: customEndDate };
+    }
+    
+    if (selectedPeriod === 'all_time' && stockDateRange) {
+      return { 
+        startDate: stockDateRange.earliest_date, 
+        endDate: stockDateRange.latest_date 
+      };
     }
     
     const period = periodOptions.find(p => p.value === selectedPeriod);
@@ -44,6 +53,20 @@ function AnalysisPanel({ stock }) {
       startDate: startDate.toISOString().split('T')[0],
       endDate: endDate.toISOString().split('T')[0]
     };
+  };
+
+  const loadStockDateRange = async () => {
+    if (!stock?.symbol) return;
+    
+    try {
+      const dateRange = await invoke('get_stock_date_range', {
+        symbol: stock.symbol
+      });
+      setStockDateRange(dateRange);
+    } catch (err) {
+      console.error('Failed to load stock date range:', err);
+      setStockDateRange(null);
+    }
   };
 
   const loadData = async () => {
@@ -72,8 +95,14 @@ function AnalysisPanel({ stock }) {
   };
 
   useEffect(() => {
+    if (stock?.symbol) {
+      loadStockDateRange();
+    }
+  }, [stock.symbol]);
+
+  useEffect(() => {
     loadData();
-  }, [stock.symbol, selectedPeriod, customStartDate, customEndDate]);
+  }, [stock.symbol, selectedPeriod, customStartDate, customEndDate, stockDateRange]);
 
   const getMetricValue = (record, metric) => {
     switch (metric) {
@@ -215,6 +244,17 @@ function AnalysisPanel({ stock }) {
               onChange={(e) => setCustomEndDate(e.target.value)}
               className="px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
+          </div>
+        )}
+
+        {selectedPeriod === 'all_time' && stockDateRange && (
+          <div className="flex items-center gap-2 text-sm text-gray-600">
+            <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded">
+              📅 {stockDateRange.earliest_date} to {stockDateRange.latest_date}
+            </span>
+            <span className="bg-green-100 text-green-800 px-2 py-1 rounded">
+              📊 {stockDateRange.total_records.toLocaleString()} records
+            </span>
           </div>
         )}
 

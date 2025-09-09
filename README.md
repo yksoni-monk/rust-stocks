@@ -1,6 +1,6 @@
 # Rust Stocks Analysis System
 
-A high-performance Rust-based stock analysis system that fetches, stores, and analyzes S&P 500 stock data using the Charles Schwab API.
+A high-performance desktop application for stock analysis using Tauri (Rust backend + React frontend) with offline-first architecture. Features comprehensive stock data from SimFin, expandable panels UI, and enterprise-grade database safeguards.
 
 ## 🚀 Quick Start - Desktop Application
 
@@ -11,267 +11,269 @@ cd rust-stocks
 npm run tauri:dev
 ```
 
-**That's it!** The modern desktop application with React UI will open automatically.
-
-### Alternative: Terminal UI (Legacy)
-
-```bash
-# Run the legacy terminal-based interface
-cargo run
-```
+**That's it!** The modern desktop application with expandable panels UI will open automatically.
 
 ## 🎯 Project Overview
 
-This system provides comprehensive stock market data collection and analysis capabilities, featuring:
-- ✅ **Complete S&P 500 Coverage**: All 503 companies with real-time updates
-- ✅ **High-Performance Concurrent Data Collection**: Optimized async processing
-- ✅ **Professional CLI Tools**: Named arguments with comprehensive validation
-- ✅ **Smart Market Calendar**: Automatic weekend/holiday handling with Schwab API integration
-- ✅ **SQLite Database**: Local persistence with proper schema and indexing
-- ✅ **Real-time Progress Tracking**: Detailed batch logging and error recovery
-- ✅ **Charles Schwab API Integration**: Full authentication and data retrieval
+This system provides comprehensive stock market data analysis capabilities, featuring:
+- ✅ **Offline-First Architecture**: 5,876+ stocks with comprehensive historical data (2019-2024)
+- ✅ **SimFin Data Integration**: Professional-grade financial data with automated import
+- ✅ **Expandable Panels UI**: Modern single-page interface with contextual expansion
+- ✅ **User-Driven Analysis**: Dynamic metric selection (P/E, EPS, Price, Volume, etc.)
+- ✅ **Enterprise Database Safeguards**: Production-grade backup and migration system
+- ✅ **High-Performance Processing**: 6.2M price records + 52k+ financial records
+- ✅ **S&P 500 Support**: Integrated filtering and offline symbol management
 
-## 🚀 Quick Start
+## 🛠️ Setup & Data Import
 
 ### Prerequisites
 - **Node.js and npm** (for Tauri desktop application)
 - **Rust** (latest stable version)
-- **Charles Schwab API credentials**
+- **SimFin CSV data files** (for comprehensive stock data)
 - **SQLite** (bundled with the application)
 
 ### Setup
 1. Clone the repository
-2. Copy `.env.example` to `.env` and configure your API credentials:
+2. Download SimFin data files (us-shareprices-daily.csv, us-income-quarterly.csv)
+3. Import data using the SimFin importer:
    ```bash
-   SCHWAB_API_KEY=your_api_key
-   SCHWAB_APP_SECRET=your_app_secret
-   SCHWAB_CALLBACK_URL=your_callback_url
-   SCHWAB_TOKEN_PATH=./schwab_tokens.json
-   DATABASE_PATH=./stocks.db
+   cargo run --bin import-simfin -- \
+     --prices ~/simfin_data/us-shareprices-daily.csv \
+     --income ~/simfin_data/us-income-quarterly.csv \
+     --db stocks.db
    ```
-3. Build the project:
+4. Build the project:
    ```bash
    cargo build --release
    ```
+5. Run the desktop application:
+   ```bash
+   npm run tauri:dev
+   ```
 
-### Run the Desktop Application (Recommended)
+## 🔒 Database Administration & Safety
+
+### Enterprise-Grade Database Protection
+This system includes comprehensive database safeguards to prevent accidental data loss:
+
+#### Database Admin Tool
 ```bash
-# Start the modern Tauri desktop application with React UI
+# Check database health and statistics
+cargo run --bin db_admin -- status
+
+# Create manual backup
+cargo run --bin db_admin -- backup
+
+# Run migrations with safety checks
+cargo run --bin db_admin -- migrate --confirm
+
+# Verify database integrity
+cargo run --bin db_admin -- verify
+```
+
+#### Automatic Backup System
+- **Production Detection**: Automatically detects databases >50MB or >1000 stocks
+- **Pre-Migration Backups**: Creates backups before any schema changes
+- **Backup Verification**: Validates backup file size and integrity
+- **Timestamped Backups**: Automatic cleanup keeps last 5 backups
+
+#### Shell Backup Script
+```bash
+# Manual backup script
+./backup_database.sh
+
+# Creates: backups/stocks_backup_YYYYMMDD_HHMMSS.db
+```
+
+### Safety Features
+- 🔒 **Production Database Protection**: Requires explicit confirmation for large databases
+- 📦 **Automatic Backups**: Created before any potentially destructive operations  
+- ✅ **Data Integrity Verification**: Post-migration data validation
+- 🚨 **Rollback Support**: Easy restoration from timestamped backups
+- 📊 **Health Monitoring**: Real-time database statistics and alerts
+
+## 📊 SimFin Data Import System
+
+### Import Process Overview
+The system uses a 6-phase automated import process:
+
+1. **Phase 1**: Extract unique stocks from daily prices CSV
+2. **Phase 2**: Import daily price records (OHLCV + shares outstanding)
+3. **Phase 3**: Import quarterly financial statements 
+4. **Phase 4**: Calculate EPS (Net Income ÷ Diluted Shares Outstanding)
+5. **Phase 5**: Calculate P/E ratios (Close Price ÷ Latest Available EPS)
+6. **Phase 6**: Create performance indexes for fast queries
+
+### Import Commands
+
+#### Recommended Usage (From Project Root)
+```bash
+# Full import from project root directory
+cargo run --bin import-simfin -- \
+  --prices ~/simfin_data/us-shareprices-daily.csv \
+  --income ~/simfin_data/us-income-quarterly.csv \
+  --db stocks.db
+
+# With custom batch size for performance tuning
+cargo run --bin import-simfin -- \
+  --prices ~/simfin_data/us-shareprices-daily.csv \
+  --income ~/simfin_data/us-income-quarterly.csv \
+  --db stocks.db \
+  --batch-size 5000
+
+# Show help and all available options
+cargo run --bin import-simfin -- --help
+```
+
+#### Alternative: Direct Method (From src-tauri Directory)
+```bash
+cd src-tauri
+cargo run --bin import_simfin -- \
+  --prices ~/simfin_data/us-shareprices-daily.csv \
+  --income ~/simfin_data/us-income-quarterly.csv \
+  --db ../stocks.db
+```
+
+#### Command Parameter Details
+- `cargo run --bin import-simfin` - Runs the SimFin import tool
+- `--` - **IMPORTANT**: Separates Cargo's arguments from application arguments
+- `--prices [file]` - Path to daily prices CSV (semicolon-delimited)
+- `--income [file]` - Path to quarterly income CSV (semicolon-delimited)  
+- `--db [file]` - Path to SQLite database (optional, defaults to `./stocks.db`)
+- `--batch-size [size]` - Records per batch (optional, defaults to 10,000)
+
+### Expected Performance & Data
+- **Processing Time**: 15-30 minutes for full dataset
+- **Daily Prices**: ~6.2M records, 5,876+ stocks, 2019-2024
+- **Quarterly Income**: ~52k financial records with comprehensive metrics
+- **Final Database Size**: 2-3 GB
+- **Stock Coverage**: 5,876+ companies with complete historical data
+
+### Data Sources & Quality
+- **SimFin**: High-quality financial data for 5,000+ companies
+- **Coverage**: US stocks with comprehensive historical data
+- **Frequency**: Daily prices, quarterly financials
+- **Quality**: Professional-grade data used by financial institutions
+- **Format**: Semicolon-delimited CSV files (SimFin standard)
+
+### Troubleshooting
+
+#### Command Issues
+```bash
+# If command not found, ensure you're in the right directory
+cd /Users/yksoni/code/misc/rust-stocks
+
+# Build the binary first if needed
+cargo build --bin import_simfin
+```
+
+#### CSV Format Issues
+- Ensure CSVs use semicolon (`;`) delimiters (SimFin format)
+- Check that file paths are correct and files exist
+- Verify CSV headers match expected SimFin format
+
+#### Database Issues
+- Ensure database schema is compatible (use db_admin tool)
+- Check disk space (need ~3GB free for import + processing)
+- Make sure no other processes are using the database file
+- Use backup system before importing: `cargo run --bin db_admin -- backup`
+
+#### Alternative Binary Usage
+```bash
+# Build and run directly (if needed)
+cargo build --bin import_simfin
+./target/debug/import_simfin \
+  --prices ~/simfin_data/us-shareprices-daily.csv \
+  --income ~/simfin_data/us-income-quarterly.csv \
+  --db stocks.db
+```
+
+## 🎨 Application Features
+
+### Modern Desktop Interface
+- **Expandable Panels UI**: Single-page interface with contextual expansion
+- **User-Driven Analysis**: Dynamic metric selection (P/E, EPS, Price, Volume, etc.)
+- **S&P 500 Filtering**: Toggle between all stocks and S&P 500 subset
+- **Real-Time Search**: Search stocks by symbol or company name  
+- **Paginated Loading**: Efficient loading of large datasets
+- **Visual Indicators**: 📊 for stocks with data, 📋 for no data
+- **Multiple Panel Support**: Compare stocks side-by-side
+
+### Stock Analysis Capabilities
+- **Price History Visualization**: Interactive charts with historical data
+- **Fundamental Analysis**: P/E ratios, EPS, market cap, financial metrics
+- **Comparative Analysis**: Multiple stocks expanded simultaneously
+- **Data Export**: CSV and JSON export for any selected view
+- **Offline Operation**: Full functionality without internet connectivity
+
+### Technical Features
+- **High Performance**: Handles 6.2M+ price records smoothly
+- **Professional UI**: Smooth animations and responsive design
+- **Production Ready**: Enterprise-grade database safeguards
+- **Cross-Platform**: Desktop application for Windows, macOS, Linux
+
+## 🛠️ Available Commands
+
+### Application Commands
+```bash
+# Run desktop application  
 npm run tauri:dev
+
+# Run database admin tool
+cargo run --bin db_admin -- status
+cargo run --bin db_admin -- backup  
+cargo run --bin db_admin -- migrate --confirm
+cargo run --bin db_admin -- verify
+
+# Import SimFin data
+cargo run --bin import-simfin -- --help
 ```
 
-### Run the Terminal Application (Legacy)
+### Database Commands  
 ```bash
-# Start the interactive TUI application
-cargo run
+# Check database status
+cargo run --bin db_admin -- status
 
-# OR be explicit about the main binary
-cargo run --bin rust-stocks
+# Create backup manually
+cargo run --bin db_admin -- backup
+
+# Run safe migrations
+cargo run --bin db_admin -- migrate --confirm
+
+# Verify database integrity
+cargo run --bin db_admin -- verify
 ```
 
-### Initialize S&P 500 Data (First Time Setup)
-```bash
-# Update the complete S&P 500 company list (503 companies)
-cargo run --bin update_sp500
-```
+## 🏗️ Architecture
 
-## 🧹 Test Cleanup
+### Technology Stack
+- **Frontend**: React with JSX, expandable panels UI
+- **Backend**: Rust with Tauri framework
+- **Database**: SQLite with professional-grade safeguards
+- **Data Source**: SimFin CSV import system (offline-first)
+- **Future Integration**: Charles Schwab API (for real-time quotes and options)
 
-To prevent test database files from accumulating and filling up disk space, you can use the cleanup script:
+### Key Components
+- **SimFin Importer**: 6-phase automated data import
+- **Database Manager**: Enterprise-grade backup and migration system
+- **Expandable Panels UI**: Modern single-page interface
+- **Analysis Engine**: Dynamic metric calculations and visualizations
+- **S&P 500 Integration**: Offline symbol management and filtering
 
-```bash
-./cleanup_tests.sh
-```
+## 📚 Documentation
 
-This script removes all test database files from the `tests/tmp/` directory.
+All documentation is centralized in this README for simplicity:
 
-### Automatic Cleanup
+- **Setup & Installation**: See sections above for complete setup guide
+- **Database Administration**: Enterprise-grade backup and migration tools
+- **SimFin Data Import**: Comprehensive import system with troubleshooting
+- **Application Features**: Modern expandable panels UI and analysis capabilities
+- **Architecture**: Technology stack and system components
 
-The test framework also includes automatic cleanup functionality:
-- **Before tests**: The `tests/tmp/` directory is cleaned up before test runs
-- **After individual tests**: Test databases created with `init_fresh_test_database_with_cleanup()` are automatically cleaned up
-- **Manual cleanup**: Use `cleanup_tmp_directory()` function in your tests if needed
+For detailed technical architecture, see: `context/ARCHITECTURE.md`
 
-## 📊 Data Collection
+---
 
-### Concurrent Data Fetching
-
-The system supports high-performance concurrent data fetching using multiple worker threads:
-
-```bash
-# Test concurrent fetching
-cargo run --bin data_collection_test concurrent -s 20240101 --threads 5
-
-# With custom configuration
-cargo run --bin data_collection_test concurrent -s 20240101 -e 20240131 --threads 10 --retries 3
-```
-
-**Features:**
-- 🚀 **Multi-threaded Processing**: Configurable number of worker threads
-- 📊 **Smart Data Checking**: Automatically skips existing data
-- 🔄 **Retry Logic**: Configurable retry attempts with exponential backoff
-- 📈 **Real-time Progress**: Detailed logging of each thread's progress
-- 🛡️ **Thread Safety**: Safe concurrent database operations
-- ⚡ **Rate Limiting**: Per-thread API rate limiting to avoid violations
-- 📅 **Weekly Batching**: Same trading week batching as single stock fetcher
-
-### Data Collection Testing
-
-The system provides comprehensive testing tools for data collection:
-
-```bash
-# Quick test with 10 stocks
-cargo run --bin data_collection_test quick 20240101
-
-# Detailed collection with full logging
-cargo run --bin data_collection_test detailed -s 20240101 -e 20240131
-
-# Concurrent collection demo
-cargo run --bin data_collection_test concurrent -s 20240101 --threads 5
-
-# Get help
-cargo run --bin data_collection_test --help
-```
-
-**Features:**
-- 🧪 **Quick Testing**: Test with 10 stocks for fast validation
-- 📊 **Detailed Collection**: Full production-like collection with logging
-- 🚀 **Concurrent Demo**: Multi-threaded collection testing
-- 🗓️ **Smart Calendar**: Automatic weekend adjustment
-- 📈 **Progress Tracking**: Real-time progress and error reporting
-
-## 🛠️ Available Tools
-
-### Main Application
-
-- **`rust-stocks`** (DEFAULT): Interactive TUI application for stock analysis and data management
-  ```bash
-  cargo run  # Runs this automatically
-  ```
-
-### Utility Tools
-
-- **`update_sp500`**: Update S&P 500 company list with state tracking
-  ```bash
-  cargo run --bin update_sp500
-  ```
-
-### Test Tools (Development/Testing)
-
-- **`data_collection_test`**: Comprehensive data collection testing with subcommands:
-  ```bash
-  # Quick test with 10 stocks
-  cargo run --bin data_collection_test quick 20240101
-  
-  # Detailed collection with full logging
-  cargo run --bin data_collection_test detailed -s 20240101 -e 20240131
-  
-  # Concurrent collection demo
-  cargo run --bin data_collection_test concurrent -s 20240101 --threads 5
-  
-  # Single stock testing
-  cargo run --bin data_collection_test single AAPL 20240101 20240131
-  ```
-- **`api_connectivity_test`**: API connectivity testing with subcommands:
-  ```bash
-  # Test authentication
-  cargo run --bin api_connectivity_test auth
-  
-  # Test quote fetching
-  cargo run --bin api_connectivity_test quotes
-  
-  # Test price history
-  cargo run --bin api_connectivity_test history AAPL 20240101 20240131
-  
-  # Run all tests
-  cargo run --bin api_connectivity_test all
-  ```
-
-## 📊 Progress Tracking
-
-The system provides detailed batch logging including:
-
-```
-📦 BATCH 1/101 - Processing 5 stocks:
-   - AAPL (Apple Inc.)
-   - MSFT (Microsoft Corporation)
-   ...
-
-🔄 [1/503] Starting AAPL: Apple Inc.
-✅ [1/503] AAPL completed: 417 records in 2.3s
-
-📊 BATCH 1/101 SUMMARY:
-   ✅ Successful: 5/5 stocks  
-   ❌ Failed: 0/5 stocks
-   📈 Records added: 2,085
-   ⏱️  Time taken: 12.1s
-   📊 OVERALL PROGRESS: 5/503 stocks, 2,085 total records
-```
-
-## 🔧 Development
-
-### Testing API Connectivity
-```bash
-cargo run --bin test_api
-```
-
-### Database Operations
-```bash
-# Check database stats
-sqlite3 stocks.db "SELECT COUNT(*) FROM stocks;"
-sqlite3 stocks.db "SELECT COUNT(*) FROM daily_prices;"
-
-# View recent data
-sqlite3 stocks.db "SELECT symbol, COUNT(*) FROM stocks s JOIN daily_prices p ON s.id = p.stock_id GROUP BY symbol LIMIT 10;"
-```
-
-### Performance Monitoring
-
-The system includes comprehensive performance tracking:
-- Individual stock processing times
-- Batch completion rates and timings  
-- Overall progress with record counts
-- Error tracking with detailed reporting
-
-### Testing
-
-For comprehensive testing information, see [tests.md](tests.md).
-
-## 📋 Current Status
-
-### ✅ Completed Features
-- **Complete S&P 500 Integration**: All 503 companies with database state tracking
-- **Smart Market Calendar**: Automatic weekend/holiday handling with Schwab API integration
-- **High-Performance Data Collection**: Concurrent processing with progress tracking  
-- **Professional CLI**: Named arguments with comprehensive validation
-- **Authentication System**: Schwab API with automatic token refresh
-- **Database Architecture**: SQLite with proper schema and migrations
-
-### 🔄 In Progress  
-- **Historical Data Collection**: ~1.5M records for 503 companies (2020-2025)
-- **Analysis Features**: P/E ratio decline analysis and stock ranking
-
-### 📋 Planned Features
-- **Real-time Data Updates**: Incremental daily updates
-- **Advanced Analysis**: Technical indicators and trend analysis  
-- **Web Interface**: REST API and web dashboard
-- **Export Features**: CSV, JSON, and Excel export capabilities
-
-## 🚨 Known Issues
-
-1. **Token Management**: Requires periodic refresh every 30 minutes
-2. **Rate Limiting**: Schwab API limits to 120 requests/minute
-3. **Market Hours**: Some quotes may return $0.00 outside trading hours
-
-## 📊 Success Metrics
-
-- **Data Coverage**: 503/503 S&P 500 stocks ✅
-- **Market Calendar**: Smart weekend/holiday handling ✅
-- **Concurrent Processing**: High-performance async implementation ✅  
-- **CLI Interface**: Professional named arguments with validation ✅
-- **Progress Tracking**: Real-time batch monitoring ✅
-- **Historical Data**: In progress (~1.5M records target)
-
-## 📝 License
-
-This project is for educational and personal use. Please ensure compliance with Charles Schwab API terms of service.
+*Last Updated: 2025-09-09*  
+*Version: 3.0 - SimFin Offline Architecture with Enterprise Database Safeguards*  
+*Integrated SimFin Import Documentation - Single README for clarity*

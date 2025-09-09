@@ -12,7 +12,12 @@
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0"
   },
-  "keywords": ["tauri", "react", "stocks", "analysis"],
+  "keywords": [
+    "tauri",
+    "react",
+    "stocks",
+    "analysis"
+  ],
   "author": "rust-stocks",
   "license": "MIT"
 }

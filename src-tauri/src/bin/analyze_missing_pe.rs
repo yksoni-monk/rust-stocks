@@ -4,7 +4,7 @@ use sqlx::{SqlitePool, Row};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🔍 Analyzing why S&P 500 stocks are missing P/E data...");
     
-    let database_url = "sqlite:../stocks.db";
+    let database_url = "sqlite:db/stocks.db";
     let pool = SqlitePool::connect(database_url).await?;
     
     // 1. Find S&P 500 stocks missing from stocks table

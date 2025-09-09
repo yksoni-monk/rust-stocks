@@ -1,4 +1,57 @@
-# TODO - S&P 500 Offline Support
+# TODO - Project Structure Reorganization
+
+## 🏗️ CURRENT PRIORITY: Standard Tauri Project Structure
+
+### **Problem**: Messy project structure not following Tauri conventions
+- Backend code scattered between `src/` and `src-tauri/src/`
+- Database and migrations in root directory
+- Dual analysis modules causing command registration confusion
+- Root `Cargo.toml` should be in `src-tauri/`
+
+### **Target Structure** (Standard Tauri):
+```
+rust-stocks/
+├── package.json ✅ (Root Tauri project)
+├── src/ ✅ (Frontend - React/JS) 
+├── src-tauri/ ✅ (All backend code)
+│   ├── Cargo.toml ✅ (Complete backend workspace)
+│   ├── src/ ✅ (All Rust code unified)
+│   │   ├── main.rs, lib.rs ✅
+│   │   ├── commands/ ✅ (Tauri commands only)
+│   │   ├── analysis/ ✅ (Business logic only) 
+│   │   ├── database/, tools/, bin/ ✅
+│   └── db/ ✅ (Database organization)
+│       ├── stocks.db ✅
+│       ├── migrations/ ✅
+│       └── backups/ ✅
+```
+
+### **Reorganization Plan**:
+#### **Phase 1: Backend Consolidation** 🔄
+1. Move `src/` → `src-tauri/src/` (merge backend code)
+2. Merge `Cargo.toml` → `src-tauri/Cargo.toml`
+3. Clean up dual analysis modules
+
+#### **Phase 2: Database Organization** 🔄  
+1. Create `src-tauri/db/` directory
+2. Move `stocks.db` → `src-tauri/db/stocks.db`
+3. Move `migrations/` → `src-tauri/db/migrations/`
+4. Create `src-tauri/db/backups/`
+5. Update migration/backup code paths
+
+#### **Phase 3: Frontend Cleanup** 🔄
+1. Rename `frontend/` → `src/` (optional)
+2. Update Tauri config
+
+#### **Phase 4: Path & Configuration Updates** 🔄
+1. Update database paths from `../stocks.db` to `db/stocks.db`
+2. Fix command registration confusion
+3. Update package.json scripts
+4. Update documentation
+
+---
+
+# TODO - S&P 500 Offline Support ✅ COMPLETE
 
 ## Database Migration Issue ✅ RESOLVED
 - **Problem**: ✅ SOLVED - `sp500_symbols` table created successfully

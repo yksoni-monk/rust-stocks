@@ -4,7 +4,7 @@ use sqlx::{SqlitePool, Row, Column};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🔍 Debugging SimFin import status...");
     
-    let database_url = "sqlite:../stocks.db";
+    let database_url = "sqlite:db/stocks.db";
     let pool = SqlitePool::connect(database_url).await?;
     
     // 1. Check table structure

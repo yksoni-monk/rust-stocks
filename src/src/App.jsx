@@ -102,7 +102,8 @@ function App() {
   }
 
   async function handleSp500Filter() {
-    setSp500Filter(!sp500Filter);
+    const newFilterState = !sp500Filter;
+    setSp500Filter(newFilterState);
     setCurrentPage(0);
     setStocks([]);
     
@@ -117,7 +118,7 @@ function App() {
       
       // Apply S&P 500 filter if enabled
       let filteredStocks = stocksData;
-      if (!sp500Filter) { // If we're turning ON the filter
+      if (newFilterState) { // If filter is now ON
         filteredStocks = stocksData.filter(stock => 
           sp500Symbols.includes(stock.symbol)
         );
@@ -129,7 +130,7 @@ function App() {
       // Get total count for display
       const allStocks = await invoke('get_stocks_with_data_status');
       let totalCount = allStocks.length;
-      if (!sp500Filter) { // If we're turning ON the filter
+      if (newFilterState) { // If filter is now ON
         totalCount = allStocks.filter(stock => 
           sp500Symbols.includes(stock.symbol)
         ).length;

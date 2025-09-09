@@ -10,7 +10,7 @@ pub struct DatabaseStats {
 }
 
 async fn get_database_connection() -> Result<SqlitePool, String> {
-    let database_url = "sqlite:../stocks.db";
+    let database_url = "sqlite:db/stocks.db";
     SqlitePool::connect(database_url).await
         .map_err(|e| format!("Database connection failed: {}", e))
 }

@@ -11,7 +11,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .long("db")
             .value_name("FILE")
             .help("Path to SQLite database")
-            .default_value("../stocks.db"))
+            .default_value("db/stocks.db"))
         .subcommand(
             Command::new("backup")
                 .about("Create database backup")

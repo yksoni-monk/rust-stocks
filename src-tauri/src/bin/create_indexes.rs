@@ -5,7 +5,7 @@ use std::time::Instant;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🔧 Creating database indexes for performance...");
     
-    let database_url = "sqlite:../stocks.db";
+    let database_url = "sqlite:db/stocks.db";
     let pool = SqlitePool::connect(database_url).await?;
     
     let indexes = vec![

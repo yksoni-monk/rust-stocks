@@ -5,7 +5,7 @@ use std::time::Instant;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🚀 Creating performance cache table...");
     
-    let database_url = "sqlite:../stocks.db";
+    let database_url = "sqlite:db/stocks.db";
     let pool = SqlitePool::connect(database_url).await?;
     
     // Create cache table for S&P 500 stocks with P/E data

@@ -6,8 +6,8 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
-    "dev": "cd frontend && npm run dev",
-    "build": "cd frontend && npm run build"
+    "dev": "cd src && npm run dev",
+    "build": "cd src && npm run build"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0"

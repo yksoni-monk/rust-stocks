@@ -87,7 +87,7 @@ impl DatabaseManager {
         println!("🔒 Migration backup: {}", migration_backup);
         
         // 3. Run migrations with monitoring
-        match sqlx::migrate!("./migrations").run(&self.pool).await {
+        match sqlx::migrate!("./db/migrations").run(&self.pool).await {
             Ok(_) => {
                 println!("✅ Migrations completed successfully");
                 

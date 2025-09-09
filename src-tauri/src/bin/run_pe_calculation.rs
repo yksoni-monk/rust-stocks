@@ -11,7 +11,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
-        .connect("sqlite:../stocks.db?mode=rwc")
+        .connect("sqlite:db/stocks.db?mode=rwc")
         .await?;
     
     // Phase 1: Calculate EPS (if missing)

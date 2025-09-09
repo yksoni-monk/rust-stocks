@@ -4,7 +4,7 @@ use sqlx::{SqlitePool, Row};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🔍 Checking S&P 500 quarterly financials and P/E calculation status...");
     
-    let database_url = "sqlite:../stocks.db";
+    let database_url = "sqlite:db/stocks.db";
     let pool = SqlitePool::connect(database_url).await?;
     
     // 1. Check if quarterly_financials table exists and has data

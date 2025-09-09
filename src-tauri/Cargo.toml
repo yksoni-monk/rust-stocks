@@ -13,6 +13,23 @@ default-run = "rust-stocks-tauri"
 name = "rust-stocks-tauri"
 path = "src/main.rs"
 
+# CLI Tools (moved from root workspace)
+[[bin]]
+name = "stock-analysis"
+path = "src/main_workspace.rs"
+
+[[bin]]
+name = "import-simfin"
+path = "src/import_simfin_launcher.rs"
+
+[[bin]]
+name = "import-ttm"
+path = "src/bin/import_ttm.rs"
+
+[[bin]]
+name = "calculate-ratios"
+path = "src/bin/calculate_ratios.rs"
+
 [[bin]]
 name = "import_simfin"
 path = "src/bin/import_simfin.rs"
@@ -51,3 +68,13 @@ base64 = "0.22"
 async-trait = "0.1"
 indicatif = "0.17"
 clap = { version = "4.0", features = ["derive"] }
+
+# Additional dependencies for testing and development
+[dev-dependencies]
+tempfile = "3.8"
+tokio-test = "0.4"
+mockall = "0.12"
+test-log = "0.2"
+wiremock = "0.5"
+assert_matches = "1.5"
+pretty_assertions = "1.4"

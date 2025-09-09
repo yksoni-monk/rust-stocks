@@ -29,6 +29,10 @@ path = "src/bin/import_ttm.rs"
 name = "test_ttm_direct"
 path = "test_ttm_direct.rs"
 
+[[bin]]
+name = "test_ratio_calc"
+path = "test_ratio_calc.rs"
+
 
 [lib]
 name = "rust_stocks_tauri_lib"

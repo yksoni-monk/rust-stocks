@@ -3,10 +3,10 @@ use rust_stocks_tauri_lib::tools::ttm_importer::import_complete_ttm_dataset;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Direct database connection (bypassing protected init)
+    // Direct database connection to production database (bypassing protected init)
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
-        .connect("sqlite:./stocks.db?mode=rwc")
+        .connect("sqlite:../stocks.db?mode=rwc")
         .await?;
 
     println!("🧪 DIRECT TTM IMPORT TEST");

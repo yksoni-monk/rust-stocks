@@ -13,12 +13,6 @@ function AnalysisPanel({ stock }) {
   const [error, setError] = useState(null);
   const [stockDateRange, setStockDateRange] = useState(null);
   
-  // P/E Chart specific state
-  const [peChartPeriod, setPeChartPeriod] = useState('all_time');
-  const [peChartCustomStartDate, setPeChartCustomStartDate] = useState('2024-01-01');
-  const [peChartCustomEndDate, setPeChartCustomEndDate] = useState('2024-12-31');
-  const [peChartData, setPeChartData] = useState([]);
-  const [peChartLoading, setPeChartLoading] = useState(false);
   
   // P/S and EV/S specific state
   const [valuationRatios, setValuationRatios] = useState(null);
@@ -49,15 +43,6 @@ function AnalysisPanel({ stock }) {
     { value: 'custom', label: 'Custom Range' },
   ];
 
-  const peChartPeriodOptions = [
-    { value: '1M', label: '1 Month', days: 30 },
-    { value: '3M', label: '3 Months', days: 90 },
-    { value: '6M', label: '6 Months', days: 180 },
-    { value: '1Y', label: '1 Year', days: 365 },
-    { value: '2Y', label: '2 Years', days: 730 },
-    { value: 'all_time', label: 'All Time', days: null },
-    { value: 'custom', label: 'Custom Range' },
-  ];
 
   const getDateRange = () => {
     if (selectedPeriod === 'custom') {
@@ -81,27 +66,6 @@ function AnalysisPanel({ stock }) {
     };
   };
 
-  const getPeChartDateRange = () => {
-    if (peChartPeriod === 'custom') {
-      return { startDate: peChartCustomStartDate, endDate: peChartCustomEndDate };
-    }
-    
-    if (peChartPeriod === 'all_time' && stockDateRange) {
-      return { 
-        startDate: stockDateRange.earliest_date, 
-        endDate: stockDateRange.latest_date 
-      };
-    }
-    
-    const period = peChartPeriodOptions.find(p => p.value === peChartPeriod);
-    const endDate = new Date();
-    const startDate = new Date(endDate.getTime() - (period.days * 24 * 60 * 60 * 1000));
-    
-    return {
-      startDate: startDate.toISOString().split('T')[0],
-      endDate: endDate.toISOString().split('T')[0]
-    };
-  };
 
   const loadStockDateRange = async () => {
     if (!stock?.symbol) return;
@@ -142,39 +106,6 @@ function AnalysisPanel({ stock }) {
     }
   };
 
-  const loadPeChartData = async () => {
-    if (!stock?.symbol) return;
-
-    setPeChartLoading(true);
-
-    try {
-      const { startDate, endDate } = getPeChartDateRange();
-      
-      // Load price history for P/E chart
-      const history = await invoke('get_price_history', {
-        symbol: stock.symbol,
-        startDate,
-        endDate
-      });
-
-      // Filter and format data for P/E chart
-      const peData = (history || [])
-        .filter(record => record.pe_ratio !== null && record.pe_ratio !== undefined)
-        .map(record => ({
-          date: record.date,
-          pe_ratio: record.pe_ratio,
-          close_price: record.close || record.close_price
-        }));
-
-      setPeChartData(peData);
-
-    } catch (err) {
-      console.error('Failed to load P/E chart data:', err);
-      setPeChartData([]);
-    } finally {
-      setPeChartLoading(false);
-    }
-  };
 
   const loadValuationRatios = async () => {
     if (!stock?.symbol) return;
@@ -224,9 +155,6 @@ function AnalysisPanel({ stock }) {
     loadData();
   }, [stock.symbol, selectedPeriod, customStartDate, customEndDate, stockDateRange]);
 
-  useEffect(() => {
-    loadPeChartData();
-  }, [stock.symbol, peChartPeriod, peChartCustomStartDate, peChartCustomEndDate, stockDateRange]);
 
   useEffect(() => {
     if (stock?.symbol) {
@@ -798,150 +726,6 @@ function AnalysisPanel({ stock }) {
         )}
       </div>
 
-      {/* P/E Ratio Chart Section */}
-      <div className="bg-white rounded-lg border p-4">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-semibold">Daily P/E Ratio Trend - {stock.symbol}</h3>
-          
-          {/* P/E Chart Controls */}
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2">
-              <label className="text-sm font-medium">Period:</label>
-              <select
-                value={peChartPeriod}
-                onChange={(e) => setPeChartPeriod(e.target.value)}
-                className="px-3 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
-              >
-                {peChartPeriodOptions.map(option => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {peChartPeriod === 'custom' && (
-              <div className="flex items-center gap-2">
-                <input
-                  type="date"
-                  value={peChartCustomStartDate}
-                  onChange={(e) => setPeChartCustomStartDate(e.target.value)}
-                  className="px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
-                />
-                <span className="text-sm text-gray-500">to</span>
-                <input
-                  type="date"
-                  value={peChartCustomEndDate}
-                  onChange={(e) => setPeChartCustomEndDate(e.target.value)}
-                  className="px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
-                />
-              </div>
-            )}
-
-            {peChartPeriod === 'all_time' && stockDateRange && (
-              <div className="flex items-center gap-2 text-sm text-gray-600">
-                <span className="bg-green-100 text-green-800 px-2 py-1 rounded">
-                  📅 {stockDateRange.earliest_date} to {stockDateRange.latest_date}
-                </span>
-                <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded">
-                  📊 {peChartData.length.toLocaleString()} P/E records
-                </span>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {peChartLoading ? (
-          <div className="text-center py-8">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-600 mx-auto mb-2"></div>
-            <p className="text-sm text-gray-600">Loading P/E ratio data...</p>
-          </div>
-        ) : peChartData.length > 0 ? (
-          <div>
-            {/* P/E Ratio Chart */}
-            <div className="mb-6">
-              <div className="bg-white p-6 rounded-lg border shadow-sm">
-                <ResponsiveContainer width="100%" height={400}>
-                  <LineChart
-                    data={peChartData}
-                    margin={{
-                      top: 20,
-                      right: 30,
-                      left: 20,
-                      bottom: 60,
-                    }}
-                  >
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                    <XAxis 
-                      dataKey="date" 
-                      angle={-45}
-                      textAnchor="end"
-                      height={80}
-                      tick={{ fontSize: 12 }}
-                      tickFormatter={(value) => value.slice(5)} // Show MM-DD
-                    />
-                    <YAxis 
-                      tick={{ fontSize: 12 }}
-                      tickFormatter={(value) => value.toFixed(1)}
-                    />
-                    <Tooltip 
-                      formatter={(value, name) => [
-                        `${value.toFixed(2)}`, 
-                        name === 'pe_ratio' ? 'P/E Ratio' : name
-                      ]}
-                      labelFormatter={(label) => `Date: ${label}`}
-                      contentStyle={{
-                        backgroundColor: '#f8fafc',
-                        border: '1px solid #e2e8f0',
-                        borderRadius: '6px'
-                      }}
-                    />
-                    <Legend />
-                    <Line 
-                      type="monotone" 
-                      dataKey="pe_ratio" 
-                      stroke="#10b981" 
-                      strokeWidth={2}
-                      dot={{ fill: '#10b981', strokeWidth: 1, r: 2 }}
-                      activeDot={{ r: 4, stroke: '#10b981', strokeWidth: 2 }}
-                      name="P/E Ratio"
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-
-            {/* P/E Data Table */}
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-3 py-2 text-left font-medium text-gray-500">Date</th>
-                    <th className="px-3 py-2 text-left font-medium text-gray-500">P/E Ratio</th>
-                    <th className="px-3 py-2 text-left font-medium text-gray-500">Close Price</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-200">
-                  {peChartData.slice(-10).reverse().map((point, index) => (
-                    <tr key={index} className="hover:bg-gray-50">
-                      <td className="px-3 py-2">{point.date}</td>
-                      <td className="px-3 py-2 font-medium text-green-600">
-                        {point.pe_ratio.toFixed(2)}
-                      </td>
-                      <td className="px-3 py-2">${point.close_price.toFixed(2)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        ) : (
-          <div className="text-center py-8 text-gray-600">
-            <p>No P/E ratio data available for the selected period.</p>
-            <p className="text-sm mt-2">P/E ratios are calculated from quarterly earnings data.</p>
-          </div>
-        )}
-      </div>
     </div>
   );
 }

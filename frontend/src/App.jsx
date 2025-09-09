@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import StockRow from './components/StockRow';
+import RecommendationsPanel from './components/RecommendationsPanel';
 
 function App() {
   const [stocks, setStocks] = useState([]);
@@ -15,6 +16,7 @@ function App() {
   const [totalStocks, setTotalStocks] = useState(0);
   const [sp500Filter, setSp500Filter] = useState(false);
   const [sp500Symbols, setSp500Symbols] = useState([]);
+  const [showRecommendations, setShowRecommendations] = useState(false);
   
   const STOCKS_PER_PAGE = 50;
 
@@ -216,6 +218,13 @@ function App() {
           <div className="flex justify-between items-center">
             <h1 className="text-2xl font-bold">Stock Analysis System</h1>
             <div className="flex items-center space-x-4">
+              <button 
+                onClick={() => setShowRecommendations(true)}
+                className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 flex items-center gap-2"
+              >
+                <span>💎</span>
+                Value Picks
+              </button>
               <input
                 type="text"
                 placeholder="Search stocks..."
@@ -345,6 +354,13 @@ function App() {
               </div>
             </div>
           </div>
+        )}
+
+        {/* Recommendations Panel */}
+        {showRecommendations && (
+          <RecommendationsPanel 
+            onClose={() => setShowRecommendations(false)}
+          />
         )}
       </div>
     </div>

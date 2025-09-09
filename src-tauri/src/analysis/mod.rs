@@ -7,6 +7,12 @@ use tracing::{info, warn};
 use crate::database_sqlx::DatabaseManagerSqlx;
 use crate::models::{Stock, StockAnalysis, StockDetail, DailyPrice, DatabaseStats};
 
+pub mod pe_statistics;
+pub mod recommendation_engine;
+
+pub use pe_statistics::*;
+pub use recommendation_engine::*;
+
 #[allow(dead_code)]
 pub struct AnalysisEngine {
     database: DatabaseManagerSqlx,

@@ -3,7 +3,9 @@ pub mod commands;
 pub mod models;
 pub mod api;
 pub mod database;
+pub mod database_sqlx;
 pub mod tools;
+pub mod analysis;
 
 use commands::*;
 
@@ -23,9 +25,12 @@ pub fn run() {
             data::get_database_stats,
             
             // Analysis commands
-            analysis::get_price_history,
-            analysis::export_data,
-            analysis::get_stock_date_range,
+            
+            // Recommendation commands
+            recommendations::get_value_recommendations,
+            recommendations::analyze_sp500_pe_values,
+            recommendations::get_recommendation_stats,
+            recommendations::analyze_stock_pe_history,
             
             // Initialization commands
             initialization::get_initialization_status,

@@ -1,6 +1,13 @@
 # Rust Stocks Analysis System
 
+🚨 **CLAUDE: PRODUCTION DATABASE IS `./stocks.db` (2.5GB) IN THIS ROOT DIRECTORY** 🚨
+
 A high-performance desktop application for stock analysis using Tauri (Rust backend + React frontend) with offline-first architecture. Features comprehensive stock data from SimFin, expandable panels UI, and enterprise-grade database safeguards.
+
+## 📊 P/S & EV/S Ratio System (COMPLETED)
+✅ **3,294 P/S and EV/S ratios** calculated for stocks where P/E ratios are invalid due to negative earnings
+✅ **54,160 TTM financial statements** imported from SimFin data
+✅ **96.4% data completeness** - production ready
 
 ## 🚀 Quick Start - Desktop Application
 

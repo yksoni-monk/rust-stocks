@@ -21,17 +21,6 @@ path = "src/bin/import_simfin.rs"
 name = "db_admin"
 path = "src/bin/db_admin.rs"
 
-[[bin]]
-name = "import_ttm"
-path = "src/bin/import_ttm.rs"
-
-[[bin]]
-name = "test_ttm_direct"
-path = "test_ttm_direct.rs"
-
-[[bin]]
-name = "test_ratio_calc"
-path = "test_ratio_calc.rs"
 
 
 [lib]

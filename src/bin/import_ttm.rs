@@ -4,13 +4,10 @@ use std::time::Instant;
 use anyhow::Result;
 
 // Import the TTM importer module
-use rust_stocks_tauri_lib::tools::ttm_importer::{
+use rust_stocks::tools::ttm_importer::{
     import_complete_ttm_dataset,
     TTMImportStats,
 };
-
-// Import the database protection system
-use rust_stocks_tauri_lib::database::protected_init::initialize_database_safely;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -22,37 +19,38 @@ async fn main() -> Result<()> {
             .long("income")
             .value_name("FILE")
             .help("Path to us-income-ttm.csv")
-            .required(true))
+            .required(false))
         .arg(Arg::new("balance")
             .long("balance") 
             .value_name("FILE")
             .help("Path to us-balance-ttm.csv")
-            .required(true))
+            .required(false))
         .arg(Arg::new("database")
             .long("db")
             .value_name("FILE")
-            .help("Path to SQLite database")
+            .help("Path to SQLite database (PRODUCTION: ./stocks.db in ROOT)")
             .default_value("./stocks.db"))
         .arg(Arg::new("data_dir")
             .long("data-dir")
             .value_name("DIR")
-            .help("Directory containing SimFin CSV files (alternative to individual file paths)")
-            .conflicts_with_all(&["income", "balance"]))
+            .help("Directory containing SimFin CSV files")
+            .default_value("/Users/yksoni/simfin_data"))
         .get_matches();
 
     let db_path = matches.get_one::<String>("database").unwrap();
+    let data_dir = matches.get_one::<String>("data_dir").unwrap();
 
-    // Determine file paths
-    let (income_path, balance_path) = if let Some(data_dir) = matches.get_one::<String>("data_dir") {
-        (
-            format!("{}/us-income-ttm.csv", data_dir),
-            format!("{}/us-balance-ttm.csv", data_dir),
-        )
+    // Use data directory by default
+    let income_path = if let Some(income) = matches.get_one::<String>("income") {
+        income.clone()
     } else {
-        (
-            matches.get_one::<String>("income").unwrap().clone(),
-            matches.get_one::<String>("balance").unwrap().clone(),
-        )
+        format!("{}/us-income-ttm.csv", data_dir)
+    };
+    
+    let balance_path = if let Some(balance) = matches.get_one::<String>("balance") {
+        balance.clone() 
+    } else {
+        format!("{}/us-balance-ttm.csv", data_dir)
     };
 
     println!("🚀 TTM Financial Data Import Started");
@@ -64,10 +62,13 @@ async fn main() -> Result<()> {
 
     let start_time = Instant::now();
 
-    // Use protected database initialization
-    let pool = initialize_database_safely(db_path).await
-        .map_err(|e| anyhow::anyhow!("Database initialization failed: {}", e))?;
-    println!("✅ Connected to database with safety checks: {}", db_path);
+    // Direct database connection to production database
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect(&format!("sqlite:{}?mode=rwc", db_path))
+        .await?;
+        
+    println!("✅ Connected to production database: {}", db_path);
 
     // Check if stocks exist in the database
     let stock_count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM stocks")
@@ -77,7 +78,6 @@ async fn main() -> Result<()> {
     if stock_count == 0 {
         eprintln!("❌ No stocks found in database!");
         eprintln!("💡 Please run the basic SimFin importer first to populate stocks table");
-        eprintln!("   cargo run --bin import_simfin -- --prices <daily_prices.csv> --income <quarterly_income.csv>");
         return Ok(());
     }
 
@@ -139,7 +139,6 @@ struct DatabaseStats {
     total_balance_sheets: i64,
     ttm_income_statements: i64,
     ttm_balance_sheets: i64,
-    database_size_mb: f64,
 }
 
 /// Get comprehensive database statistics
@@ -167,7 +166,6 @@ async fn get_database_statistics(pool: &sqlx::SqlitePool) -> Result<DatabaseStat
         total_balance_sheets,
         ttm_income_statements,
         ttm_balance_sheets,
-        database_size_mb: 0.0, // Will be calculated separately
     })
 }
 

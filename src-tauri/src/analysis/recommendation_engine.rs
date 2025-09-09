@@ -41,29 +41,143 @@ impl RecommendationEngine {
         Self { pool }
     }
 
-    /// Analyze P/E ratios for all S&P 500 stocks
+    /// Analyze P/E ratios for all S&P 500 stocks (OPTIMIZED)
     pub async fn analyze_sp500_pe_values(&self) -> Result<Vec<PEAnalysis>, Box<dyn std::error::Error>> {
-        println!("🔍 Starting S&P 500 P/E analysis...");
+        println!("🔍 Starting optimized S&P 500 P/E analysis...");
 
         // Get all S&P 500 stocks that have P/E data
         let sp500_stocks = self.get_sp500_stocks_with_pe_data().await?;
         println!("📊 Found {} S&P 500 stocks with P/E data", sp500_stocks.len());
 
-        let mut analyses = Vec::new();
-
-        for (stock_id, symbol, company_name) in sp500_stocks {
-            match self.analyze_stock_pe_history(stock_id, &symbol, &company_name).await {
-                Ok(analysis) => {
-                    analyses.push(analysis);
-                }
-                Err(e) => {
-                    eprintln!("⚠️  Error analyzing {}: {}", symbol, e);
-                }
-            }
-        }
+        // Use bulk analysis for better performance
+        let analyses = self.bulk_analyze_stocks(sp500_stocks).await?;
 
         println!("✅ Completed P/E analysis for {} stocks", analyses.len());
         Ok(analyses)
+    }
+
+    /// Bulk analyze stocks with optimized database queries
+    async fn bulk_analyze_stocks(&self, stocks: Vec<(i64, String, String)>) -> Result<Vec<PEAnalysis>, Box<dyn std::error::Error>> {
+        use futures::future::join_all;
+        use std::sync::Arc;
+        
+        // Create semaphore to limit concurrent database connections
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(20)); // Max 20 concurrent
+        let pool = Arc::new(self.pool.clone());
+        
+        // Create concurrent tasks for each stock
+        let tasks: Vec<_> = stocks.into_iter().map(|(stock_id, symbol, company_name)| {
+            let semaphore = semaphore.clone();
+            let pool = pool.clone();
+            
+            tokio::spawn(async move {
+                let _permit = semaphore.acquire().await.unwrap();
+                
+                // Perform bulk analysis for this stock
+                match Self::analyze_single_stock_optimized(pool.as_ref(), stock_id, &symbol, &company_name).await {
+                    Ok(analysis) => Some(analysis),
+                    Err(e) => {
+                        eprintln!("⚠️  Error analyzing {}: {}", symbol, e);
+                        None
+                    }
+                }
+            })
+        }).collect();
+        
+        // Wait for all tasks to complete
+        let results = join_all(tasks).await;
+        
+        // Collect successful results
+        let mut analyses = Vec::new();
+        for result in results {
+            if let Ok(Some(analysis)) = result {
+                analyses.push(analysis);
+            }
+        }
+        
+        Ok(analyses)
+    }
+
+    /// Optimized single stock analysis with fewer database calls
+    async fn analyze_single_stock_optimized(
+        pool: &SqlitePool,
+        stock_id: i64,
+        symbol: &str,
+        company_name: &str
+    ) -> Result<PEAnalysis, Box<dyn std::error::Error>> {
+        // Single query to get all P/E data AND current P/E with date
+        let query = "
+            SELECT pe_ratio, date,
+                   (SELECT pe_ratio FROM daily_prices dp2 
+                    WHERE dp2.stock_id = ? AND dp2.pe_ratio IS NOT NULL 
+                    ORDER BY dp2.date DESC LIMIT 1) as current_pe,
+                   (SELECT date FROM daily_prices dp3 
+                    WHERE dp3.stock_id = ? AND dp3.pe_ratio IS NOT NULL 
+                    ORDER BY dp3.date DESC LIMIT 1) as current_date
+            FROM daily_prices
+            WHERE stock_id = ? AND pe_ratio IS NOT NULL AND pe_ratio > 0
+            ORDER BY date
+        ";
+
+        let rows = sqlx::query(query)
+            .bind(stock_id)
+            .bind(stock_id)
+            .bind(stock_id)
+            .fetch_all(pool)
+            .await?;
+
+        if rows.is_empty() {
+            return Ok(PEAnalysis {
+                symbol: symbol.to_string(),
+                company_name: company_name.to_string(),
+                current_pe: None,
+                current_pe_date: None,
+                historical_min: 0.0,
+                historical_max: 0.0,
+                historical_avg: 0.0,
+                historical_median: 0.0,
+                value_score: 0.0,
+                risk_score: 100.0,
+                value_threshold: 0.0,
+                is_value_stock: false,
+                data_points: 0,
+                reasoning: "No P/E data available".to_string(),
+            });
+        }
+
+        // Extract P/E data and current values
+        let pe_data: Vec<f64> = rows.iter().map(|r| r.get::<f64, _>("pe_ratio")).collect();
+        let current_pe: Option<f64> = rows.first().and_then(|r| r.try_get("current_pe").ok());
+        let current_pe_date: Option<String> = rows.first().and_then(|r| r.try_get("current_date").ok());
+
+        // Calculate statistics
+        let stats = calculate_pe_statistics(&pe_data);
+        
+        // Calculate scores
+        let value_score = calculate_value_score(current_pe, &stats);
+        let risk_score = calculate_risk_score(current_pe, &stats);
+        let is_value = is_value_stock(current_pe, &stats);
+        let value_threshold = stats.min * 1.20;
+
+        let mut analysis = PEAnalysis {
+            symbol: symbol.to_string(),
+            company_name: company_name.to_string(),
+            current_pe,
+            current_pe_date,
+            historical_min: stats.min,
+            historical_max: stats.max,
+            historical_avg: stats.mean,
+            historical_median: stats.median,
+            value_score,
+            risk_score,
+            value_threshold,
+            is_value_stock: is_value,
+            data_points: stats.data_points,
+            reasoning: String::new(),
+        };
+
+        analysis.reasoning = generate_reasoning(&analysis);
+        Ok(analysis)
     }
 
     /// Get value stock recommendations based on P/E criteria
@@ -215,17 +329,9 @@ impl RecommendationEngine {
         })
     }
 
-    /// Get S&P 500 stocks that have P/E data
+    /// Get S&P 500 stocks that have P/E data (OPTIMIZED with cache table)
     async fn get_sp500_stocks_with_pe_data(&self) -> Result<Vec<(i64, String, String)>, Box<dyn std::error::Error>> {
-        let query = "
-            SELECT DISTINCT s.id, s.symbol, s.company_name
-            FROM stocks s
-            INNER JOIN sp500_symbols sp ON s.symbol = sp.symbol
-            INNER JOIN daily_prices dp ON s.id = dp.stock_id
-            WHERE dp.pe_ratio IS NOT NULL AND dp.pe_ratio > 0
-            ORDER BY s.symbol
-        ";
-
+        let query = "SELECT id, symbol, company_name FROM sp500_pe_cache ORDER BY symbol";
         let rows = sqlx::query(query).fetch_all(&self.pool).await?;
 
         let stocks = rows
@@ -310,15 +416,9 @@ impl RecommendationEngine {
         Ok(row.get::<i64, _>("count") as usize)
     }
 
-    /// Count S&P 500 stocks with P/E data
+    /// Count S&P 500 stocks with P/E data (OPTIMIZED)
     async fn count_sp500_stocks_with_pe(&self) -> Result<usize, Box<dyn std::error::Error>> {
-        let query = "
-            SELECT COUNT(DISTINCT s.id) as count
-            FROM stocks s
-            INNER JOIN sp500_symbols sp ON s.symbol = sp.symbol
-            INNER JOIN daily_prices dp ON s.id = dp.stock_id
-            WHERE dp.pe_ratio IS NOT NULL AND dp.pe_ratio > 0
-        ";
+        let query = "SELECT COUNT(*) as count FROM sp500_pe_cache";
         let row = sqlx::query(query).fetch_one(&self.pool).await?;
         Ok(row.get::<i64, _>("count") as usize)
     }

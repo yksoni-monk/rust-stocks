@@ -21,6 +21,21 @@ pub struct DateRangeInfo {
     pub data_source: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValuationRatios {
+    pub stock_id: i64,
+    pub symbol: String,
+    pub date: String,
+    pub price: Option<f64>,
+    pub market_cap: Option<f64>,
+    pub enterprise_value: Option<f64>,
+    pub ps_ratio_ttm: Option<f64>,
+    pub evs_ratio_ttm: Option<f64>,
+    pub revenue_ttm: Option<f64>,
+    pub data_completeness_score: i32,
+    pub last_financial_update: Option<String>,
+}
+
 async fn get_database_connection() -> Result<SqlitePool, String> {
     let database_url = "sqlite:../stocks.db";
     SqlitePool::connect(database_url).await
@@ -139,6 +154,180 @@ pub async fn get_stock_date_range(symbol: String) -> Result<DateRangeInfo, Strin
         }
         Err(e) => {
             Err(format!("Database error: {}", e))
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn get_valuation_ratios(symbol: String) -> Result<Option<ValuationRatios>, String> {
+    let pool = get_database_connection().await?;
+    
+    let query = "
+        SELECT 
+            dvr.stock_id,
+            s.symbol,
+            dvr.date,
+            dvr.price,
+            dvr.market_cap,
+            dvr.enterprise_value,
+            dvr.ps_ratio_ttm,
+            dvr.evs_ratio_ttm,
+            dvr.revenue_ttm,
+            dvr.data_completeness_score,
+            dvr.last_financial_update
+        FROM daily_valuation_ratios dvr
+        JOIN stocks s ON dvr.stock_id = s.id
+        WHERE s.symbol = ?1
+        ORDER BY dvr.date DESC
+        LIMIT 1
+    ";
+    
+    match sqlx::query(query)
+        .bind(&symbol)
+        .fetch_optional(&pool).await 
+    {
+        Ok(Some(row)) => {
+            let ratios = ValuationRatios {
+                stock_id: row.get("stock_id"),
+                symbol: row.get("symbol"),
+                date: row.get("date"),
+                price: row.get("price"),
+                market_cap: row.get("market_cap"),
+                enterprise_value: row.get("enterprise_value"),
+                ps_ratio_ttm: row.get("ps_ratio_ttm"),
+                evs_ratio_ttm: row.get("evs_ratio_ttm"),
+                revenue_ttm: row.get("revenue_ttm"),
+                data_completeness_score: row.get("data_completeness_score"),
+                last_financial_update: row.get("last_financial_update"),
+            };
+            Ok(Some(ratios))
+        }
+        Ok(None) => Ok(None),
+        Err(e) => {
+            eprintln!("Valuation ratios query error: {}", e);
+            Err(format!("Database query failed: {}", e))
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn get_ps_evs_history(symbol: String, start_date: String, end_date: String) -> Result<Vec<ValuationRatios>, String> {
+    let pool = get_database_connection().await?;
+    
+    // Validate date format
+    chrono::NaiveDate::parse_from_str(&start_date, "%Y-%m-%d")
+        .map_err(|e| format!("Invalid start date format: {}", e))?;
+    
+    chrono::NaiveDate::parse_from_str(&end_date, "%Y-%m-%d")
+        .map_err(|e| format!("Invalid end date format: {}", e))?;
+    
+    let query = "
+        SELECT 
+            dvr.stock_id,
+            s.symbol,
+            dvr.date,
+            dvr.price,
+            dvr.market_cap,
+            dvr.enterprise_value,
+            dvr.ps_ratio_ttm,
+            dvr.evs_ratio_ttm,
+            dvr.revenue_ttm,
+            dvr.data_completeness_score,
+            dvr.last_financial_update
+        FROM daily_valuation_ratios dvr
+        JOIN stocks s ON dvr.stock_id = s.id
+        WHERE s.symbol = ?1 AND dvr.date BETWEEN ?2 AND ?3
+        ORDER BY dvr.date ASC
+        LIMIT 1000
+    ";
+    
+    match sqlx::query(query)
+        .bind(&symbol)
+        .bind(&start_date)
+        .bind(&end_date)
+        .fetch_all(&pool).await 
+    {
+        Ok(rows) => {
+            let ratios_data: Vec<ValuationRatios> = rows.into_iter().map(|row| {
+                ValuationRatios {
+                    stock_id: row.get("stock_id"),
+                    symbol: row.get("symbol"),
+                    date: row.get("date"),
+                    price: row.get("price"),
+                    market_cap: row.get("market_cap"),
+                    enterprise_value: row.get("enterprise_value"),
+                    ps_ratio_ttm: row.get("ps_ratio_ttm"),
+                    evs_ratio_ttm: row.get("evs_ratio_ttm"),
+                    revenue_ttm: row.get("revenue_ttm"),
+                    data_completeness_score: row.get("data_completeness_score"),
+                    last_financial_update: row.get("last_financial_update"),
+                }
+            }).collect();
+            
+            Ok(ratios_data)
+        }
+        Err(e) => {
+            eprintln!("P/S EV/S history query error: {}", e);
+            Err(format!("Database query failed: {}", e))
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn get_undervalued_stocks_by_ps(max_ps_ratio: f64, limit: Option<i32>) -> Result<Vec<ValuationRatios>, String> {
+    let pool = get_database_connection().await?;
+    
+    let limit_value = limit.unwrap_or(50);
+    
+    let query = "
+        SELECT 
+            dvr.stock_id,
+            s.symbol,
+            dvr.date,
+            dvr.price,
+            dvr.market_cap,
+            dvr.enterprise_value,
+            dvr.ps_ratio_ttm,
+            dvr.evs_ratio_ttm,
+            dvr.revenue_ttm,
+            dvr.data_completeness_score,
+            dvr.last_financial_update
+        FROM daily_valuation_ratios dvr
+        JOIN stocks s ON dvr.stock_id = s.id
+        WHERE dvr.ps_ratio_ttm IS NOT NULL 
+          AND dvr.ps_ratio_ttm > 0 
+          AND dvr.ps_ratio_ttm <= ?1
+        ORDER BY dvr.ps_ratio_ttm ASC
+        LIMIT ?2
+    ";
+    
+    match sqlx::query(query)
+        .bind(max_ps_ratio)
+        .bind(limit_value)
+        .fetch_all(&pool).await 
+    {
+        Ok(rows) => {
+            let undervalued_stocks: Vec<ValuationRatios> = rows.into_iter().map(|row| {
+                ValuationRatios {
+                    stock_id: row.get("stock_id"),
+                    symbol: row.get("symbol"),
+                    date: row.get("date"),
+                    price: row.get("price"),
+                    market_cap: row.get("market_cap"),
+                    enterprise_value: row.get("enterprise_value"),
+                    ps_ratio_ttm: row.get("ps_ratio_ttm"),
+                    evs_ratio_ttm: row.get("evs_ratio_ttm"),
+                    revenue_ttm: row.get("revenue_ttm"),
+                    data_completeness_score: row.get("data_completeness_score"),
+                    last_financial_update: row.get("last_financial_update"),
+                }
+            }).collect();
+            
+            Ok(undervalued_stocks)
+        }
+        Err(e) => {
+            eprintln!("Undervalued stocks query error: {}", e);
+            Err(format!("Database query failed: {}", e))
         }
     }
 }

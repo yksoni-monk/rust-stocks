@@ -7,17 +7,57 @@ function RecommendationsPanel({ onClose }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [limit, setLimit] = useState(20);
+  const [screeningType, setScreeningType] = useState('pe'); // 'pe' or 'ps'
+  const [psRatio, setPsRatio] = useState(1.0);
 
   useEffect(() => {
     loadRecommendationsWithStats();
-  }, [limit]);
+  }, [limit, screeningType, psRatio]);
 
   async function loadRecommendationsWithStats() {
     try {
       setLoading(true);
-      const response = await invoke('get_value_recommendations_with_stats', { limit });
-      setRecommendations(response.recommendations);
-      setStats(response.stats);
+      
+      if (screeningType === 'ps') {
+        // P/S ratio screening for undervalued stocks
+        const psStocks = await invoke('get_undervalued_stocks_by_ps', { 
+          max_ps_ratio: psRatio, 
+          limit 
+        });
+        
+        // Transform P/S data to match recommendations format
+        const transformedRecommendations = psStocks.map((stock, index) => ({
+          rank: index + 1,
+          symbol: stock.symbol,
+          company_name: stock.symbol, // We'll use symbol as company name for now
+          current_pe: null,
+          current_pe_date: null,
+          historical_min_pe: 0,
+          historical_max_pe: 0,
+          value_score: Math.max(0, Math.min(100, (2.0 - (stock.ps_ratio_ttm || 0)) * 50)), // Higher score for lower P/S
+          risk_score: Math.min(100, (stock.ps_ratio_ttm || 0) * 20), // Lower risk for lower P/S
+          data_points: stock.data_completeness_score || 0,
+          reasoning: `P/S ratio of ${(stock.ps_ratio_ttm || 0).toFixed(2)} indicates potential undervaluation`,
+          ps_ratio_ttm: stock.ps_ratio_ttm,
+          evs_ratio_ttm: stock.evs_ratio_ttm,
+          market_cap: stock.market_cap,
+          revenue_ttm: stock.revenue_ttm
+        }));
+        
+        setRecommendations(transformedRecommendations);
+        setStats({
+          total_sp500_stocks: 503,
+          stocks_with_pe_data: psStocks.length,
+          value_stocks_found: psStocks.length,
+          average_value_score: transformedRecommendations.reduce((sum, r) => sum + r.value_score, 0) / transformedRecommendations.length || 0,
+          average_risk_score: transformedRecommendations.reduce((sum, r) => sum + r.risk_score, 0) / transformedRecommendations.length || 0
+        });
+      } else {
+        // Original P/E ratio screening
+        const response = await invoke('get_value_recommendations_with_stats', { limit });
+        setRecommendations(response.recommendations);
+        setStats(response.stats);
+      }
     } catch (err) {
       setError(`Failed to load recommendations: ${err}`);
       console.error('Error loading recommendations:', err);
@@ -90,7 +130,12 @@ function RecommendationsPanel({ onClose }) {
         <div className="bg-blue-600 text-white p-6 flex justify-between items-center">
           <div>
             <h2 className="text-2xl font-bold">Stock Value Recommendations</h2>
-            <p className="text-blue-100 mt-1">P/E ratio-based value screening for S&P 500 stocks</p>
+            <p className="text-blue-100 mt-1">
+              {screeningType === 'ps' 
+                ? `P/S ratio-based value screening (P/S ≤ ${psRatio})` 
+                : 'P/E ratio-based value screening for S&P 500 stocks'
+              }
+            </p>
           </div>
           <button
             onClick={onClose}
@@ -130,21 +175,57 @@ function RecommendationsPanel({ onClose }) {
 
         {/* Controls */}
         <div className="p-4 bg-gray-50 border-b">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <label className="text-sm font-medium text-gray-700">
-                Show top:
-              </label>
-              <select
-                value={limit}
-                onChange={(e) => setLimit(Number(e.target.value))}
-                className="border border-gray-300 rounded px-3 py-1 text-sm"
-              >
-                <option value={10}>10 stocks</option>
-                <option value={20}>20 stocks</option>
-                <option value={50}>50 stocks</option>
-                <option value={100}>100 stocks</option>
-              </select>
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-6">
+              {/* Screening Type Selection */}
+              <div className="flex items-center gap-4">
+                <label className="text-sm font-medium text-gray-700">
+                  Screening Method:
+                </label>
+                <select
+                  value={screeningType}
+                  onChange={(e) => setScreeningType(e.target.value)}
+                  className="border border-gray-300 rounded px-3 py-1 text-sm"
+                >
+                  <option value="pe">P/E Ratio (Historical)</option>
+                  <option value="ps">P/S Ratio (TTM)</option>
+                </select>
+              </div>
+
+              {/* P/S Ratio Threshold (only show for P/S screening) */}
+              {screeningType === 'ps' && (
+                <div className="flex items-center gap-2">
+                  <label className="text-sm font-medium text-gray-700">
+                    Max P/S Ratio:
+                  </label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0.1"
+                    max="5.0"
+                    value={psRatio}
+                    onChange={(e) => setPsRatio(Number(e.target.value))}
+                    className="border border-gray-300 rounded px-2 py-1 text-sm w-20"
+                  />
+                </div>
+              )}
+
+              {/* Limit Selection */}
+              <div className="flex items-center gap-2">
+                <label className="text-sm font-medium text-gray-700">
+                  Show top:
+                </label>
+                <select
+                  value={limit}
+                  onChange={(e) => setLimit(Number(e.target.value))}
+                  className="border border-gray-300 rounded px-3 py-1 text-sm"
+                >
+                  <option value={10}>10 stocks</option>
+                  <option value={20}>20 stocks</option>
+                  <option value={50}>50 stocks</option>
+                  <option value={100}>100 stocks</option>
+                </select>
+              </div>
             </div>
             <div className="text-sm text-gray-600">
               Found {recommendations.length} value opportunities
@@ -184,26 +265,56 @@ function RecommendationsPanel({ onClose }) {
 
                     {/* Metrics */}
                     <div className="flex gap-4 items-center">
-                      {/* Current P/E */}
-                      <div className="text-center">
-                        <div className="text-lg font-bold text-gray-900">
-                          {rec.current_pe ? rec.current_pe.toFixed(1) : 'N/A'}
-                        </div>
-                        <div className="text-xs text-gray-500">Current P/E</div>
-                        {rec.current_pe_date && (
-                          <div className="text-xs text-gray-400">
-                            {new Date(rec.current_pe_date).toLocaleDateString()}
+                      {screeningType === 'ps' ? (
+                        <>
+                          {/* P/S Ratio */}
+                          <div className="text-center">
+                            <div className="text-lg font-bold text-gray-900">
+                              {rec.ps_ratio_ttm ? rec.ps_ratio_ttm.toFixed(2) : 'N/A'}
+                            </div>
+                            <div className="text-xs text-gray-500">P/S Ratio (TTM)</div>
                           </div>
-                        )}
-                      </div>
 
-                      {/* Historical Range */}
-                      <div className="text-center">
-                        <div className="text-sm text-gray-700">
-                          {rec.historical_min_pe.toFixed(1)} - {rec.historical_max_pe.toFixed(1)}
-                        </div>
-                        <div className="text-xs text-gray-500">Historical Range</div>
-                      </div>
+                          {/* EV/S Ratio */}
+                          <div className="text-center">
+                            <div className="text-lg font-bold text-gray-900">
+                              {rec.evs_ratio_ttm ? rec.evs_ratio_ttm.toFixed(2) : 'N/A'}
+                            </div>
+                            <div className="text-xs text-gray-500">EV/S Ratio (TTM)</div>
+                          </div>
+
+                          {/* Market Cap */}
+                          <div className="text-center">
+                            <div className="text-sm text-gray-700">
+                              {rec.market_cap ? `$${(rec.market_cap / 1e9).toFixed(1)}B` : 'N/A'}
+                            </div>
+                            <div className="text-xs text-gray-500">Market Cap</div>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          {/* Current P/E */}
+                          <div className="text-center">
+                            <div className="text-lg font-bold text-gray-900">
+                              {rec.current_pe ? rec.current_pe.toFixed(1) : 'N/A'}
+                            </div>
+                            <div className="text-xs text-gray-500">Current P/E</div>
+                            {rec.current_pe_date && (
+                              <div className="text-xs text-gray-400">
+                                {new Date(rec.current_pe_date).toLocaleDateString()}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Historical Range */}
+                          <div className="text-center">
+                            <div className="text-sm text-gray-700">
+                              {rec.historical_min_pe.toFixed(1)} - {rec.historical_max_pe.toFixed(1)}
+                            </div>
+                            <div className="text-xs text-gray-500">Historical Range</div>
+                          </div>
+                        </>
+                      )}
 
                       {/* Value Score */}
                       <div className="text-center">
@@ -237,9 +348,20 @@ function RecommendationsPanel({ onClose }) {
         {/* Footer */}
         <div className="bg-gray-50 p-4 border-t">
           <div className="text-xs text-gray-600 space-y-1">
-            <p><strong>Value Criteria:</strong> Current P/E ≤ Historical Minimum × 1.20 (20% above historical low)</p>
-            <p><strong>Value Score:</strong> Higher is better (0-120). Based on position in historical P/E range with bonuses for near-minimum values.</p>
-            <p><strong>Risk Score:</strong> Lower is better (0-100). Based on P/E volatility, extreme values, and data quality.</p>
+            {screeningType === 'ps' ? (
+              <>
+                <p><strong>P/S Screening Criteria:</strong> TTM P/S ratio ≤ {psRatio} (stocks trading at low price-to-sales multiples)</p>
+                <p><strong>Value Score:</strong> Higher is better (0-100). Based on how low the P/S ratio is relative to threshold.</p>
+                <p><strong>Risk Score:</strong> Lower is better (0-100). Higher P/S ratios indicate higher valuation risk.</p>
+                <p><strong>TTM:</strong> Trailing Twelve Months financial data from SimFin.</p>
+              </>
+            ) : (
+              <>
+                <p><strong>P/E Screening Criteria:</strong> Current P/E ≤ Historical Minimum × 1.20 (20% above historical low)</p>
+                <p><strong>Value Score:</strong> Higher is better (0-120). Based on position in historical P/E range with bonuses for near-minimum values.</p>
+                <p><strong>Risk Score:</strong> Lower is better (0-100). Based on P/E volatility, extreme values, and data quality.</p>
+              </>
+            )}
             <p><strong>Disclaimer:</strong> This analysis is for educational purposes only. Past performance does not predict future results. Consider additional factors before investing.</p>
           </div>
         </div>

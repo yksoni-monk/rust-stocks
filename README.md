@@ -31,6 +31,49 @@ This system provides comprehensive stock market data analysis capabilities, feat
 - ✅ **High-Performance Processing**: 6.2M price records + 52k+ financial records
 - ✅ **S&P 500 Support**: Integrated filtering and offline symbol management
 
+## 🎯 Product Features
+
+### 📊 Value Screening & Analysis
+- **Dual Screening Methods**: P/E ratio (historical) and P/S ratio (TTM) based value screening
+- **P/S Ratio Screening**: Find undervalued stocks with customizable P/S thresholds (0.1-5.0)
+- **P/E Historical Analysis**: Identify stocks trading near historical P/E minimums  
+- **Value Recommendations**: AI-powered scoring system with value/risk assessment
+- **Real-Time Statistics**: Live stats showing screening results and data quality metrics
+
+### 📈 Interactive Stock Analysis
+- **Multi-Metric Visualization**: Price history, P/E trends, P/S ratios, EV/S ratios, volume analysis
+- **Mix Mode Charts**: Dual-axis visualization (Price + P/E, P/S + EV/S) for comprehensive analysis
+- **Historical Data Range**: 2019-2024 daily price data with quarterly financial statements
+- **Chart Export**: Export visualizations and data for external analysis
+- **Date Range Selection**: Flexible time period analysis for any stock
+
+### 🔍 Advanced Search & Filtering  
+- **Smart Stock Search**: Search by symbol or company name with real-time results
+- **S&P 500 Filtering**: Toggle between all 5,876+ stocks or S&P 500 subset (503 stocks)
+- **Data Status Indicators**: Visual indicators showing stocks with complete data (📊) vs limited data (📋)
+- **Paginated Results**: Efficient loading of large datasets with customizable page sizes
+- **Multiple Panel Support**: Compare multiple stocks side-by-side in expandable panels
+
+### 💼 Professional Data Integration
+- **SimFin Financial Data**: Professional-grade financial statements and ratios
+- **TTM Calculations**: Trailing twelve months data for P/S, EV/S ratios (3,294+ ratios available)
+- **96.4% Data Completeness**: High-quality dataset with comprehensive coverage
+- **Offline-First Architecture**: Full functionality without internet connectivity
+- **Enterprise Database**: 2.5GB production database with automated backup system
+
+### 🖥️ Modern Desktop Experience
+- **Tauri Desktop App**: Native performance with web technologies (Rust + React)
+- **Expandable Panels UI**: Single-page interface with contextual expansion
+- **Responsive Design**: Smooth animations and professional user interface
+- **Cross-Platform**: Windows, macOS, and Linux support
+- **Real-Time Updates**: Live data loading with loading states and error handling
+
+### 📤 Data Export & Integration
+- **Multiple Export Formats**: CSV and JSON export for any analysis view
+- **Recommendation Reports**: Export value screening results with detailed metrics
+- **Chart Data Export**: Export underlying data from any visualization
+- **Future API Integration**: Charles Schwab API integration planned for real-time quotes
+
 ## 🛠️ Setup & Data Import
 
 ### Prerequisites

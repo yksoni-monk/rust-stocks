@@ -19,11 +19,19 @@ function AnalysisPanel({ stock }) {
   const [peChartCustomEndDate, setPeChartCustomEndDate] = useState('2024-12-31');
   const [peChartData, setPeChartData] = useState([]);
   const [peChartLoading, setPeChartLoading] = useState(false);
+  
+  // P/S and EV/S specific state
+  const [valuationRatios, setValuationRatios] = useState(null);
+  const [psEvsHistory, setPsEvsHistory] = useState([]);
+  const [valuationLoading, setValuationLoading] = useState(false);
 
   const metricOptions = [
     { value: 'price', label: 'Price History' },
     { value: 'pe_ratio', label: 'P/E Ratio Trend' },
+    { value: 'ps_ratio', label: 'P/S Ratio (TTM)' },
+    { value: 'evs_ratio', label: 'EV/S Ratio (TTM)' },
     { value: 'mix_mode', label: 'Mix Mode (Price + P/E)' },
+    { value: 'valuation_mix', label: 'P/S & EV/S Ratios' },
     { value: 'eps', label: 'Earnings Per Share' },
     { value: 'dividend_yield', label: 'Dividend Yield' },
     { value: 'volume', label: 'Trading Volume' },
@@ -168,6 +176,44 @@ function AnalysisPanel({ stock }) {
     }
   };
 
+  const loadValuationRatios = async () => {
+    if (!stock?.symbol) return;
+
+    try {
+      const ratios = await invoke('get_valuation_ratios', {
+        symbol: stock.symbol
+      });
+      setValuationRatios(ratios);
+    } catch (err) {
+      console.error('Failed to load valuation ratios:', err);
+      setValuationRatios(null);
+    }
+  };
+
+  const loadPsEvsHistory = async () => {
+    if (!stock?.symbol) return;
+
+    setValuationLoading(true);
+
+    try {
+      const { startDate, endDate } = getDateRange();
+      
+      const history = await invoke('get_ps_evs_history', {
+        symbol: stock.symbol,
+        startDate,
+        endDate
+      });
+
+      setPsEvsHistory(history || []);
+
+    } catch (err) {
+      console.error('Failed to load P/S EV/S history:', err);
+      setPsEvsHistory([]);
+    } finally {
+      setValuationLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (stock?.symbol) {
       loadStockDateRange();
@@ -182,10 +228,19 @@ function AnalysisPanel({ stock }) {
     loadPeChartData();
   }, [stock.symbol, peChartPeriod, peChartCustomStartDate, peChartCustomEndDate, stockDateRange]);
 
+  useEffect(() => {
+    if (stock?.symbol) {
+      loadValuationRatios();
+      loadPsEvsHistory();
+    }
+  }, [stock.symbol, selectedPeriod, customStartDate, customEndDate, stockDateRange]);
+
   const getMetricValue = (record, metric) => {
     switch (metric) {
       case 'price': return record.close || record.close_price;
       case 'pe_ratio': return record.pe_ratio;
+      case 'ps_ratio': return record.ps_ratio_ttm;
+      case 'evs_ratio': return record.evs_ratio_ttm;
       case 'eps': return record.eps;
       case 'dividend_yield': return record.dividend_yield;
       case 'volume': return record.volume;
@@ -202,6 +257,10 @@ function AnalysisPanel({ stock }) {
       case 'price':
       case 'eps':
         return `$${value.toFixed(2)}`;
+      case 'pe_ratio':
+      case 'ps_ratio':
+      case 'evs_ratio':
+        return value.toFixed(2);
       case 'dividend_yield':
         return `${value.toFixed(2)}%`;
       case 'volume':
@@ -239,6 +298,33 @@ function AnalysisPanel({ stock }) {
           pe_ratio: record.pe_ratio,
           formattedPrice: formatMetricValue(record.close || record.close_price, 'price'),
           formattedPeRatio: formatMetricValue(record.pe_ratio, 'pe_ratio')
+        }));
+      return chartData;
+    }
+    
+    if (selectedMetric === 'valuation_mix') {
+      // For valuation mix mode, combine P/S and EV/S data from psEvsHistory
+      const chartData = psEvsHistory
+        .filter(record => (record.ps_ratio_ttm !== null && record.ps_ratio_ttm !== undefined) ||
+                          (record.evs_ratio_ttm !== null && record.evs_ratio_ttm !== undefined))
+        .map(record => ({
+          date: record.date,
+          ps_ratio: record.ps_ratio_ttm,
+          evs_ratio: record.evs_ratio_ttm,
+          formattedPsRatio: formatMetricValue(record.ps_ratio_ttm, 'ps_ratio'),
+          formattedEvsRatio: formatMetricValue(record.evs_ratio_ttm, 'evs_ratio')
+        }));
+      return chartData;
+    }
+    
+    // For P/S and EV/S metrics, use psEvsHistory data
+    if (selectedMetric === 'ps_ratio' || selectedMetric === 'evs_ratio') {
+      const chartData = psEvsHistory
+        .filter(record => getMetricValue(record, selectedMetric) !== null)
+        .map(record => ({
+          date: record.date,
+          value: getMetricValue(record, selectedMetric),
+          formattedValue: formatMetricValue(getMetricValue(record, selectedMetric), selectedMetric)
         }));
       return chartData;
     }
@@ -283,6 +369,55 @@ function AnalysisPanel({ stock }) {
             <div className="text-sm text-gray-500">Avg Volume</div>
             <div className="text-lg font-bold text-purple-600">
               {Math.round(priceHistory.reduce((sum, p) => sum + (p.volume || 0), 0) / priceHistory.length).toLocaleString()}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* P/S and EV/S Valuation Metrics */}
+      {valuationRatios && (
+        <div className="bg-gradient-to-r from-green-50 to-blue-50 p-4 rounded-lg border border-green-200">
+          <h3 className="text-lg font-semibold text-gray-800 mb-3">📊 P/S & EV/S Valuation Ratios (TTM)</h3>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="bg-white p-3 rounded-lg border text-center">
+              <div className="text-sm text-gray-500">P/S Ratio</div>
+              <div className="text-lg font-bold text-green-600">
+                {valuationRatios.ps_ratio_ttm ? valuationRatios.ps_ratio_ttm.toFixed(2) : 'N/A'}
+              </div>
+              <div className="text-xs text-gray-400">Price/Sales</div>
+            </div>
+            <div className="bg-white p-3 rounded-lg border text-center">
+              <div className="text-sm text-gray-500">EV/S Ratio</div>
+              <div className="text-lg font-bold text-blue-600">
+                {valuationRatios.evs_ratio_ttm ? valuationRatios.evs_ratio_ttm.toFixed(2) : 'N/A'}
+              </div>
+              <div className="text-xs text-gray-400">Enterprise Value/Sales</div>
+            </div>
+            <div className="bg-white p-3 rounded-lg border text-center">
+              <div className="text-sm text-gray-500">Market Cap</div>
+              <div className="text-lg font-bold text-purple-600">
+                {valuationRatios.market_cap ? 
+                  valuationRatios.market_cap > 1e9 ? 
+                    `$${(valuationRatios.market_cap / 1e9).toFixed(2)}B` : 
+                    `$${(valuationRatios.market_cap / 1e6).toFixed(2)}M`
+                  : 'N/A'}
+              </div>
+            </div>
+            <div className="bg-white p-3 rounded-lg border text-center">
+              <div className="text-sm text-gray-500">TTM Revenue</div>
+              <div className="text-lg font-bold text-orange-600">
+                {valuationRatios.revenue_ttm ? 
+                  valuationRatios.revenue_ttm > 1e9 ? 
+                    `$${(valuationRatios.revenue_ttm / 1e9).toFixed(2)}B` : 
+                    `$${(valuationRatios.revenue_ttm / 1e6).toFixed(2)}M`
+                  : 'N/A'}
+              </div>
+            </div>
+          </div>
+          <div className="mt-3 text-center">
+            <div className="text-sm text-gray-600">
+              Data Completeness: {valuationRatios.data_completeness_score}% • 
+              Last Updated: {valuationRatios.last_financial_update || 'N/A'}
             </div>
           </div>
         </div>
@@ -458,6 +593,73 @@ function AnalysisPanel({ stock }) {
                         name="P/E Ratio"
                       />
                     </LineChart>
+                  ) : selectedMetric === 'valuation_mix' ? (
+                    <LineChart
+                      data={chartData}
+                      margin={{
+                        top: 20,
+                        right: 30,
+                        left: 20,
+                        bottom: 60,
+                      }}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                      <XAxis 
+                        dataKey="date" 
+                        angle={-45}
+                        textAnchor="end"
+                        height={80}
+                        tick={{ fontSize: 12 }}
+                        tickFormatter={(value) => value.slice(5)} // Show MM-DD
+                      />
+                      <YAxis 
+                        yAxisId="ps"
+                        orientation="left"
+                        tick={{ fontSize: 12 }}
+                        tickFormatter={(value) => value.toFixed(2)}
+                        stroke="#10b981"
+                      />
+                      <YAxis 
+                        yAxisId="evs"
+                        orientation="right"
+                        tick={{ fontSize: 12 }}
+                        tickFormatter={(value) => value.toFixed(2)}
+                        stroke="#f59e0b"
+                      />
+                      <Tooltip 
+                        formatter={(value, name) => [
+                          value.toFixed(2),
+                          name === 'P/S Ratio (TTM)' ? 'P/S Ratio (TTM)' : 'EV/S Ratio (TTM)'
+                        ]}
+                        labelFormatter={(label) => `Date: ${label}`}
+                        contentStyle={{
+                          backgroundColor: '#f8fafc',
+                          border: '1px solid #e2e8f0',
+                          borderRadius: '6px'
+                        }}
+                      />
+                      <Legend />
+                      <Line 
+                        yAxisId="ps"
+                        type="monotone" 
+                        dataKey="ps_ratio" 
+                        stroke="#10b981" 
+                        strokeWidth={2}
+                        dot={{ fill: '#10b981', strokeWidth: 1, r: 2 }}
+                        activeDot={{ r: 4, stroke: '#10b981', strokeWidth: 2 }}
+                        name="P/S Ratio (TTM)"
+                      />
+                      <Line 
+                        yAxisId="evs"
+                        type="monotone" 
+                        dataKey="evs_ratio" 
+                        stroke="#f59e0b" 
+                        strokeWidth={2}
+                        dot={{ fill: '#f59e0b', strokeWidth: 1, r: 2 }}
+                        activeDot={{ r: 4, stroke: '#f59e0b', strokeWidth: 2 }}
+                        name="EV/S Ratio (TTM)"
+                      />
+                    </LineChart>
                   ) : (
                     <LineChart
                       data={chartData.map(point => ({
@@ -522,6 +724,12 @@ function AnalysisPanel({ stock }) {
                         <th className="px-3 py-2 text-left font-medium text-gray-500">P/E Ratio</th>
                         <th className="px-3 py-2 text-left font-medium text-gray-500">Volume</th>
                       </>
+                    ) : selectedMetric === 'valuation_mix' ? (
+                      <>
+                        <th className="px-3 py-2 text-left font-medium text-gray-500">P/S Ratio</th>
+                        <th className="px-3 py-2 text-left font-medium text-gray-500">EV/S Ratio</th>
+                        <th className="px-3 py-2 text-left font-medium text-gray-500">Market Cap</th>
+                      </>
                     ) : (
                       <>
                         <th className="px-3 py-2 text-left font-medium text-gray-500">
@@ -548,6 +756,21 @@ function AnalysisPanel({ stock }) {
                             <td className="px-3 py-2 font-medium text-blue-600">${point.price.toFixed(2)}</td>
                             <td className="px-3 py-2 font-medium text-green-600">{point.pe_ratio.toFixed(2)}</td>
                             <td className="px-3 py-2">{record?.volume?.toLocaleString() || 'N/A'}</td>
+                          </>
+                        ) : selectedMetric === 'valuation_mix' ? (
+                          <>
+                            <td className="px-3 py-2 font-medium text-green-600">
+                              {point.ps_ratio ? point.ps_ratio.toFixed(2) : 'N/A'}
+                            </td>
+                            <td className="px-3 py-2 font-medium text-orange-600">
+                              {point.evs_ratio ? point.evs_ratio.toFixed(2) : 'N/A'}
+                            </td>
+                            <td className="px-3 py-2">
+                              {psEvsHistory.find(r => r.date === point.date)?.market_cap ? 
+                                `$${(psEvsHistory.find(r => r.date === point.date).market_cap / 1e9).toFixed(2)}B` : 
+                                'N/A'
+                              }
+                            </td>
                           </>
                         ) : (
                           <>

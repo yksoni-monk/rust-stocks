@@ -32,6 +32,12 @@ pub struct RecommendationStats {
     pub top_10_symbols: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecommendationResponse {
+    pub recommendations: Vec<StockRecommendation>,
+    pub stats: RecommendationStats,
+}
+
 pub struct RecommendationEngine {
     pool: SqlitePool,
 }
@@ -180,11 +186,15 @@ impl RecommendationEngine {
         Ok(analysis)
     }
 
-    /// Get value stock recommendations based on P/E criteria
-    pub async fn get_value_recommendations(&self, limit: Option<usize>) -> Result<Vec<StockRecommendation>, Box<dyn std::error::Error>> {
-        println!("🎯 Generating value stock recommendations...");
+    /// Get value stock recommendations with stats in one optimized call
+    pub async fn get_value_recommendations_with_stats(&self, limit: Option<usize>) -> Result<RecommendationResponse, Box<dyn std::error::Error>> {
+        println!("🎯 Generating value stock recommendations with stats...");
 
         let analyses = self.analyze_sp500_pe_values().await?;
+        
+        // Calculate stats from all analyses
+        let total_sp500 = self.count_sp500_stocks().await?;
+        let stocks_with_pe = analyses.len();
         
         // Filter for value stocks and sort by value score
         let mut value_stocks: Vec<PEAnalysis> = analyses
@@ -202,13 +212,34 @@ impl RecommendationEngine {
             }
         });
 
+        // Calculate stats from value stocks
+        let value_stocks_found = value_stocks.len();
+        let avg_value_score = if !value_stocks.is_empty() {
+            value_stocks.iter().map(|r| r.value_score).sum::<f64>() / value_stocks.len() as f64
+        } else {
+            0.0
+        };
+        let avg_risk_score = if !value_stocks.is_empty() {
+            value_stocks.iter().map(|r| r.risk_score).sum::<f64>() / value_stocks.len() as f64
+        } else {
+            0.0
+        };
+
         // Apply limit if specified
-        if let Some(limit) = limit {
-            value_stocks.truncate(limit);
-        }
+        let display_stocks = if let Some(limit) = limit {
+            value_stocks.into_iter().take(limit).collect()
+        } else {
+            value_stocks
+        };
+
+        let top_10_symbols: Vec<String> = display_stocks
+            .iter()
+            .take(10)
+            .map(|r| r.symbol.clone())
+            .collect();
 
         // Convert to recommendations with ranking
-        let recommendations: Vec<StockRecommendation> = value_stocks
+        let recommendations: Vec<StockRecommendation> = display_stocks
             .into_iter()
             .enumerate()
             .map(|(index, analysis)| StockRecommendation {
@@ -228,8 +259,26 @@ impl RecommendationEngine {
             })
             .collect();
 
-        println!("✅ Generated {} value stock recommendations", recommendations.len());
-        Ok(recommendations)
+        let stats = RecommendationStats {
+            total_sp500_stocks: total_sp500,
+            stocks_with_pe_data: stocks_with_pe,
+            value_stocks_found,
+            average_value_score: avg_value_score,
+            average_risk_score: avg_risk_score,
+            top_10_symbols,
+        };
+
+        println!("✅ Generated {} value stock recommendations with stats", recommendations.len());
+        Ok(RecommendationResponse {
+            recommendations,
+            stats,
+        })
+    }
+
+    /// Get value stock recommendations based on P/E criteria (legacy method)
+    pub async fn get_value_recommendations(&self, limit: Option<usize>) -> Result<Vec<StockRecommendation>, Box<dyn std::error::Error>> {
+        let response = self.get_value_recommendations_with_stats(limit).await?;
+        Ok(response.recommendations)
     }
 
     /// Analyze P/E history for a specific stock

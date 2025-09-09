@@ -1,11 +1,24 @@
 use sqlx::{SqlitePool, Row};
-use crate::analysis::recommendation_engine::{RecommendationEngine, StockRecommendation, RecommendationStats};
+use crate::analysis::recommendation_engine::{RecommendationEngine, StockRecommendation, RecommendationStats, RecommendationResponse};
 use crate::analysis::pe_statistics::PEAnalysis;
 
 async fn get_database_connection() -> Result<SqlitePool, String> {
     let database_url = "sqlite:../stocks.db";
     SqlitePool::connect(database_url).await
         .map_err(|e| format!("Database connection failed: {}", e))
+}
+
+#[tauri::command]
+pub async fn get_value_recommendations_with_stats(
+    limit: Option<usize>,
+) -> Result<RecommendationResponse, String> {
+    let pool = get_database_connection().await?;
+    let engine = RecommendationEngine::new(pool);
+    
+    engine
+        .get_value_recommendations_with_stats(limit)
+        .await
+        .map_err(|e| format!("Failed to get value recommendations with stats: {}", e))
 }
 
 #[tauri::command]

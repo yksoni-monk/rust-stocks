@@ -27,6 +27,7 @@ pub fn run() {
             // Analysis commands
             
             // Recommendation commands
+            recommendations::get_value_recommendations_with_stats,
             recommendations::get_value_recommendations,
             recommendations::analyze_sp500_pe_values,
             recommendations::get_recommendation_stats,

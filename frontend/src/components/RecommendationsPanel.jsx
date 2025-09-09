@@ -9,29 +9,20 @@ function RecommendationsPanel({ onClose }) {
   const [limit, setLimit] = useState(20);
 
   useEffect(() => {
-    loadRecommendations();
-    loadStats();
+    loadRecommendationsWithStats();
   }, [limit]);
 
-  async function loadRecommendations() {
+  async function loadRecommendationsWithStats() {
     try {
       setLoading(true);
-      const data = await invoke('get_value_recommendations', { limit });
-      setRecommendations(data);
+      const response = await invoke('get_value_recommendations_with_stats', { limit });
+      setRecommendations(response.recommendations);
+      setStats(response.stats);
     } catch (err) {
       setError(`Failed to load recommendations: ${err}`);
       console.error('Error loading recommendations:', err);
     } finally {
       setLoading(false);
-    }
-  }
-
-  async function loadStats() {
-    try {
-      const statsData = await invoke('get_recommendation_stats');
-      setStats(statsData);
-    } catch (err) {
-      console.error('Error loading stats:', err);
     }
   }
 
@@ -74,7 +65,7 @@ function RecommendationsPanel({ onClose }) {
             <p className="text-gray-600 mb-4">{error}</p>
             <div className="flex gap-2 justify-center">
               <button
-                onClick={loadRecommendations}
+                onClick={loadRecommendationsWithStats}
                 className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700"
               >
                 Retry

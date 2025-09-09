@@ -10,6 +10,7 @@ pub struct StockRecommendation {
     pub symbol: String,
     pub company_name: String,
     pub current_pe: Option<f64>,
+    pub current_pe_date: Option<String>, // Date of the current P/E ratio
     pub value_score: f64,
     pub risk_score: f64,
     pub rank: usize,
@@ -100,6 +101,7 @@ impl RecommendationEngine {
                 symbol: analysis.symbol.clone(),
                 company_name: analysis.company_name.clone(),
                 current_pe: analysis.current_pe,
+                current_pe_date: analysis.current_pe_date.clone(),
                 value_score: analysis.value_score,
                 risk_score: analysis.risk_score,
                 rank: index + 1,
@@ -126,6 +128,7 @@ impl RecommendationEngine {
                 symbol: symbol.to_string(),
                 company_name: company_name.to_string(),
                 current_pe: None,
+                current_pe_date: None,
                 historical_min: 0.0,
                 historical_max: 0.0,
                 historical_avg: 0.0,
@@ -142,8 +145,11 @@ impl RecommendationEngine {
         // Calculate statistics
         let stats = calculate_pe_statistics(&pe_data);
         
-        // Get current (most recent) P/E ratio
-        let current_pe = self.get_current_pe_ratio(stock_id).await?;
+        // Get current (most recent) P/E ratio with date
+        let (current_pe, current_pe_date) = match self.get_current_pe_with_date(stock_id).await? {
+            Some((pe, date)) => (Some(pe), Some(date)),
+            None => (None, None),
+        };
         
         // Calculate scores
         let value_score = calculate_value_score(current_pe, &stats);
@@ -155,6 +161,7 @@ impl RecommendationEngine {
             symbol: symbol.to_string(),
             company_name: company_name.to_string(),
             current_pe,
+            current_pe_date,
             historical_min: stats.min,
             historical_max: stats.max,
             historical_avg: stats.mean,
@@ -272,6 +279,28 @@ impl RecommendationEngine {
             .await?;
 
         Ok(row.map(|r| r.get::<f64, _>("pe_ratio")))
+    }
+
+    /// Get the most recent P/E ratio with date for a stock
+    async fn get_current_pe_with_date(&self, stock_id: i64) -> Result<Option<(f64, String)>, Box<dyn std::error::Error>> {
+        let query = "
+            SELECT pe_ratio, date
+            FROM daily_prices
+            WHERE stock_id = ? AND pe_ratio IS NOT NULL
+            ORDER BY date DESC
+            LIMIT 1
+        ";
+
+        let row = sqlx::query(query)
+            .bind(stock_id)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        Ok(row.map(|r| {
+            let pe_ratio: f64 = r.get("pe_ratio");
+            let date: String = r.get("date");
+            (pe_ratio, date)
+        }))
     }
 
     /// Count total S&P 500 stocks

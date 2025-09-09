@@ -17,6 +17,7 @@ pub struct PEAnalysis {
     pub symbol: String,
     pub company_name: String,
     pub current_pe: Option<f64>,
+    pub current_pe_date: Option<String>, // Date of the current P/E ratio
     pub historical_min: f64,
     pub historical_max: f64,
     pub historical_avg: f64,
@@ -198,9 +199,12 @@ pub fn generate_reasoning(analysis: &PEAnalysis) -> String {
     if let Some(current_pe) = analysis.current_pe {
         if analysis.is_value_stock {
             let pct_above_min = ((current_pe / analysis.historical_min) - 1.0) * 100.0;
+            let date_str = analysis.current_pe_date.as_ref()
+                .map(|d| format!(" (as of {})", d))
+                .unwrap_or_default();
             reasons.push(format!(
-                "P/E of {:.1} is only {:.1}% above historical minimum of {:.1}",
-                current_pe, pct_above_min, analysis.historical_min
+                "P/E of {:.1}{} is only {:.1}% above historical minimum of {:.1}",
+                current_pe, date_str, pct_above_min, analysis.historical_min
             ));
         }
 

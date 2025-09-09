@@ -199,6 +199,11 @@ function RecommendationsPanel({ onClose }) {
                           {rec.current_pe ? rec.current_pe.toFixed(1) : 'N/A'}
                         </div>
                         <div className="text-xs text-gray-500">Current P/E</div>
+                        {rec.current_pe_date && (
+                          <div className="text-xs text-gray-400">
+                            {new Date(rec.current_pe_date).toLocaleDateString()}
+                          </div>
+                        )}
                       </div>
 
                       {/* Historical Range */}

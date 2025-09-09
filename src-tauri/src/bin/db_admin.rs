@@ -1,5 +1,5 @@
 use clap::{Arg, Command};
-use rust_stocks_tauri_lib::database::{DatabaseManager, initialize_database_safely, run_manual_migration};
+use rust_stocks_tauri_lib::database::{DatabaseManager, run_manual_migration};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

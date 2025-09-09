@@ -4,7 +4,7 @@ use std::time::Instant;
 use anyhow::Result;
 
 // Import the ratio calculator module
-use rust_stocks::tools::ratio_calculator::{
+use rust_stocks_tauri_lib::tools::ratio_calculator::{
     calculate_ps_and_evs_ratios,
     calculate_ratios_for_negative_earnings_stocks,
     generate_ratio_summary_report,
@@ -127,7 +127,7 @@ async fn main() -> Result<()> {
 }
 
 /// Print calculation summary
-fn print_calculation_summary(stats: &rust_stocks::tools::ratio_calculator::RatioCalculationStats, duration: std::time::Duration) {
+fn print_calculation_summary(stats: &rust_stocks_tauri_lib::tools::ratio_calculator::RatioCalculationStats, duration: std::time::Duration) {
     println!("\n{}", "=".repeat(60));
     println!("🎉 RATIO CALCULATIONS COMPLETE");
     println!("{}", "=".repeat(60));

@@ -4,7 +4,7 @@ use std::time::Instant;
 use anyhow::Result;
 
 // Import the TTM importer module
-use rust_stocks::tools::ttm_importer::{
+use rust_stocks_tauri_lib::tools::ttm_importer::{
     import_complete_ttm_dataset,
     TTMImportStats,
 };

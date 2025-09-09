@@ -8,11 +8,71 @@ pub mod tools;
 pub mod analysis;
 
 use commands::*;
+use tauri::WindowEvent;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::default().build())
+        .on_window_event(|_window, event| match event {
+            WindowEvent::CloseRequested { .. } => {
+                println!("🔄 Window close requested - cleaning up orphaned processes...");
+                
+                #[cfg(not(target_os = "windows"))]
+                {
+                    use std::process::Command;
+                    use std::env;
+                    
+                    // Get the current working directory (project root)
+                    if let Ok(current_dir) = env::current_dir() {
+                        let project_path = current_dir.to_string_lossy();
+                        
+                        // Kill orphaned vite processes (not the main one managed by Tauri)
+                        // Target processes that are NOT the main dev server
+                        let _ = Command::new("pkill")
+                            .args(["-f", "vite.*--port.*5174"])
+                            .output();
+                        
+                        // Kill orphaned node processes in our project directory
+                        // but exclude the main npm run dev process that Tauri manages
+                        let _ = Command::new("pkill")
+                            .args(["-f", &format!("{}/src.*node.*vite", project_path)])
+                            .output();
+                        
+                        // Kill any orphaned esbuild processes
+                        let _ = Command::new("pkill")
+                            .args(["-f", "esbuild"])
+                            .output();
+                        
+                        println!("✅ Orphaned development processes cleaned up");
+                    } else {
+                        // Fallback: kill orphaned processes only
+                        let _ = Command::new("pkill")
+                            .args(["-f", "vite.*--port.*5174"])
+                            .output();
+                        
+                        let _ = Command::new("pkill")
+                            .args(["-f", "esbuild"])
+                            .output();
+                        
+                        println!("✅ Orphaned development processes cleaned up (fallback)");
+                    }
+                }
+                
+                #[cfg(target_os = "windows")]
+                {
+                    use std::process::Command;
+                    
+                    // Windows-specific cleanup for orphaned processes only
+                    let _ = Command::new("taskkill")
+                        .args(["/F", "/IM", "node.exe", "/FI", "WINDOWTITLE ne npm*"])
+                        .output();
+                    
+                    println!("✅ Orphaned development processes cleaned up (Windows)");
+                }
+            }
+            _ => {}
+        })
         .invoke_handler(tauri::generate_handler![
             // Stock commands
             stocks::get_all_stocks,

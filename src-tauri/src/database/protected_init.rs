@@ -1,4 +1,4 @@
-use sqlx::{SqlitePool, Row};
+use sqlx::SqlitePool;
 use std::path::Path;
 use crate::database::migrations::DatabaseManager;
 

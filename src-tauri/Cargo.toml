@@ -21,6 +21,14 @@ path = "src/bin/import_simfin.rs"
 name = "db_admin"
 path = "src/bin/db_admin.rs"
 
+[[bin]]
+name = "import_ttm"
+path = "src/bin/import_ttm.rs"
+
+[[bin]]
+name = "test_ttm_direct"
+path = "test_ttm_direct.rs"
+
 
 [lib]
 name = "rust_stocks_tauri_lib"

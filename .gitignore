@@ -1,7 +1,7 @@
 /target
 .env
 stocks.db
-stocks.db.backup.*
+*.db.backup.*
 schwab_tokens.json
 __pycache__/
 *.pyc

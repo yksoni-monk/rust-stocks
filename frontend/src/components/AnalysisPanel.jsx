@@ -426,8 +426,8 @@ function AnalysisPanel({ stock }) {
                       />
                       <Tooltip 
                         formatter={(value, name) => [
-                          name === 'price' ? `$${value.toFixed(2)}` : value.toFixed(2),
-                          name === 'price' ? 'Price' : 'P/E Ratio'
+                          name === 'Stock Price ($)' ? `$${value.toFixed(2)}` : value.toFixed(2),
+                          name === 'Stock Price ($)' ? 'Stock Price ($)' : 'P/E Ratio'
                         ]}
                         labelFormatter={(label) => `Date: ${label}`}
                         contentStyle={{
@@ -445,7 +445,7 @@ function AnalysisPanel({ stock }) {
                         strokeWidth={2}
                         dot={{ fill: '#3b82f6', strokeWidth: 1, r: 2 }}
                         activeDot={{ r: 4, stroke: '#3b82f6', strokeWidth: 2 }}
-                        name="Price"
+                        name="Stock Price ($)"
                       />
                       <Line 
                         yAxisId="pe"

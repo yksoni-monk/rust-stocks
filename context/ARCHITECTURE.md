@@ -579,6 +579,281 @@ Database: stocks.db (2,110.83 MB)
 🚨 PRODUCTION DATABASE - Extra safeguards active
 ```
 
+## Multi-Period Valuation Ratios System (P/S & EV/S)
+
+### Overview
+Extension to the existing P/E ratio system to include Price-to-Sales (P/S) and Enterprise Value-to-Sales (EV/S) ratios across multiple time periods (TTM, Annual, Quarterly) for comprehensive valuation analysis.
+
+### Business Rationale
+- **P/E Limitations**: P/E ratios become invalid when earnings are negative, limiting value investing analysis
+- **Revenue-Based Ratios**: P/S and EV/S work with revenue (always positive), providing valuation metrics for unprofitable companies
+- **Multi-Period Analysis**: Different time horizons serve different investment strategies (TTM for screening, Annual for trends, Quarterly for momentum)
+
+### Technical Formulas
+
+**Price-to-Sales (P/S) Ratio:**
+```
+P/S = Market Cap / Revenue
+P/S = (Stock Price × Shares Outstanding) / Revenue
+```
+
+**Enterprise Value-to-Sales (EV/S) Ratio:**
+```
+EV/S = Enterprise Value / Revenue
+Where: Enterprise Value = Market Cap + Total Debt - Cash & Cash Equivalents
+EV/S = (Market Cap + Total Debt - Cash) / Revenue
+```
+
+### Data Sources & Strategy
+
+#### Available SimFin Data Files
+- `us-income-ttm.csv` - **PRIMARY**: Trailing Twelve Months revenue data for standard ratios
+- `us-income-annual.csv` - Annual revenue data for trend analysis
+- `us-income-quarterly.csv` - Quarterly revenue for momentum analysis
+- `us-balance-ttm.csv` - **PRIMARY**: TTM balance sheet data (Cash, Debt)
+- `us-balance-annual.csv` - Annual balance sheet data
+- `us-balance-quarterly.csv` - Quarterly balance sheet data
+
+#### Import Priority Strategy
+1. **TTM Data (Phase 1)** - Standard industry ratios for screening and comparison
+2. **Annual Data (Phase 2)** - Long-term trend analysis for fundamental research  
+3. **Quarterly Data (Phase 3)** - Short-term momentum for trading strategies
+
+### Enhanced Database Schema
+
+#### New Financial Data Tables
+```sql
+-- Multi-period income statements  
+CREATE TABLE income_statements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    stock_id INTEGER NOT NULL,
+    period_type TEXT NOT NULL, -- 'TTM', 'Annual', 'Quarterly'
+    report_date DATE NOT NULL,
+    fiscal_year INTEGER,
+    fiscal_period TEXT, -- NULL for TTM/Annual, 'Q1'-'Q4' for quarterly
+    
+    -- Core income metrics
+    revenue REAL,
+    gross_profit REAL,
+    operating_income REAL,
+    net_income REAL,
+    shares_basic REAL,
+    shares_diluted REAL,
+    
+    -- Import metadata
+    currency TEXT DEFAULT 'USD',
+    simfin_id INTEGER,
+    publish_date DATE,
+    data_source TEXT DEFAULT 'simfin',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    
+    FOREIGN KEY (stock_id) REFERENCES stocks (id),
+    UNIQUE(stock_id, period_type, report_date)
+);
+
+-- Multi-period balance sheets
+CREATE TABLE balance_sheets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    stock_id INTEGER NOT NULL,
+    period_type TEXT NOT NULL, -- 'TTM', 'Annual', 'Quarterly'
+    report_date DATE NOT NULL,
+    fiscal_year INTEGER,
+    fiscal_period TEXT,
+    
+    -- Enterprise value components
+    cash_and_equivalents REAL,
+    short_term_debt REAL,
+    long_term_debt REAL,
+    total_debt REAL, -- Calculated: short_term + long_term
+    
+    -- Additional metrics
+    total_assets REAL,
+    total_liabilities REAL,
+    total_equity REAL,
+    shares_outstanding REAL,
+    
+    -- Import metadata
+    currency TEXT DEFAULT 'USD',
+    simfin_id INTEGER,
+    data_source TEXT DEFAULT 'simfin',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    
+    FOREIGN KEY (stock_id) REFERENCES stocks (id),
+    UNIQUE(stock_id, period_type, report_date)
+);
+
+-- Enhanced daily ratios table
+CREATE TABLE daily_valuation_ratios (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    stock_id INTEGER NOT NULL,
+    date DATE NOT NULL,
+    price REAL,
+    
+    -- Market metrics
+    market_cap REAL, -- Stock Price × Shares Outstanding
+    enterprise_value REAL, -- Market Cap + Total Debt - Cash
+    
+    -- Existing ratios (preserved)
+    pe_ratio REAL,
+    
+    -- New multi-period ratios
+    ps_ratio_ttm REAL,    -- PRIMARY: Standard P/S using TTM revenue
+    ps_ratio_annual REAL, -- Annual P/S for trend analysis
+    ps_ratio_quarterly REAL, -- Latest quarter P/S for momentum
+    
+    evs_ratio_ttm REAL,    -- PRIMARY: Standard EV/S using TTM revenue
+    evs_ratio_annual REAL, -- Annual EV/S for trend analysis
+    evs_ratio_quarterly REAL, -- Latest quarter EV/S for momentum
+    
+    -- Supporting data
+    revenue_ttm REAL,      -- TTM revenue for calculations
+    revenue_annual REAL,   -- Annual revenue
+    revenue_quarterly REAL, -- Latest quarterly revenue
+    
+    -- Data quality tracking
+    data_completeness_score INTEGER, -- 0-100 based on available ratios
+    last_financial_update DATE,      -- Most recent financial data used
+    
+    FOREIGN KEY (stock_id) REFERENCES stocks (id),
+    UNIQUE(stock_id, date)
+);
+
+-- Performance indexes for multi-period analysis
+CREATE INDEX idx_income_statements_period_lookup ON income_statements(stock_id, period_type, report_date);
+CREATE INDEX idx_balance_sheets_period_lookup ON balance_sheets(stock_id, period_type, report_date);
+CREATE INDEX idx_daily_ratios_ps_ttm ON daily_valuation_ratios(ps_ratio_ttm);
+CREATE INDEX idx_daily_ratios_evs_ttm ON daily_valuation_ratios(evs_ratio_ttm);
+CREATE INDEX idx_daily_ratios_multi_period ON daily_valuation_ratios(stock_id, date, ps_ratio_ttm, evs_ratio_ttm);
+```
+
+### Implementation Architecture
+
+#### Phase 1: TTM Data Import (Priority)
+```rust
+// New importer modules in src-tauri/src/tools/
+pub mod ttm_importer {
+    pub async fn import_ttm_income_statements(pool: &SqlitePool, csv_path: &str) -> Result<usize>;
+    pub async fn import_ttm_balance_sheets(pool: &SqlitePool, csv_path: &str) -> Result<usize>;
+}
+
+// Enhanced CLI tool
+cargo run --bin import_simfin -- \
+    --prices ~/simfin_data/us-shareprices-daily.csv \
+    --income-quarterly ~/simfin_data/us-income-quarterly.csv \
+    --income-ttm ~/simfin_data/us-income-ttm.csv \        # NEW
+    --balance-ttm ~/simfin_data/us-balance-ttm.csv \      # NEW
+    --db stocks.db
+```
+
+#### Phase 2: Multi-Period Ratio Calculations
+```rust
+// Enhanced ratio calculation engine
+pub struct RatioCalculator {
+    pool: SqlitePool,
+}
+
+impl RatioCalculator {
+    // Primary ratio calculations using TTM data
+    pub async fn calculate_ps_ratios_ttm(&self) -> Result<usize>;
+    pub async fn calculate_evs_ratios_ttm(&self) -> Result<usize>;
+    
+    // Multi-period calculations
+    pub async fn calculate_all_period_ratios(&self, period_type: PeriodType) -> Result<usize>;
+    
+    // Data quality assessment
+    pub async fn assess_data_completeness(&self) -> Result<DataQualityReport>;
+}
+
+pub enum PeriodType {
+    TTM,        // Primary for standard ratios
+    Annual,     // Long-term trend analysis  
+    Quarterly,  // Short-term momentum
+}
+```
+
+#### Phase 3: Enhanced Analysis Features
+```rust
+// New Tauri commands for multi-period analysis
+#[tauri::command]
+async fn get_valuation_ratios_multi_period(
+    symbol: String, 
+    period_types: Vec<PeriodType>
+) -> Result<MultiPeriodRatios, String>;
+
+#[tauri::command]
+async fn screen_stocks_by_ratios(
+    criteria: RatioScreeningCriteria
+) -> Result<Vec<StockScreeningResult>, String>;
+
+#[tauri::command]
+async fn get_ratio_trend_analysis(
+    symbol: String,
+    start_date: String,
+    end_date: String
+) -> Result<RatioTrendData, String>;
+```
+
+### Investment Strategy Applications
+
+#### Use Case Mapping
+| Ratio Type | Investment Strategy | Data Source | Update Frequency |
+|------------|-------------------|-------------|------------------|
+| **TTM P/S & EV/S** | Standard valuation screening | TTM files | Quarterly |
+| **Annual P/S & EV/S** | Long-term trend analysis, fundamental research | Annual files | Yearly |  
+| **Quarterly P/S & EV/S** | Momentum trading, earnings-driven strategies | Quarterly files | Quarterly |
+
+#### Stock Screening Enhancement
+- **Value Investing**: Use TTM P/S < 2.0 when P/E is negative (unprofitable companies)
+- **Growth Screening**: Compare quarterly vs annual P/S for acceleration
+- **Sector Comparison**: EV/S ratios for cross-sector valuation comparisons
+- **Quality Metrics**: Data completeness scores for reliable analysis
+
+### Migration Strategy
+
+#### Database Migration Plan
+```sql
+-- Migration 20250909000005_add_multi_period_ratios.sql
+CREATE TABLE income_statements (...);
+CREATE TABLE balance_sheets (...);  
+CREATE TABLE daily_valuation_ratios (...);
+
+-- Migrate existing P/E ratios to new table
+INSERT INTO daily_valuation_ratios (stock_id, date, price, pe_ratio)
+SELECT stock_id, date, close_price, pe_ratio 
+FROM daily_prices 
+WHERE pe_ratio IS NOT NULL;
+
+-- Create performance indexes
+CREATE INDEX idx_income_statements_period_lookup ...;
+```
+
+#### Data Import Workflow
+1. **Import TTM Financial Data**: Revenue and balance sheet data
+2. **Calculate TTM Ratios**: P/S and EV/S using most recent price data
+3. **Validate Data Quality**: Ensure completeness and accuracy
+4. **Import Annual Data**: Historical trend data for comparative analysis
+5. **Import Quarterly Data**: Latest momentum indicators
+6. **Performance Optimization**: Index creation and query optimization
+
+### Expected Outcomes
+
+#### Data Coverage Enhancement
+- **Ratio Coverage**: Expand from P/E-only to P/E + P/S + EV/S across 3 time periods
+- **Stock Analysis**: Enable valuation analysis for unprofitable growth companies
+- **Investment Flexibility**: Support value, growth, and momentum investment strategies
+
+#### Performance Metrics
+- **Import Time**: ~45-60 minutes for full TTM + Annual + Quarterly dataset
+- **Database Size**: Additional ~1-2GB for comprehensive multi-period data
+- **Query Performance**: <50ms for multi-period ratio lookups with proper indexing
+- **Data Quality**: >95% coverage for S&P 500 stocks with TTM ratios
+
+#### Frontend Integration
+- **Enhanced Recommendations Panel**: Include P/S and EV/S in stock screening
+- **Multi-Period Analysis**: Toggle between TTM/Annual/Quarterly views
+- **Ratio Comparison Charts**: Visual comparison of valuation ratios over time
+- **Smart Filtering**: Auto-switch to P/S when P/E is invalid (negative earnings)
+
 ---
 *Last Updated: 2025-09-09*
-*Version: 3.1 - Added Enterprise Database Migration & Safety System*
+*Version: 3.2 - Added Multi-Period Valuation Ratios System (P/S & EV/S)*

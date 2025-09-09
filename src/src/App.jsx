@@ -67,8 +67,15 @@ function App() {
       // Apply S&P 500 filter if active
       let filteredStocks = stocksData;
       if (sp500Filter) {
+        // Ensure we have S&P 500 symbols loaded
+        let currentSp500Symbols = sp500Symbols;
+        if (sp500Symbols.length === 0) {
+          console.log('🔄 Loading S&P 500 symbols for pagination...');
+          currentSp500Symbols = await invoke('get_sp500_symbols');
+          setSp500Symbols(currentSp500Symbols);
+        }
         filteredStocks = stocksData.filter(stock => 
-          sp500Symbols.includes(stock.symbol)
+          currentSp500Symbols.includes(stock.symbol)
         );
       }
       
@@ -94,15 +101,22 @@ function App() {
 
   async function loadSp500Symbols() {
     try {
+      console.log('🔄 Loading S&P 500 symbols...');
       const symbols = await invoke('get_sp500_symbols');
+      console.log('✅ Loaded S&P 500 symbols:', symbols.length, 'symbols');
+      console.log('📋 First 10 symbols:', symbols.slice(0, 10));
       setSp500Symbols(symbols);
     } catch (err) {
-      console.error('Failed to load S&P 500 symbols:', err);
+      console.error('❌ Failed to load S&P 500 symbols:', err);
     }
   }
 
   async function handleSp500Filter() {
     const newFilterState = !sp500Filter;
+    console.log('🔍 S&P 500 Filter clicked. New state:', newFilterState);
+    console.log('📊 Current sp500Symbols length:', sp500Symbols.length);
+    console.log('📋 First 5 sp500Symbols:', sp500Symbols.slice(0, 5));
+    
     setSp500Filter(newFilterState);
     setCurrentPage(0);
     setStocks([]);
@@ -110,18 +124,33 @@ function App() {
     try {
       setLoading(true);
       
+      // Ensure S&P 500 symbols are loaded if filter is being turned ON
+      let currentSp500Symbols = sp500Symbols;
+      if (newFilterState && sp500Symbols.length === 0) {
+        console.log('🔄 S&P 500 symbols not loaded, loading now...');
+        currentSp500Symbols = await invoke('get_sp500_symbols');
+        setSp500Symbols(currentSp500Symbols);
+        console.log('✅ Loaded S&P 500 symbols:', currentSp500Symbols.length);
+      }
+      
       // Load first page of stocks
       const stocksData = await invoke('get_stocks_paginated', { 
         limit: STOCKS_PER_PAGE, 
         offset: 0 
       });
+      console.log('📈 Loaded stocks data:', stocksData.length, 'stocks');
+      console.log('📋 First 5 stock symbols:', stocksData.slice(0, 5).map(s => s.symbol));
       
       // Apply S&P 500 filter if enabled
       let filteredStocks = stocksData;
       if (newFilterState) { // If filter is now ON
+        console.log('🔍 Applying S&P 500 filter...');
+        console.log('📊 Using S&P 500 symbols:', currentSp500Symbols.length);
         filteredStocks = stocksData.filter(stock => 
-          sp500Symbols.includes(stock.symbol)
+          currentSp500Symbols.includes(stock.symbol)
         );
+        console.log('✅ Filtered stocks:', filteredStocks.length, 'stocks');
+        console.log('📋 Filtered stock symbols:', filteredStocks.map(s => s.symbol));
       }
       
       setStocks(filteredStocks);
@@ -131,9 +160,13 @@ function App() {
       const allStocks = await invoke('get_stocks_with_data_status');
       let totalCount = allStocks.length;
       if (newFilterState) { // If filter is now ON
+        console.log('🔍 Calculating total S&P 500 count...');
+        console.log('📊 All stocks count:', allStocks.length);
+        console.log('📊 S&P 500 symbols count:', currentSp500Symbols.length);
         totalCount = allStocks.filter(stock => 
-          sp500Symbols.includes(stock.symbol)
+          currentSp500Symbols.includes(stock.symbol)
         ).length;
+        console.log('✅ Total S&P 500 stocks:', totalCount);
       }
       setTotalStocks(totalCount);
       

@@ -26,6 +26,7 @@ pub fn run() {
             
             // Analysis commands
             commands::analysis::get_price_history,
+            commands::analysis::get_stock_date_range,
             commands::analysis::get_valuation_ratios,
             commands::analysis::get_ps_evs_history,
             commands::analysis::get_undervalued_stocks_by_ps,

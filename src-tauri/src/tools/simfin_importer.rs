@@ -302,6 +302,7 @@ pub async fn import_daily_prices(
     }
 
     pb.finish_with_message("✅ Daily prices imported successfully");
+    println!("📊 Import summary: {} records imported, {} errors", imported_count, error_count);
     Ok(imported_count)
 }
 
@@ -440,6 +441,7 @@ pub async fn import_quarterly_financials(
     }
 
     pb.finish_with_message("✅ Quarterly financials imported successfully");
+    println!("📊 Import summary: {} records imported, {} errors", imported_count, error_count);
     Ok(imported_count)
 }
 

@@ -40,7 +40,7 @@ impl TestDatabase {
         })
     }
     
-    /// Copy production database to test database location
+    /// Copy production database to test database location with concurrency safety
     async fn setup_test_database_copy(test_db_path: &str) -> Result<bool, Box<dyn std::error::Error>> {
         let production_db = "db/stocks.db";
         
@@ -48,6 +48,20 @@ impl TestDatabase {
         if !Path::new(production_db).exists() {
             println!("⚠️  Production database not found at {}, creating test database with sample data", production_db);
             return Self::create_test_database_with_sample_data(test_db_path).await;
+        }
+        
+        // Check if test database already exists and is valid
+        if Path::new(test_db_path).exists() {
+            match Self::validate_existing_test_db(test_db_path).await {
+                Ok(true) => {
+                    println!("✅ Using existing valid test database at {}", test_db_path);
+                    return Ok(true);
+                }
+                _ => {
+                    println!("🔄 Removing invalid existing test database");
+                    let _ = fs::remove_file(test_db_path);
+                }
+            }
         }
         
         // Get production database size for progress reporting
@@ -63,39 +77,62 @@ impl TestDatabase {
             fs::create_dir_all(parent)?;
         }
         
-        // Copy the file
-        fs::copy(production_db, test_db_path)?;
+        // Use a unique temporary file name to avoid conflicts
+        let temp_path = format!("{}.tmp.{}", test_db_path, std::process::id());
         
-        // Wait a moment for filesystem to sync
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        
-        // Verify copy with retries
-        for attempt in 1..=3 {
-            match fs::metadata(test_db_path) {
-                Ok(metadata) => {
-                    let test_size = metadata.len();
-                    if test_size == production_size {
-                        break;
-                    } else if attempt == 3 {
-                        return Err(format!("Copy verification failed after {} attempts: {} bytes vs {} bytes", attempt, test_size, production_size).into());
-                    } else {
-                        println!("Copy verification attempt {}: {} bytes vs {} bytes, retrying...", attempt, test_size, production_size);
-                        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-                    }
+        // Copy to temporary file first
+        match tokio::fs::copy(production_db, &temp_path).await {
+            Ok(bytes_copied) => {
+                if bytes_copied != production_size {
+                    let _ = fs::remove_file(&temp_path);
+                    return Err(format!("Copy size mismatch: {} vs {} bytes", bytes_copied, production_size).into());
                 }
-                Err(e) => {
-                    if attempt == 3 {
-                        return Err(format!("Failed to check copied file after {} attempts: {}", attempt, e).into());
-                    } else {
-                        println!("Copy verification attempt {}: metadata error {}, retrying...", attempt, e);
-                        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
-                    }
-                }
+            }
+            Err(e) => {
+                let _ = fs::remove_file(&temp_path);
+                return Err(format!("Failed to copy database: {}", e).into());
             }
         }
         
-        println!("✅ Successfully copied production database to test database");
-        Ok(true)
+        // Verify the temporary file is valid SQLite
+        match Self::validate_existing_test_db(&temp_path).await {
+            Ok(true) => {
+                // Atomically move temp file to final location
+                fs::rename(&temp_path, test_db_path)?;
+                println!("✅ Successfully copied production database to test database");
+                Ok(true)
+            }
+            Ok(false) => {
+                let _ = fs::remove_file(&temp_path);
+                Err("Copied database is not valid SQLite".into())
+            }
+            Err(e) => {
+                let _ = fs::remove_file(&temp_path);
+                Err(format!("Database validation failed: {}", e).into())
+            }
+        }
+    }
+    
+    /// Validate that a test database file is a valid SQLite database
+    async fn validate_existing_test_db(db_path: &str) -> Result<bool, Box<dyn std::error::Error>> {
+        let database_url = format!("sqlite:{}", db_path);
+        
+        match SqlitePool::connect(&database_url).await {
+            Ok(pool) => {
+                // Try a simple query to verify the database is not corrupted
+                match sqlx::query("SELECT COUNT(*) FROM sqlite_master").fetch_one(&pool).await {
+                    Ok(_) => {
+                        pool.close().await;
+                        Ok(true)
+                    }
+                    Err(_) => {
+                        pool.close().await;
+                        Ok(false)
+                    }
+                }
+            }
+            Err(_) => Ok(false)
+        }
     }
     
     /// Create test database with sample data (fallback if no production db)

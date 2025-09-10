@@ -1,25 +1,31 @@
 # 🚨 CLAUDE: START HERE EVERY TIME
 
 ## PRODUCTION DATABASE (NEVER FORGET THIS!)
-- **Location**: `./stocks.db` (in ROOT directory - THIS directory)
+- **Location**: `src-tauri/db/stocks.db` (in src-tauri/db/ directory)
 - **Size**: 2.5GB 
 - **Data**: 5,892 stocks, 6.2M daily prices, 54K TTM financials
 - **Status**: PRODUCTION - contains all your valuable data
 
 ## WORKING DIRECTORY 
-**ALWAYS**: `/Users/yksoni/code/misc/rust-stocks` (ROOT - not src-tauri!)
+**ALWAYS**: `/Users/yksoni/code/misc/rust-stocks` (ROOT)
 
-## PROJECT STRUCTURE
+## PROJECT STRUCTURE (Standard Tauri)
 ```
 /Users/yksoni/code/misc/rust-stocks/     ← YOU ARE HERE (ROOT)
-├── stocks.db                            ← 2.5GB PRODUCTION DATABASE 
-├── Cargo.toml                           ← Main Cargo.toml with all binaries
-├── src/
-│   ├── bin/import_ttm.rs               ← TTM importer
-│   ├── bin/calculate_ratios.rs         ← P/S & EV/S calculator
-│   └── tools/                          ← TTM and ratio modules
-├── migrations/                         ← Database migrations (5 files)
-└── context/                            ← Broader project context & documentation
+├── src/                                 ← REACT FRONTEND (React/JS components)
+│   ├── src/
+│   │   ├── App.jsx, main.jsx
+│   │   ├── components/
+│   │   └── services/                    ← API & data services layer
+├── src-tauri/                          ← RUST BACKEND (All Rust code)
+│   ├── Cargo.toml                      ← Backend Cargo.toml
+│   ├── src/                            ← Rust backend code
+│   │   ├── commands/, analysis/, tools/, bin/
+│   └── db/                             ← Database organization
+│       ├── stocks.db                   ← 2.5GB PRODUCTION DATABASE
+│       ├── migrations/                 ← Database migrations
+│       └── backups/                    ← Database backups
+└── context/                            ← Project documentation
 ```
 
 ## 📚 BROADER PROJECT CONTEXT
@@ -54,15 +60,17 @@ npm run tauri dev  # (from src-tauri/ directory)
 
 ## CRITICAL REMINDERS
 - Working directory is ROOT: `/Users/yksoni/code/misc/rust-stocks`
-- All binaries are in root Cargo.toml, NOT src-tauri
-- Migrations are in `/migrations/` (root level)
-- TTM modules are in `/src/tools/` (root level)
+- Frontend is in `src/` (React components)
+- Backend is in `src-tauri/src/` (Rust code)
+- Database is in `src-tauri/db/stocks.db`
+- Migrations are in `src-tauri/db/migrations/`
+- Backups are in `src-tauri/db/backups/`
 
 ## NEVER DO THESE THINGS
-- ❌ Use `src-tauri/stocks.db` (wrong database - only 236KB)  
-- ❌ Work from src-tauri directory
-- ❌ Create test databases in wrong locations
-- ❌ Forget that production DB is in ROOT
+- ❌ Look for database in ROOT - it's in `src-tauri/db/stocks.db`
+- ❌ Put migrations in root - they belong in `src-tauri/db/migrations/`
+- ❌ Confuse frontend (src/) with backend (src-tauri/src/)
+- ❌ Create databases or migrations outside proper directories
 
 ## RECENT WORK COMPLETED
 1. ✅ Multi-period database schema (income_statements, balance_sheets, daily_valuation_ratios)

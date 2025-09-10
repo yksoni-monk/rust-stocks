@@ -1,6 +1,6 @@
 # Rust Stocks Analysis System
 
-🚨 **CLAUDE: PRODUCTION DATABASE IS `./stocks.db` (2.5GB) IN THIS ROOT DIRECTORY** 🚨
+🚨 **CLAUDE: PRODUCTION DATABASE IS `src-tauri/db/stocks.db` (2.5GB)** 🚨
 
 A high-performance desktop application for stock analysis using Tauri (Rust backend + React frontend) with offline-first architecture. Features comprehensive stock data from SimFin, expandable panels UI, and enterprise-grade database safeguards.
 

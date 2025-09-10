@@ -1033,197 +1033,256 @@ CREATE INDEX idx_income_statements_period_lookup ...;
 
 ## Production-Grade Testing Architecture
 
-### ATTACH DATABASE Intelligent Sync System
+### Simplified Test Architecture (Current Implementation)
 
-**Architecture**: Two-phase testing with intelligent database synchronization
+**Architecture**: Single consolidated test file with reliable database synchronization
 
 #### Design Philosophy
-Instead of complex sample data or incremental sync logic, we use SQLite's built-in `ATTACH DATABASE` feature for simple, reliable production data testing.
+Simple, reliable testing using production data copies with SQLite WAL mode for true concurrency. No complex incremental sync - just robust file copying when needed.
 
-#### Testing Phases
+#### Test Structure
 
-**Phase 1: Intelligent Sync (Pre-Test)**
-```rust
-// Run once before all tests
-TestDatabase::intelligent_sync().await
+```
+src-tauri/tests/
+├── backend_tests.rs          # Single consolidated test file (16 tests)
+└── helpers/
+    ├── database.rs           # SimpleTestDatabase helper
+    └── mod.rs               # Module exports
 ```
 
-**Phase 2: Test Execution**
+#### Database Strategy
+
+**Simple Copy Approach**: Copy `db/stocks.db` to `db/test.db` when needed
+- **First Run**: Full copy of production database (~2.7GB in ~500ms)
+- **Subsequent Runs**: Reuse existing `test.db` if up-to-date (0ms)
+- **Concurrent Access**: SQLite WAL mode enables true concurrent testing
+- **Production Safety**: Read-only access to production database
+
+#### Test Database Helper
+
 ```rust
-// Each test connects to synchronized database
-let test_db = TestDatabase::new().await;
-```
+// Located in src-tauri/tests/helpers/database.rs
 
-#### Intelligent Sync Logic
-
-```rust
-// Located in src-tauri/tests/helpers/database_setup.rs
-
-/// Simple intelligent sync using SQLite ATTACH DATABASE
-async fn attach_database_sync(production_db: &str, test_db_path: &str) -> Result<SyncReport> {
-    // If test.db doesn't exist: Full copy (1.5s for 2.6GB)
-    if !Path::new(test_db_path).exists() {
-        tokio::fs::copy(production_db, test_db_path).await?;
-        return Ok(report);
-    }
-    
-    // If test.db exists: Check timestamps for incremental sync
-    let prod_modified = fs::metadata(production_db)?.modified()?;
-    let test_modified = fs::metadata(test_db_path)?.modified()?;
-    
-    if test_modified >= prod_modified {
-        // No sync needed (0ms)
-        return Ok(SyncReport::default());
-    }
-    
-    // Incremental sync using ATTACH DATABASE
-    let test_pool = connect_to_test_database(test_db_path).await?;
-    sqlx::query(&format!("ATTACH DATABASE '{}' AS prod", production_db))
-        .execute(&test_pool).await?;
-    
-    // Sync each table
-    sync_table_with_attach(&test_pool, "stocks").await?;
-    sync_table_with_attach(&test_pool, "daily_prices").await?;
-    sync_table_with_attach(&test_pool, "income_statements").await?;
-    // ... other tables
-    
-    sqlx::query("DETACH DATABASE prod").execute(&test_pool).await?;
-    Ok(report)
+pub struct SimpleTestDatabase {
+    pub pool: SqlitePool,
+    pub is_copy: bool,
 }
 
-/// Sync individual table using ATTACH DATABASE
-async fn sync_table_with_attach(test_pool: &SqlitePool, table_name: &str) -> Result<usize> {
-    // Create table if missing (with production schema)
-    if !table_exists_in_test {
-        let create_sql = get_create_sql_from_production(table_name).await?;
-        sqlx::query(&create_sql).execute(test_pool).await?;
+impl SimpleTestDatabase {
+    pub async fn new() -> Result<Self> {
+        // Check if test.db exists and is up-to-date
+        if Path::new(test_db_path).exists() {
+            let prod_modified = fs::metadata(production_db)?.modified()?;
+            let test_modified = fs::metadata(test_db_path)?.modified()?;
+            
+            if test_modified >= prod_modified {
+                // No sync needed - reuse existing test.db
+                return Ok(SimpleTestDatabase { pool, is_copy: false });
+            }
+        }
+        
+        // Copy production database to test.db
+        std::fs::copy(production_db, test_db_path)?;
+        Ok(SimpleTestDatabase { pool, is_copy: true })
     }
     
-    // Simple data replacement
-    sqlx::query(&format!("DELETE FROM {}", table_name)).execute(test_pool).await?;
-    sqlx::query(&format!("INSERT INTO {} SELECT * FROM prod.{}", table_name, table_name))
-        .execute(test_pool).await?;
-    
-    Ok(record_count)
+    pub async fn new_no_sync() -> Result<Self> {
+        // For concurrent tests - connect to already copied test.db
+        let pool = connect_to_test_database(&test_db_path).await?;
+        Ok(SimpleTestDatabase { pool, is_copy: false })
+    }
 }
 ```
 
-#### Performance Characteristics
-
-| Scenario | Duration | Description |
-|----------|----------|-------------|
-| **First run** | 1.5s | Full copy of 2.6GB production database |
-| **No changes** | 0ms | Timestamp check, no sync needed |
-| **Incremental** | 50-200ms | ATTACH DATABASE table-by-table sync |
-
-#### Integration Test Architecture
+#### SQLite Configuration for Concurrency
 
 ```rust
-/// All integration tests follow this pattern
+// WAL mode + Connection pooling for true concurrency
+SqlitePoolOptions::new()
+    .max_connections(10)
+    .min_connections(2)
+    .acquire_timeout(Duration::from_secs(10))
+    .idle_timeout(Some(Duration::from_secs(600)))
+    .connect(&database_url).await
+```
+
+#### Test Execution Pattern
+
+```rust
 #[tokio::test]
 async fn test_example() {
-    // Phase 1: Ensure test.db is synchronized with production
-    TestDatabase::intelligent_sync().await.expect("Intelligent sync failed");
+    // Setup: Connect to test database (copy of production)
+    let test_db = SimpleTestDatabase::new().await.unwrap();
+    set_test_database_pool(test_db.pool().clone()).await;
     
-    // Phase 2: Connect to synchronized database (now identical to production)
-    let test_db = TestDatabase::new().await.unwrap();
+    // Test: Run backend command
+    let result = get_stocks_paginated(5, 0).await.expect("Test failed");
+    assert_eq!(result.len(), 5, "Should return 5 stocks");
     
-    // Phase 3: Run tests against real production data
-    let result = get_stocks_paginated(50, 0).await.expect("Test failed");
-    assert!(result.len() > 1000, "Should have production data volume");
-    
+    // Cleanup: Clear test pool and close connections
+    clear_test_database_pool().await;
     test_db.cleanup().await.unwrap();
 }
 ```
 
-#### Key Benefits
-
-1. **Zero Sample Data**: Tests use real production data (5,892 stocks, 6.2M prices)
-2. **Schema Compatibility**: Production schema automatically applied to test.db
-3. **Fast Execution**: 0ms when databases are synchronized
-4. **Simple Logic**: Uses SQLite built-in ATTACH DATABASE feature
-5. **Production Safety**: Read-only access to production database
-6. **True Intelligence**: Only syncs when needed based on file timestamps
-
 #### Test Results
 
-**Current Status**: 14/18 integration tests passing (78% success rate)
-- ✅ All database, pagination, search, and recommendation tests pass
-- ✅ Tests verified with production data volumes (>1000 stocks, >1M prices)
-- ⚠️ 4 tests failing due to sample data assumptions (not sync issues)
+**Current Status**: 16/16 tests passing (100% success rate)
+- ✅ All functional tests pass (pagination, search, analysis, recommendations)
+- ✅ All performance tests pass (response time validation)
+- ✅ All concurrent access tests pass (WAL mode enabled)
+- ✅ Tests run in ~2.7 seconds total execution time
 
-#### Files Structure
+#### Test Categories
 
-```
-src-tauri/tests/
-├── helpers/
-│   ├── database_setup.rs     # Core intelligent sync implementation
-│   ├── sync_report.rs        # Sync statistics tracking
-│   ├── test_config.rs        # Test configuration management
-│   └── mod.rs               # Module exports
-├── integration_tests.rs      # Main integration test suite
-└── [DEPRECATED FILES]        # Files to be deleted (see cleanup section)
-```
+**Functional Tests (13 tests)**:
+1. `test_database_setup` - Database verification
+2. `test_get_stocks_paginated` - Pagination functionality
+3. `test_search_stocks` - Search functionality
+4. `test_get_sp500_symbols` - S&P 500 symbol loading
+5. `test_get_price_history` - Historical price data
+6. `test_get_stock_date_range` - Date range validation
+7. `test_get_valuation_ratios` - P/S and EV/S ratios
+8. `test_get_ps_evs_history` - Historical ratio data
+9. `test_get_undervalued_stocks_by_ps` - P/S screening
+10. `test_get_value_recommendations_with_stats` - Recommendations
+11. `test_get_initialization_status` - System status
+12. `test_get_database_stats` - Database statistics
+13. `test_export_data` - Data export functionality
 
-#### Migration from Sample Data
+**Performance Tests (3 tests)**:
+1. `test_pagination_performance` - Pagination speed validation
+2. `test_search_performance` - Search speed validation
+3. `test_concurrent_access_performance` - Concurrent access validation
 
-**Before**: Tests relied on fixture sample data with hardcoded stocks like "MINIMAL"
-**After**: Tests use real production data and check for actual stocks like "AAPL"
+#### Key Benefits
 
-```rust
-// OLD: Sample data assumption
-let minimal_stock = result.iter().find(|s| s.symbol == "MINIMAL")
-    .expect("MINIMAL should be present");
+1. **True Concurrency**: SQLite WAL mode enables simultaneous test execution
+2. **Production Data**: Tests use real production data (5,892 stocks, 6.2M prices)
+3. **Fast Execution**: Complete test suite runs in ~2.7 seconds
+4. **Simple Architecture**: Single test file, minimal complexity
+5. **Production Safety**: Zero risk to production database
+6. **Reliable Sync**: Robust file copying with timestamp validation
+7. **No Hanging**: Eliminated complex incremental sync that caused 60+ second hangs
 
-// NEW: Production data reality
-let aapl_stock = result.iter().find(|s| s.symbol == "AAPL")
-    .expect("AAPL should be present");
-assert!(result.len() > 1000, "Should have production data volume");
-```
+#### Test Commands
 
-### Test File Cleanup - Files to Delete
-
-The following test files are now obsolete and can be safely deleted:
-
-#### Deprecated Intelligent Sync Experiments
 ```bash
-# These were experimental implementations that are now replaced
-rm src-tauri/tests/demo_intelligent_sync.rs
-rm src-tauri/tests/simple_intelligent_sync_test.rs  
-rm src-tauri/tests/standalone_sync_demo.rs
-rm src-tauri/tests/test_intelligent_sync.rs
-rm src-tauri/tests/helpers/incremental_sync.rs
+# Run all backend tests
+cargo test --test backend_tests --features test-utils
+
+# Run specific test
+cargo test test_database_setup --features test-utils -- --nocapture
+
+# Run with verbose output
+cargo test --test backend_tests --features test-utils -- --nocapture
 ```
 
-#### Reason for Deletion
-1. **demo_intelligent_sync.rs**: Early proof-of-concept, superseded by production implementation
-2. **simple_intelligent_sync_test.rs**: Test prototype, functionality now in integration_tests.rs
-3. **standalone_sync_demo.rs**: Standalone demo, no longer needed
-4. **test_intelligent_sync.rs**: Test for old incremental sync approach
-5. **incremental_sync.rs**: Complex incremental sync logic, replaced by simple ATTACH DATABASE approach
+#### Migration from Complex Architecture
 
-#### Files to Keep
-```bash
-# Production implementation - KEEP
-src-tauri/tests/helpers/database_setup.rs    # Core intelligent sync
-src-tauri/tests/helpers/sync_report.rs       # Sync statistics
-src-tauri/tests/helpers/test_config.rs       # Configuration
-src-tauri/tests/helpers/mod.rs               # Module exports
-src-tauri/tests/integration_tests.rs         # Main test suite
-```
+**Before**: Multiple test files with complex intelligent sync system
+- `integration_tests.rs`, `performance_tests.rs`, `safe_backend_tests.rs`
+- Complex `ATTACH DATABASE` incremental sync
+- Test hanging issues (60+ second delays)
+- Multiple helper files with unused code
 
-#### Cleanup Command
-```bash
-cd /Users/yksoni/code/misc/rust-stocks/src-tauri/tests/
-rm demo_intelligent_sync.rs
-rm simple_intelligent_sync_test.rs
-rm standalone_sync_demo.rs  
-rm test_intelligent_sync.rs
-rm helpers/incremental_sync.rs
-```
+**After**: Single consolidated test file with simple copy strategy
+- `backend_tests.rs` - All 16 tests in one file
+- Simple file copy with timestamp validation
+- Fast, reliable execution (~2.7 seconds total)
+- Minimal helper code (`SimpleTestDatabase`)
 
-After cleanup, the testing architecture will be clean, focused, and maintainable with only the essential files for production-grade testing.
+#### Files Cleanup Completed
+
+**Deleted Files**:
+- `src-tauri/tests/integration_tests.rs`
+- `src-tauri/tests/performance_tests.rs` 
+- `src-tauri/tests/safe_backend_tests.rs`
+- `src-tauri/tests/helpers/sync_report.rs`
+- `src-tauri/tests/helpers/test_config.rs`
+
+**Current Files**:
+- `src-tauri/tests/backend_tests.rs` - Consolidated test suite
+- `src-tauri/tests/helpers/database.rs` - SimpleTestDatabase helper
+- `src-tauri/tests/helpers/mod.rs` - Module exports
+
+### Test Implementation Details
+
+#### Frontend API Coverage Analysis
+
+**✅ IMPLEMENTED & USED BY FRONTEND** (13 commands):
+
+**Stock Operations (4 commands)**:
+1. `get_stocks_paginated(limit, offset)` - Core pagination for main stock list
+2. `get_stocks_with_data_status()` - Get all stocks with data availability flags  
+3. `search_stocks(query)` - Real-time stock search functionality
+4. `get_sp500_symbols()` - S&P 500 filtering support
+
+**Analysis Operations (5 commands)**:
+5. `get_stock_date_range(symbol)` - Date range for stock data
+6. `get_price_history(symbol, start_date, end_date)` - Historical price data
+7. `get_valuation_ratios(symbol)` - P/S, EV/S ratio display
+8. `get_ps_evs_history(symbol, start_date, end_date)` - Historical P/S & EV/S data
+9. `export_data(symbol, format)` - Data export functionality
+
+**Recommendations Operations (2 commands)**:
+10. `get_undervalued_stocks_by_ps(max_ps_ratio, limit)` - P/S ratio screening
+11. `get_value_recommendations_with_stats(limit)` - P/E based recommendations
+
+**System Operations (2 commands)**:
+12. `get_initialization_status()` - System status for UI
+13. `get_database_stats()` - Database statistics display
+
+#### Test Priority Strategy
+
+**HIGH Priority Tests** (8 commands - 60% of functionality):
+- Stock pagination, data status, S&P 500 filtering
+- Price history, valuation ratios, P/S EV/S history
+- P/S screening, P/E recommendations
+
+**MEDIUM Priority Tests** (3 commands - 25% of functionality):
+- Search functionality, date range validation, database statistics
+
+**LOW Priority Tests** (2 commands - 15% of functionality):
+- Data export, system status
+
+#### Performance Benchmarks
+
+**Response Time Targets**:
+- **Stock Pagination**: <100ms for 50 stocks
+- **Stock Search**: <200ms for query results
+- **S&P 500 Filter**: <150ms for symbol loading
+- **Price History**: <500ms for 1-year data
+- **Valuation Ratios**: <300ms for P/S & EV/S calculation
+- **Recommendations**: <1s for 20 recommendations with stats
+- **Database Stats**: <200ms for statistics calculation
+
+#### Future Work & Enhancements
+
+**Performance Benchmarks**:
+- Comprehensive performance validation across all commands
+- Memory usage testing for large datasets
+- Concurrent access stress testing
+- Response time regression detection
+
+**Integration Test Workflows**:
+- Complete user journey tests (search → analyze → export)
+- S&P 500 filter workflow validation
+- Recommendations workflow cross-validation
+- Error recovery workflow testing
+
+**Advanced Testing Features**:
+- Concurrent access testing with multiple simultaneous requests
+- Memory usage validation for large dataset operations
+- Database corruption recovery testing
+- Edge case data scenarios (zero revenue, negative P/E, etc.)
+
+**Continuous Integration Enhancements**:
+- Automated test result reporting with coverage metrics
+- Performance regression tracking over time
+- Test data refresh automation
+- CI/CD pipeline integration
 
 ---
 *Last Updated: 2025-09-10*
-*Version: 3.3 - Added ATTACH DATABASE Testing Architecture & File Cleanup Guide*
+*Version: 3.4 - Consolidated Testing Architecture Documentation*

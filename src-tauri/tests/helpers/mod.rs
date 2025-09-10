@@ -1,9 +1,3 @@
-pub mod database_setup;
-pub mod test_config;
-pub mod sync_report;
-// Temporarily disable incremental_sync until error handling is fixed
-// pub mod incremental_sync;
+pub mod database;
 
-pub use database_setup::{TestDatabase, TestAssertions};
-pub use sync_report::SyncReport;
-// pub use incremental_sync::{IncrementalSync, SyncReport};
+pub use database::SimpleTestDatabase;

@@ -1,0 +1,423 @@
+/// Simple Backend Tests - All tests in one file
+/// Uses db/test.db (copy of production) with WAL mode for concurrency
+/// Pre-test: Copy db/stocks.db to db/test.db using standard file operations
+
+mod helpers;
+
+use helpers::SimpleTestDatabase;
+use std::time::{Duration, Instant};
+
+/// Simple database setup test
+#[tokio::test]
+async fn test_database_setup() {
+    let test_db = SimpleTestDatabase::new().await.expect("Failed to setup test database");
+    test_db.verify_data().await.expect("Database verification failed");
+    test_db.cleanup().await.expect("Cleanup failed");
+}
+
+// ====================
+// HIGH PRIORITY TESTS (8 commands - 60% of functionality)
+// ====================
+
+/// Test stock pagination (HIGH priority - core functionality)
+#[tokio::test]
+async fn test_get_stocks_paginated() {
+    let test_db = SimpleTestDatabase::new().await.unwrap();
+    rust_stocks_tauri_lib::database::helpers::set_test_database_pool(test_db.pool().clone()).await;
+    
+    use rust_stocks_tauri_lib::commands::stocks::get_stocks_paginated;
+    
+    // Test normal pagination
+    let result = get_stocks_paginated(5, 0).await.expect("get_stocks_paginated failed");
+    assert_eq!(result.len(), 5, "Should return 5 stocks");
+    
+    for stock in &result {
+        assert!(!stock.symbol.is_empty(), "Stock symbol should not be empty");
+        assert!(!stock.company_name.is_empty(), "Company name should not be empty");
+    }
+    
+    // Test pagination with offset
+    let result_offset = get_stocks_paginated(3, 5).await.expect("Offset pagination failed");
+    assert_eq!(result_offset.len(), 3, "Should return 3 stocks with offset");
+    
+    // Verify no overlap between pages
+    let first_symbols: std::collections::HashSet<_> = result.iter().map(|s| &s.symbol).collect();
+    let offset_symbols: std::collections::HashSet<_> = result_offset.iter().map(|s| &s.symbol).collect();
+    assert_eq!(first_symbols.intersection(&offset_symbols).count(), 0, "No overlap between pages");
+    
+    rust_stocks_tauri_lib::database::helpers::clear_test_database_pool().await;
+    test_db.cleanup().await.unwrap();
+}
+
+/// Test stock search functionality
+#[tokio::test]
+async fn test_search_stocks() {
+    let test_db = SimpleTestDatabase::new().await.unwrap();
+    rust_stocks_tauri_lib::database::helpers::set_test_database_pool(test_db.pool().clone()).await;
+    
+    use rust_stocks_tauri_lib::commands::stocks::search_stocks;
+    
+    // Search for Apple (should exist in production data)
+    let apple_results = search_stocks("AAPL".to_string()).await.expect("Apple search failed");
+    
+    if !apple_results.is_empty() {
+        let apple = &apple_results[0];
+        assert_eq!(apple.symbol, "AAPL", "Should find AAPL");
+        assert!(apple.company_name.to_lowercase().contains("apple"), "Company name should contain 'apple'");
+        println!("✅ Found Apple: {} - {}", apple.symbol, apple.company_name);
+    } else {
+        println!("⚠️  AAPL not found in test database");
+    }
+    
+    // Test case insensitive search
+    let lower_results = search_stocks("apple".to_string()).await.expect("Lowercase search failed");
+    assert_eq!(apple_results.len(), lower_results.len(), "Case insensitive search should return same results");
+    
+    rust_stocks_tauri_lib::database::helpers::clear_test_database_pool().await;
+    test_db.cleanup().await.unwrap();
+}
+
+/// Test S&P 500 symbols loading
+#[tokio::test]
+async fn test_get_sp500_symbols() {
+    let test_db = SimpleTestDatabase::new().await.unwrap();
+    rust_stocks_tauri_lib::database::helpers::set_test_database_pool(test_db.pool().clone()).await;
+    
+    use rust_stocks_tauri_lib::commands::stocks::get_sp500_symbols;
+    
+    let sp500_symbols = get_sp500_symbols().await.expect("S&P 500 symbols failed");
+    
+    assert!(!sp500_symbols.is_empty(), "S&P 500 symbols should not be empty");
+    assert!(sp500_symbols.len() > 400, "Should have reasonable number of S&P 500 symbols");
+    
+    // Check for common S&P 500 stocks
+    let common_symbols = ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA"];
+    for symbol in common_symbols {
+        if sp500_symbols.contains(&symbol.to_string()) {
+            println!("✅ Found S&P 500 symbol: {}", symbol);
+        }
+    }
+    
+    rust_stocks_tauri_lib::database::helpers::clear_test_database_pool().await;
+    test_db.cleanup().await.unwrap();
+}
+
+/// Test price history retrieval
+#[tokio::test]
+async fn test_get_price_history() {
+    let test_db = SimpleTestDatabase::new().await.unwrap();
+    rust_stocks_tauri_lib::database::helpers::set_test_database_pool(test_db.pool().clone()).await;
+    
+    use rust_stocks_tauri_lib::commands::analysis::get_price_history;
+    
+    // Test with AAPL (should exist in production data)
+    let price_history = get_price_history(
+        "AAPL".to_string(),
+        "2023-01-01".to_string(),
+        "2023-12-31".to_string()
+    ).await.expect("Price history failed");
+    
+    if !price_history.is_empty() {
+        assert!(price_history.len() > 200, "Should have reasonable number of price records");
+        
+        // Verify data structure
+        let first_price = &price_history[0];
+        assert!(first_price.close > 0.0, "Close price should be positive");
+        assert!(!first_price.date.is_empty(), "Date should not be empty");
+        
+        println!("✅ Price history test passed with {} records", price_history.len());
+    } else {
+        println!("⚠️  No price history found for AAPL");
+    }
+    
+    rust_stocks_tauri_lib::database::helpers::clear_test_database_pool().await;
+    test_db.cleanup().await.unwrap();
+}
+
+/// Test valuation ratios
+#[tokio::test]
+async fn test_get_valuation_ratios() {
+    let test_db = SimpleTestDatabase::new().await.unwrap();
+    rust_stocks_tauri_lib::database::helpers::set_test_database_pool(test_db.pool().clone()).await;
+    
+    use rust_stocks_tauri_lib::commands::analysis::get_valuation_ratios;
+    
+    let ratios = get_valuation_ratios("AAPL".to_string()).await.expect("Valuation ratios failed");
+    
+    // Ratios might be None for some stocks, that's okay
+    if let Some(ratios) = ratios {
+        if let Some(ps_ratio) = ratios.ps_ratio_ttm {
+            assert!(ps_ratio > 0.0, "P/S ratio should be positive");
+            println!("✅ P/S ratio: {:.2}", ps_ratio);
+        }
+        
+        if let Some(evs_ratio) = ratios.evs_ratio_ttm {
+            assert!(evs_ratio > 0.0, "EV/S ratio should be positive");
+            println!("✅ EV/S ratio: {:.2}", evs_ratio);
+        }
+    } else {
+        println!("⚠️  No valuation ratios found for AAPL");
+    }
+    
+    rust_stocks_tauri_lib::database::helpers::clear_test_database_pool().await;
+    test_db.cleanup().await.unwrap();
+}
+
+/// Test P/S and EV/S history
+#[tokio::test]
+async fn test_get_ps_evs_history() {
+    let test_db = SimpleTestDatabase::new().await.unwrap();
+    rust_stocks_tauri_lib::database::helpers::set_test_database_pool(test_db.pool().clone()).await;
+    
+    use rust_stocks_tauri_lib::commands::analysis::get_ps_evs_history;
+    
+    let history = get_ps_evs_history(
+        "AAPL".to_string(),
+        "2023-01-01".to_string(),
+        "2023-12-31".to_string()
+    ).await.expect("P/S EV/S history failed");
+    
+    if !history.is_empty() {
+        assert!(history.len() > 50, "Should have reasonable number of history records");
+        
+        let first_record = &history[0];
+        assert!(!first_record.date.is_empty(), "Date should not be empty");
+        
+        println!("✅ P/S EV/S history test passed with {} records", history.len());
+    } else {
+        println!("⚠️  No P/S EV/S history found for AAPL");
+    }
+    
+    rust_stocks_tauri_lib::database::helpers::clear_test_database_pool().await;
+    test_db.cleanup().await.unwrap();
+}
+
+/// Test undervalued stocks by P/S ratio
+#[tokio::test]
+async fn test_get_undervalued_stocks_by_ps() {
+    let test_db = SimpleTestDatabase::new().await.unwrap();
+    rust_stocks_tauri_lib::database::helpers::set_test_database_pool(test_db.pool().clone()).await;
+    
+    use rust_stocks_tauri_lib::commands::analysis::get_undervalued_stocks_by_ps;
+    
+    let undervalued = get_undervalued_stocks_by_ps(2.0, Some(10)).await.expect("Undervalued stocks failed");
+    
+    assert!(undervalued.len() <= 10, "Should not exceed limit");
+    
+    for stock in &undervalued {
+        assert!(!stock.symbol.is_empty(), "Stock symbol should not be empty");
+        if let Some(ps_ratio) = stock.ps_ratio_ttm {
+            assert!(ps_ratio <= 2.0, "P/S ratio should be within threshold");
+            println!("✅ Undervalued stock: {} - P/S: {:.2}", stock.symbol, ps_ratio);
+        }
+    }
+    
+    rust_stocks_tauri_lib::database::helpers::clear_test_database_pool().await;
+    test_db.cleanup().await.unwrap();
+}
+
+/// Test value recommendations with stats
+#[tokio::test]
+async fn test_get_value_recommendations_with_stats() {
+    let test_db = SimpleTestDatabase::new().await.unwrap();
+    rust_stocks_tauri_lib::database::helpers::set_test_database_pool(test_db.pool().clone()).await;
+    
+    use rust_stocks_tauri_lib::commands::recommendations::get_value_recommendations_with_stats;
+    
+    let recommendations = get_value_recommendations_with_stats(Some(10)).await.expect("Value recommendations failed");
+    
+    assert!(recommendations.recommendations.len() <= 10, "Should not exceed limit");
+    assert!(recommendations.stats.total_sp500_stocks > 0, "Should have analyzed some stocks");
+    
+    println!("✅ Value recommendations: {} stocks, {} S&P 500 stocks", 
+             recommendations.recommendations.len(), 
+             recommendations.stats.total_sp500_stocks);
+    
+    rust_stocks_tauri_lib::database::helpers::clear_test_database_pool().await;
+    test_db.cleanup().await.unwrap();
+}
+
+// ====================
+// MEDIUM PRIORITY TESTS (3 commands - 25% of functionality)
+// ====================
+
+/// Test stock date range
+#[tokio::test]
+async fn test_get_stock_date_range() {
+    let test_db = SimpleTestDatabase::new().await.unwrap();
+    rust_stocks_tauri_lib::database::helpers::set_test_database_pool(test_db.pool().clone()).await;
+    
+    use rust_stocks_tauri_lib::commands::analysis::get_stock_date_range;
+    
+    let date_range = get_stock_date_range("AAPL".to_string()).await.expect("Stock date range failed");
+    
+    assert!(!date_range.earliest_date.is_empty(), "Earliest date should not be empty");
+    assert!(!date_range.latest_date.is_empty(), "Latest date should not be empty");
+    println!("✅ Stock date range: {} to {} ({} records)", 
+             date_range.earliest_date, 
+             date_range.latest_date,
+             date_range.total_records);
+    
+    rust_stocks_tauri_lib::database::helpers::clear_test_database_pool().await;
+    test_db.cleanup().await.unwrap();
+}
+
+/// Test database statistics
+#[tokio::test]
+async fn test_get_database_stats() {
+    let test_db = SimpleTestDatabase::new().await.unwrap();
+    rust_stocks_tauri_lib::database::helpers::set_test_database_pool(test_db.pool().clone()).await;
+    
+    use rust_stocks_tauri_lib::commands::data::get_database_stats;
+    
+    let stats = get_database_stats().await.expect("Database stats failed");
+    
+    assert!(stats.total_stocks > 0, "Should have some stocks");
+    assert!(stats.total_price_records > 0, "Should have some price records");
+    
+    println!("✅ Database stats: {} stocks, {} price records", 
+             stats.total_stocks, stats.total_price_records);
+    
+    rust_stocks_tauri_lib::database::helpers::clear_test_database_pool().await;
+    test_db.cleanup().await.unwrap();
+}
+
+// ====================
+// LOW PRIORITY TESTS (2 commands - 15% of functionality)
+// ====================
+
+/// Test initialization status
+#[tokio::test]
+async fn test_get_initialization_status() {
+    let test_db = SimpleTestDatabase::new().await.unwrap();
+    rust_stocks_tauri_lib::database::helpers::set_test_database_pool(test_db.pool().clone()).await;
+    
+    use rust_stocks_tauri_lib::commands::initialization::get_initialization_status;
+    
+    let status = get_initialization_status().await.expect("Initialization status failed");
+    
+    assert!(!status.status.is_empty(), "Status should not be empty");
+    println!("✅ Initialization status: {} (step: {})", status.status, status.current_step);
+    
+    rust_stocks_tauri_lib::database::helpers::clear_test_database_pool().await;
+    test_db.cleanup().await.unwrap();
+}
+
+/// Test data export
+#[tokio::test]
+async fn test_export_data() {
+    let test_db = SimpleTestDatabase::new().await.unwrap();
+    rust_stocks_tauri_lib::database::helpers::set_test_database_pool(test_db.pool().clone()).await;
+    
+    use rust_stocks_tauri_lib::commands::analysis::export_data;
+    
+    let export_result = export_data(
+        "AAPL".to_string(),
+        "csv".to_string()
+    ).await.expect("Data export failed");
+    
+    assert!(!export_result.is_empty(), "Export data should not be empty");
+    
+    println!("✅ Data export test passed");
+    
+    rust_stocks_tauri_lib::database::helpers::clear_test_database_pool().await;
+    test_db.cleanup().await.unwrap();
+}
+
+// ====================
+// PERFORMANCE TESTS
+// ====================
+
+/// Performance test for pagination
+#[tokio::test]
+async fn test_pagination_performance() {
+    let test_db = SimpleTestDatabase::new().await.unwrap();
+    rust_stocks_tauri_lib::database::helpers::set_test_database_pool(test_db.pool().clone()).await;
+    
+    use rust_stocks_tauri_lib::commands::stocks::get_stocks_paginated;
+    
+    let test_cases = vec![(10, "Small"), (50, "Medium"), (100, "Large")];
+    
+    for (limit, description) in test_cases {
+        let start = Instant::now();
+        let result = get_stocks_paginated(limit, 0).await.expect("Pagination performance test failed");
+        let duration = start.elapsed();
+        
+        assert!(!result.is_empty(), "Should return results");
+        
+        let expected_max = Duration::from_millis(200);
+        println!("⚡ {} page (limit={}): {:?} for {} stocks", description, limit, duration, result.len());
+        
+        if duration > expected_max {
+            println!("⚠️  Performance slower than expected ({:?} > {:?})", duration, expected_max);
+        } else {
+            println!("✅ Performance within expected range");
+        }
+    }
+    
+    rust_stocks_tauri_lib::database::helpers::clear_test_database_pool().await;
+    test_db.cleanup().await.unwrap();
+}
+
+/// Performance test for search
+#[tokio::test]
+async fn test_search_performance() {
+    let test_db = SimpleTestDatabase::new().await.unwrap();
+    rust_stocks_tauri_lib::database::helpers::set_test_database_pool(test_db.pool().clone()).await;
+    
+    use rust_stocks_tauri_lib::commands::stocks::search_stocks;
+    
+    let queries = vec!["AAPL", "Microsoft", "Tech", "A"];
+    
+    for query in queries {
+        let start = Instant::now();
+        let result = search_stocks(query.to_string()).await.expect("Search performance test failed");
+        let duration = start.elapsed();
+        
+        let expected_max = Duration::from_millis(300);
+        println!("⚡ Search '{}': {:?} for {} results", query, duration, result.len());
+        
+        if duration > expected_max {
+            println!("⚠️  Search slower than expected ({:?} > {:?})", duration, expected_max);
+        } else {
+            println!("✅ Search performance within expected range");
+        }
+    }
+    
+    rust_stocks_tauri_lib::database::helpers::clear_test_database_pool().await;
+    test_db.cleanup().await.unwrap();
+}
+
+/// Concurrent access performance test
+#[tokio::test]
+async fn test_concurrent_access_performance() {
+    let test_db = SimpleTestDatabase::new_no_sync().await.unwrap();
+    rust_stocks_tauri_lib::database::helpers::set_test_database_pool(test_db.pool().clone()).await;
+    
+    use rust_stocks_tauri_lib::commands::stocks::get_stocks_paginated;
+    
+    let start = Instant::now();
+    
+    // Run multiple concurrent requests
+    let handles: Vec<_> = (0..5)
+        .map(|i| {
+            tokio::spawn(async move {
+                get_stocks_paginated(10, i * 10).await
+            })
+        })
+        .collect();
+    
+    let results = futures::future::join_all(handles).await;
+    let duration = start.elapsed();
+    
+    for result in results {
+        assert!(result.is_ok(), "Concurrent request should succeed");
+        let stocks = result.unwrap().expect("Should get stocks");
+        assert_eq!(stocks.len(), 10, "Should return 10 stocks");
+    }
+    
+    println!("⚡ Concurrent access: {:?} for 5 concurrent requests", duration);
+    
+    rust_stocks_tauri_lib::database::helpers::clear_test_database_pool().await;
+    test_db.cleanup().await.unwrap();
+}

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { analysisDataService } from '../services/dataService.js';
 
 function AnalysisPanel({ stock }) {
   const [selectedMetric, setSelectedMetric] = useState('price');
@@ -71,10 +71,14 @@ function AnalysisPanel({ stock }) {
     if (!stock?.symbol) return;
     
     try {
-      const dateRange = await invoke('get_stock_date_range', {
-        symbol: stock.symbol
-      });
-      setStockDateRange(dateRange);
+      const result = await analysisDataService.loadStockAnalysis(stock.symbol, '2020-01-01', '2024-12-31');
+      
+      if (result.error) {
+        console.error('Failed to load stock date range:', result.error);
+        setStockDateRange(null);
+      } else {
+        setStockDateRange(result.dateRange);
+      }
     } catch (err) {
       console.error('Failed to load stock date range:', err);
       setStockDateRange(null);
@@ -90,14 +94,14 @@ function AnalysisPanel({ stock }) {
     try {
       const { startDate, endDate } = getDateRange();
       
-      // Load price history using the working API call
-      const history = await invoke('get_price_history', {
-        symbol: stock.symbol,
-        startDate,
-        endDate
-      });
-
-      setPriceHistory(history || []);
+      const result = await analysisDataService.loadStockAnalysis(stock.symbol, startDate, endDate);
+      
+      if (result.error) {
+        setError(result.error);
+        console.error('Failed to load price history:', result.error);
+      } else {
+        setPriceHistory(result.priceHistory || []);
+      }
 
     } catch (err) {
       setError(err.toString());
@@ -111,10 +115,14 @@ function AnalysisPanel({ stock }) {
     if (!stock?.symbol) return;
 
     try {
-      const ratios = await invoke('get_valuation_ratios', {
-        symbol: stock.symbol
-      });
-      setValuationRatios(ratios);
+      const result = await analysisDataService.loadStockAnalysis(stock.symbol, '2020-01-01', '2024-12-31');
+      
+      if (result.error) {
+        console.error('Failed to load valuation ratios:', result.error);
+        setValuationRatios(null);
+      } else {
+        setValuationRatios(result.valuationRatios);
+      }
     } catch (err) {
       console.error('Failed to load valuation ratios:', err);
       setValuationRatios(null);
@@ -129,13 +137,14 @@ function AnalysisPanel({ stock }) {
     try {
       const { startDate, endDate } = getDateRange();
       
-      const history = await invoke('get_ps_evs_history', {
-        symbol: stock.symbol,
-        startDate,
-        endDate
-      });
-
-      setPsEvsHistory(history || []);
+      const result = await analysisDataService.loadPsEvsHistory(stock.symbol, startDate, endDate);
+      
+      if (result.error) {
+        console.error('Failed to load P/S EV/S history:', result.error);
+        setPsEvsHistory([]);
+      } else {
+        setPsEvsHistory(result.history || []);
+      }
 
     } catch (err) {
       console.error('Failed to load P/S EV/S history:', err);
@@ -205,11 +214,13 @@ function AnalysisPanel({ stock }) {
 
   const exportData = async (format) => {
     try {
-      const result = await invoke('export_data', {
-        symbol: stock.symbol,
-        format
-      });
-      alert(`Export successful: ${result}`);
+      const result = await analysisDataService.exportStockData(stock.symbol, format);
+      
+      if (result.error) {
+        alert(`Export failed: ${result.error}`);
+      } else {
+        alert(`Export successful: ${result.data}`);
+      }
     } catch (err) {
       alert(`Export failed: ${err}`);
     }

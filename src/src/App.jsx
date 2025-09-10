@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
 import StockRow from './components/StockRow';
 import RecommendationsPanel from './components/RecommendationsPanel';
+import { stockDataService, systemDataService } from './services/dataService.js';
 
 function App() {
   const [stocks, setStocks] = useState([]);
@@ -32,18 +32,16 @@ function App() {
       setCurrentPage(0);
       setStocks([]);
       
-      // Load first page of stocks
-      const stocksData = await invoke('get_stocks_paginated', { 
-        limit: STOCKS_PER_PAGE, 
-        offset: 0 
-      });
+      const result = await stockDataService.loadInitialStockData(STOCKS_PER_PAGE);
       
-      setStocks(stocksData);
-      setHasMoreStocks(stocksData.length === STOCKS_PER_PAGE);
-      
-      // Get total count for display
-      const allStocks = await invoke('get_stocks_with_data_status');
-      setTotalStocks(allStocks.length);
+      if (result.error) {
+        setError(result.error);
+        console.error('Error fetching data:', result.error);
+      } else {
+        setStocks(result.stocks);
+        setHasMoreStocks(result.hasMore);
+        setTotalStocks(result.totalStocks);
+      }
       
     } catch (err) {
       setError(`Failed to fetch data: ${err}`);
@@ -59,29 +57,36 @@ function App() {
     try {
       setLoading(true);
       const nextPage = currentPage + 1;
-      const stocksData = await invoke('get_stocks_paginated', { 
-        limit: STOCKS_PER_PAGE, 
-        offset: nextPage * STOCKS_PER_PAGE 
-      });
+      
+      const result = await stockDataService.loadMoreStocks(nextPage, STOCKS_PER_PAGE);
+      
+      if (result.error) {
+        setError(result.error);
+        console.error('Error loading more stocks:', result.error);
+        return;
+      }
       
       // Apply S&P 500 filter if active
-      let filteredStocks = stocksData;
+      let filteredStocks = result.stocks;
       if (sp500Filter) {
         // Ensure we have S&P 500 symbols loaded
         let currentSp500Symbols = sp500Symbols;
         if (sp500Symbols.length === 0) {
           console.log('🔄 Loading S&P 500 symbols for pagination...');
-          currentSp500Symbols = await invoke('get_sp500_symbols');
+          const sp500Result = await stockDataService.loadSp500Symbols();
+          if (sp500Result.error) {
+            setError(sp500Result.error);
+            return;
+          }
+          currentSp500Symbols = sp500Result.symbols;
           setSp500Symbols(currentSp500Symbols);
         }
-        filteredStocks = stocksData.filter(stock => 
-          currentSp500Symbols.includes(stock.symbol)
-        );
+        filteredStocks = stockDataService.filterStocksBySp500(result.stocks, currentSp500Symbols);
       }
       
       setStocks(prev => [...prev, ...filteredStocks]);
       setCurrentPage(nextPage);
-      setHasMoreStocks(filteredStocks.length === STOCKS_PER_PAGE);
+      setHasMoreStocks(result.hasMore);
       
     } catch (err) {
       setError(`Failed to load more stocks: ${err}`);
@@ -92,8 +97,12 @@ function App() {
 
   async function loadInitializationStatus() {
     try {
-      const status = await invoke('get_initialization_status');
-      setInitStatus(status);
+      const result = await systemDataService.loadInitializationStatus();
+      if (result.error) {
+        console.error('Failed to load initialization status:', result.error);
+      } else {
+        setInitStatus(result.status);
+      }
     } catch (err) {
       console.error('Failed to load initialization status:', err);
     }
@@ -102,10 +111,15 @@ function App() {
   async function loadSp500Symbols() {
     try {
       console.log('🔄 Loading S&P 500 symbols...');
-      const symbols = await invoke('get_sp500_symbols');
-      console.log('✅ Loaded S&P 500 symbols:', symbols.length, 'symbols');
-      console.log('📋 First 10 symbols:', symbols.slice(0, 10));
-      setSp500Symbols(symbols);
+      const result = await stockDataService.loadSp500Symbols();
+      
+      if (result.error) {
+        console.error('❌ Failed to load S&P 500 symbols:', result.error);
+      } else {
+        console.log('✅ Loaded S&P 500 symbols:', result.symbols.length, 'symbols');
+        console.log('📋 First 10 symbols:', result.symbols.slice(0, 10));
+        setSp500Symbols(result.symbols);
+      }
     } catch (err) {
       console.error('❌ Failed to load S&P 500 symbols:', err);
     }
@@ -128,45 +142,54 @@ function App() {
       let currentSp500Symbols = sp500Symbols;
       if (newFilterState && sp500Symbols.length === 0) {
         console.log('🔄 S&P 500 symbols not loaded, loading now...');
-        currentSp500Symbols = await invoke('get_sp500_symbols');
+        const sp500Result = await stockDataService.loadSp500Symbols();
+        if (sp500Result.error) {
+          setError(sp500Result.error);
+          return;
+        }
+        currentSp500Symbols = sp500Result.symbols;
         setSp500Symbols(currentSp500Symbols);
         console.log('✅ Loaded S&P 500 symbols:', currentSp500Symbols.length);
       }
       
       // Load first page of stocks
-      const stocksData = await invoke('get_stocks_paginated', { 
-        limit: STOCKS_PER_PAGE, 
-        offset: 0 
-      });
-      console.log('📈 Loaded stocks data:', stocksData.length, 'stocks');
-      console.log('📋 First 5 stock symbols:', stocksData.slice(0, 5).map(s => s.symbol));
+      const result = await stockDataService.loadInitialStockData(STOCKS_PER_PAGE);
+      
+      if (result.error) {
+        setError(result.error);
+        console.error('Error loading stocks:', result.error);
+        return;
+      }
+      
+      console.log('📈 Loaded stocks data:', result.stocks.length, 'stocks');
+      console.log('📋 First 5 stock symbols:', result.stocks.slice(0, 5).map(s => s.symbol));
       
       // Apply S&P 500 filter if enabled
-      let filteredStocks = stocksData;
+      let filteredStocks = result.stocks;
       if (newFilterState) { // If filter is now ON
         console.log('🔍 Applying S&P 500 filter...');
         console.log('📊 Using S&P 500 symbols:', currentSp500Symbols.length);
-        filteredStocks = stocksData.filter(stock => 
-          currentSp500Symbols.includes(stock.symbol)
-        );
+        filteredStocks = stockDataService.filterStocksBySp500(result.stocks, currentSp500Symbols);
         console.log('✅ Filtered stocks:', filteredStocks.length, 'stocks');
         console.log('📋 Filtered stock symbols:', filteredStocks.map(s => s.symbol));
       }
       
       setStocks(filteredStocks);
-      setHasMoreStocks(filteredStocks.length === STOCKS_PER_PAGE);
+      setHasMoreStocks(result.hasMore);
       
-      // Get total count for display
-      const allStocks = await invoke('get_stocks_with_data_status');
-      let totalCount = allStocks.length;
+      // Calculate total count for display
+      let totalCount = result.totalStocks;
       if (newFilterState) { // If filter is now ON
         console.log('🔍 Calculating total S&P 500 count...');
-        console.log('📊 All stocks count:', allStocks.length);
+        console.log('📊 All stocks count:', result.totalStocks);
         console.log('📊 S&P 500 symbols count:', currentSp500Symbols.length);
-        totalCount = allStocks.filter(stock => 
-          currentSp500Symbols.includes(stock.symbol)
-        ).length;
-        console.log('✅ Total S&P 500 stocks:', totalCount);
+        // We need to get all stocks to calculate S&P 500 total
+        const allStocksResult = await stockDataService.loadInitialStockData(10000); // Large limit to get all
+        if (allStocksResult.success) {
+          const allStocks = allStocksResult.stocks;
+          totalCount = stockDataService.filterStocksBySp500(allStocks, currentSp500Symbols).length;
+          console.log('✅ Total S&P 500 stocks:', totalCount);
+        }
       }
       setTotalStocks(totalCount);
       
@@ -186,8 +209,14 @@ function App() {
     
     try {
       setLoading(true);
-      const results = await invoke('search_stocks', { query: searchQuery });
-      setStocks(results);
+      const result = await stockDataService.searchStocks(searchQuery);
+      
+      if (result.error) {
+        setError(result.error);
+        console.error('Search failed:', result.error);
+      } else {
+        setStocks(result.stocks);
+      }
     } catch (err) {
       setError(`Search failed: ${err}`);
     } finally {

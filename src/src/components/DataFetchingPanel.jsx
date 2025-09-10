@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { systemDataService } from '../services/dataService.js';
 
 function DataFetchingPanel({ stock }) {
   const [importStats, setImportStats] = useState(null);
@@ -11,8 +11,13 @@ function DataFetchingPanel({ stock }) {
       setLoading(true);
       try {
         // Get database statistics to show SimFin import status
-        const stats = await invoke('get_database_stats');
-        setImportStats(stats);
+        const result = await systemDataService.loadDatabaseStats();
+        
+        if (result.error) {
+          console.error('Failed to get database stats:', result.error);
+        } else {
+          setImportStats(result.stats);
+        }
       } catch (error) {
         console.error('Failed to get database stats:', error);
       } finally {

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { recommendationsDataService } from '../services/dataService.js';
 
 function RecommendationsPanel({ onClose }) {
   const [recommendations, setRecommendations] = useState([]);
@@ -20,13 +20,16 @@ function RecommendationsPanel({ onClose }) {
       
       if (screeningType === 'ps') {
         // P/S ratio screening for undervalued stocks
-        const psStocks = await invoke('get_undervalued_stocks_by_ps', { 
-          max_ps_ratio: psRatio, 
-          limit 
-        });
+        const result = await recommendationsDataService.loadUndervaluedStocksByPs(psRatio, limit);
+        
+        if (result.error) {
+          setError(result.error);
+          console.error('Error loading P/S recommendations:', result.error);
+          return;
+        }
         
         // Transform P/S data to match recommendations format
-        const transformedRecommendations = psStocks.map((stock, index) => ({
+        const transformedRecommendations = result.stocks.map((stock, index) => ({
           rank: index + 1,
           symbol: stock.symbol,
           company_name: stock.symbol, // We'll use symbol as company name for now
@@ -47,16 +50,23 @@ function RecommendationsPanel({ onClose }) {
         setRecommendations(transformedRecommendations);
         setStats({
           total_sp500_stocks: 503,
-          stocks_with_pe_data: psStocks.length,
-          value_stocks_found: psStocks.length,
+          stocks_with_pe_data: result.stocks.length,
+          value_stocks_found: result.stocks.length,
           average_value_score: transformedRecommendations.reduce((sum, r) => sum + r.value_score, 0) / transformedRecommendations.length || 0,
           average_risk_score: transformedRecommendations.reduce((sum, r) => sum + r.risk_score, 0) / transformedRecommendations.length || 0
         });
       } else {
         // Original P/E ratio screening
-        const response = await invoke('get_value_recommendations_with_stats', { limit });
-        setRecommendations(response.recommendations);
-        setStats(response.stats);
+        const result = await recommendationsDataService.loadValueRecommendations(limit);
+        
+        if (result.error) {
+          setError(result.error);
+          console.error('Error loading P/E recommendations:', result.error);
+          return;
+        }
+        
+        setRecommendations(result.recommendations);
+        setStats(result.stats);
       }
     } catch (err) {
       setError(`Failed to load recommendations: ${err}`);

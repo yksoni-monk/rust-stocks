@@ -1,9 +1,42 @@
 use sqlx::{SqlitePool, Row};
 use chrono::NaiveDate;
 use crate::api::alpha_vantage_client::ConvertedDailyPrice;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
-/// Get database connection
+// Test database pool for injection during testing
+static TEST_DB_POOL: RwLock<Option<Arc<SqlitePool>>> = RwLock::const_new(None);
+
+/// Set test database pool for testing (replaces production database)
+/// ⚠️  SAFETY: This should only be called with isolated test databases
+#[cfg(any(test, feature = "test-utils"))]
+pub async fn set_test_database_pool(pool: SqlitePool) {
+    // SAFETY CHECK: Try to detect if this might be a production database
+    // Note: We can't easily check the path here since SQLite pools don't expose it
+    // But the TestDatabase::new() already has safety checks
+    
+    println!("🧪 Injecting test database pool for testing (production DB protection active)");
+    let mut test_pool = TEST_DB_POOL.write().await;
+    *test_pool = Some(Arc::new(pool));
+}
+
+/// Clear test database pool (restore production database)
+#[cfg(any(test, feature = "test-utils"))]
+pub async fn clear_test_database_pool() {
+    let mut test_pool = TEST_DB_POOL.write().await;
+    *test_pool = None;
+}
+
+/// Get database connection (test-aware)
 pub async fn get_database_connection() -> Result<SqlitePool, String> {
+    // Check if we have a test database pool
+    let test_pool = TEST_DB_POOL.read().await;
+    if let Some(pool_arc) = test_pool.as_ref() {
+        return Ok((**pool_arc).clone());
+    }
+    drop(test_pool);
+    
+    // Use production database
     let database_url = "sqlite:db/stocks.db";
     SqlitePool::connect(database_url).await
         .map_err(|e| format!("Database connection failed: {}", e))

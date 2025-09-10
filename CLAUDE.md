@@ -32,6 +32,14 @@
 **For detailed project architecture, design decisions, and comprehensive documentation:**
 👉 **Check the `context/` folder** - contains full project context, architecture plans, and historical documentation
 
+## 🧪 BACKEND TESTING STRATEGY
+**For comprehensive backend testing plan:**
+👉 **`context/backend_test_plan.md`** - Complete test strategy for all 13 frontend-called functions
+- ✅ **13 Commands**: All frontend API calls identified and prioritized  
+- ✅ **Self-Contained Tests**: Focus only on code called by UI (no dead code testing)
+- ✅ **Test Database**: Isolated test DB with minimal dataset for fast execution
+- 🔄 **Implementation**: Ready for test development phase
+
 ## P/S & EV/S RATIO SYSTEM STATUS
 ✅ **FULLY OPERATIONAL**
 - 54,160 TTM financial statements imported

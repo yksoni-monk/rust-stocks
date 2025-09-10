@@ -238,3 +238,363 @@ cargo test --release performance_tests
 ---
 *Last Updated: 2025-09-09*
 *Focus: Frontend-driven testing, no dead code, production-quality test coverage*
+
+---
+
+## Future Work & Enhancements
+
+### **Performance Benchmarks**
+
+#### **Response Time Targets**
+```markdown
+### **Performance Benchmarks**
+- **Stock Pagination**: <100ms for 50 stocks (current: ~200ms)
+- **Stock Search**: <200ms for query results (current: ~300ms)  
+- **S&P 500 Filter**: <150ms for symbol loading (current: ~500ms)
+- **Price History**: <500ms for 1-year data (current: ~800ms)
+- **Valuation Ratios**: <300ms for P/S & EV/S calculation (current: ~400ms)
+- **Recommendations**: <1s for 20 recommendations with stats (current: ~1.5s)
+- **Database Stats**: <200ms for statistics calculation (current: ~300ms)
+```
+
+#### **Performance Test Implementation**
+```rust
+// Add to tests/performance_tests.rs
+#[tokio::test]
+async fn test_pagination_performance() {
+    let start = Instant::now();
+    let result = get_stocks_paginated(50, 0).await;
+    let duration = start.elapsed();
+    
+    assert!(duration < Duration::from_millis(100));
+    assert_eq!(result.stocks.len(), 50);
+}
+
+#[tokio::test]
+async fn test_search_performance() {
+    let start = Instant::now();
+    let result = search_stocks("AAPL").await;
+    let duration = start.elapsed();
+    
+    assert!(duration < Duration::from_millis(200));
+    assert!(!result.is_empty());
+}
+
+#[tokio::test]
+async fn test_analysis_performance() {
+    let start = Instant::now();
+    let result = get_price_history("AAPL", "2023-01-01", "2023-12-31").await;
+    let duration = start.elapsed();
+    
+    assert!(duration < Duration::from_millis(500));
+    assert!(result.len() > 200); // ~250 trading days
+}
+```
+
+### **Integration Test Workflows**
+
+#### **Complete User Journey Tests**
+```markdown
+### **End-to-End User Workflows**
+
+#### **1. Stock Analysis Workflow**
+```rust
+#[tokio::test]
+async fn test_complete_analysis_workflow() {
+    // Step 1: Load initial stock list
+    let stocks = get_stocks_paginated(50, 0).await;
+    assert!(!stocks.stocks.is_empty());
+    
+    // Step 2: Search for specific stock
+    let search_results = search_stocks("Apple").await;
+    assert!(!search_results.is_empty());
+    
+    // Step 3: Get stock date range
+    let date_range = get_stock_date_range("AAPL").await;
+    assert!(date_range.start_date.is_some());
+    
+    // Step 4: Load price history
+    let price_history = get_price_history(
+        "AAPL", 
+        date_range.start_date.unwrap(), 
+        date_range.end_date.unwrap()
+    ).await;
+    assert!(!price_history.is_empty());
+    
+    // Step 5: Get valuation ratios
+    let ratios = get_valuation_ratios("AAPL").await;
+    assert!(ratios.ps_ratio.is_some());
+    
+    // Step 6: Export data
+    let export_result = export_data("AAPL", "csv").await;
+    assert!(export_result.success);
+}
+```
+
+#### **2. S&P 500 Filter Workflow**
+```rust
+#[tokio::test]
+async fn test_sp500_filter_workflow() {
+    // Step 1: Load S&P 500 symbols
+    let sp500_symbols = get_sp500_symbols().await;
+    assert!(!sp500_symbols.is_empty());
+    assert!(sp500_symbols.len() > 400); // Should have ~500 symbols
+    
+    // Step 2: Load all stocks
+    let all_stocks = get_stocks_with_data_status().await;
+    assert!(!all_stocks.is_empty());
+    
+    // Step 3: Filter to S&P 500 only
+    let sp500_stocks: Vec<_> = all_stocks.iter()
+        .filter(|stock| sp500_symbols.contains(&stock.symbol))
+        .collect();
+    
+    // Step 4: Test pagination with filtered results
+    let paginated_sp500 = get_stocks_paginated(20, 0).await;
+    // Note: This would need backend support for filtered pagination
+    
+    // Step 5: Verify S&P 500 stocks have complete data
+    for stock in &sp500_stocks[..5] { // Test first 5
+        let ratios = get_valuation_ratios(&stock.symbol).await;
+        assert!(ratios.ps_ratio.is_some() || ratios.evs_ratio.is_some());
+    }
+}
+```
+
+#### **3. Recommendations Workflow**
+```rust
+#[tokio::test]
+async fn test_recommendations_workflow() {
+    // Step 1: Load P/E based recommendations
+    let pe_recommendations = get_value_recommendations_with_stats(10).await;
+    assert!(!pe_recommendations.recommendations.is_empty());
+    assert!(pe_recommendations.stats.total_analyzed > 0);
+    
+    // Step 2: Load P/S based recommendations
+    let ps_recommendations = get_undervalued_stocks_by_ps(2.0, 10).await;
+    assert!(!ps_recommendations.is_empty());
+    
+    // Step 3: Cross-validate recommendations
+    let pe_symbols: HashSet<_> = pe_recommendations.recommendations
+        .iter()
+        .map(|r| &r.symbol)
+        .collect();
+    
+    let ps_symbols: HashSet<_> = ps_recommendations
+        .iter()
+        .map(|r| &r.symbol)
+        .collect();
+    
+    // Should have some overlap between P/E and P/S recommendations
+    let overlap = pe_symbols.intersection(&ps_symbols).count();
+    assert!(overlap > 0, "P/E and P/S recommendations should have some overlap");
+    
+    // Step 4: Analyze specific recommendation
+    if let Some(recommendation) = pe_recommendations.recommendations.first() {
+        let ratios = get_valuation_ratios(&recommendation.symbol).await;
+        assert!(ratios.pe_ratio.is_some());
+        
+        let price_history = get_price_history(
+            &recommendation.symbol,
+            "2023-01-01",
+            "2023-12-31"
+        ).await;
+        assert!(!price_history.is_empty());
+    }
+}
+```
+
+#### **4. Error Recovery Workflow**
+```rust
+#[tokio::test]
+async fn test_error_recovery_workflow() {
+    // Step 1: Test invalid symbol handling
+    let invalid_result = get_price_history("INVALID_SYMBOL", "2023-01-01", "2023-12-31").await;
+    assert!(invalid_result.is_empty());
+    
+    // Step 2: Test invalid date range
+    let invalid_dates = get_price_history("AAPL", "2023-12-31", "2023-01-01").await;
+    assert!(invalid_dates.is_empty());
+    
+    // Step 3: Test empty search results
+    let empty_search = search_stocks("NONEXISTENT_COMPANY_XYZ").await;
+    assert!(empty_search.is_empty());
+    
+    // Step 4: Test pagination beyond available data
+    let beyond_data = get_stocks_paginated(50, 10000).await;
+    assert!(beyond_data.stocks.is_empty());
+    assert_eq!(beyond_data.offset, 10000);
+    
+    // Step 5: Test S&P 500 timeout fallback
+    // This would require mocking the GitHub API timeout
+    let sp500_fallback = get_sp500_symbols().await;
+    assert!(!sp500_fallback.is_empty()); // Should fallback to DB
+}
+```
+
+### **Enhanced Test Data Scenarios**
+
+#### **Edge Case Test Data**
+```markdown
+### **Comprehensive Test Data Coverage**
+
+#### **1. Financial Edge Cases**
+- **Zero Revenue Stock**: Company with $0 revenue (division by zero in P/S)
+- **Negative P/E Stock**: Unprofitable company with negative earnings
+- **Missing Financial Data**: Stock with price data but no financials
+- **Extreme Ratios**: P/S > 100 or P/E > 500 (growth stocks)
+- **Penny Stock**: Stock with price < $1 (different calculation needs)
+
+#### **2. Date Edge Cases**
+- **Weekend Dates**: Request data for Saturday/Sunday
+- **Holiday Dates**: Market closed dates (Christmas, New Year)
+- **Future Dates**: Request data beyond today
+- **Very Old Dates**: Pre-2019 data (before current schema)
+- **Leap Year**: February 29th handling
+- **Timezone Edge Cases**: Different timezone handling
+
+#### **3. Data Completeness Scenarios**
+- **Complete Data**: Stock with all ratios, price history, financials
+- **Partial Data**: Stock with price but missing P/E (negative earnings)
+- **Minimal Data**: Stock with only 1 day of price data
+- **Inconsistent Data**: Stock with gaps in price history
+- **Corrupted Data**: Malformed database entries
+```
+
+#### **Test Data Factory Implementation**
+```rust
+// Add to tests/helpers/test_data_factory.rs
+pub struct TestDataFactory;
+
+impl TestDataFactory {
+    pub async fn create_complete_stock(symbol: &str) -> Stock {
+        // Create stock with all data (price, ratios, financials)
+    }
+    
+    pub async fn create_unprofitable_stock(symbol: &str) -> Stock {
+        // Create stock with negative earnings
+    }
+    
+    pub async fn create_zero_revenue_stock(symbol: &str) -> Stock {
+        // Create stock with $0 revenue
+    }
+    
+    pub async fn create_penny_stock(symbol: &str) -> Stock {
+        // Create stock with price < $1
+    }
+    
+    pub async fn create_minimal_data_stock(symbol: &str) -> Stock {
+        // Create stock with only 1 day of price data
+    }
+}
+```
+
+### **Advanced Testing Features**
+
+#### **Concurrent Access Testing**
+```rust
+#[tokio::test]
+async fn test_concurrent_database_access() {
+    let handles: Vec<_> = (0..10)
+        .map(|i| {
+            tokio::spawn(async move {
+                get_stocks_paginated(10, i * 10).await
+            })
+        })
+        .collect();
+    
+    let results = futures::future::join_all(handles).await;
+    
+    for result in results {
+        assert!(result.is_ok());
+        let stocks = result.unwrap();
+        assert_eq!(stocks.stocks.len(), 10);
+    }
+}
+```
+
+#### **Memory Usage Testing**
+```rust
+#[tokio::test]
+async fn test_memory_usage_large_dataset() {
+    let start_memory = get_memory_usage();
+    
+    // Load large dataset
+    let large_result = get_stocks_paginated(1000, 0).await;
+    assert_eq!(large_result.stocks.len(), 1000);
+    
+    let end_memory = get_memory_usage();
+    let memory_increase = end_memory - start_memory;
+    
+    // Should not use more than 50MB for 1000 stocks
+    assert!(memory_increase < 50 * 1024 * 1024);
+}
+```
+
+#### **Database Corruption Testing**
+```rust
+#[tokio::test]
+async fn test_database_corruption_recovery() {
+    // Simulate database corruption
+    corrupt_test_database().await;
+    
+    // Test that commands handle corruption gracefully
+    let result = get_stocks_paginated(10, 0).await;
+    
+    // Should either return empty results or handle error gracefully
+    match result {
+        Ok(stocks) => {
+            // If it succeeds, data should be valid
+            for stock in stocks.stocks {
+                assert!(!stock.symbol.is_empty());
+            }
+        }
+        Err(e) => {
+            // Error should be informative
+            assert!(e.to_string().contains("database"));
+        }
+    }
+}
+```
+
+### **Continuous Integration Enhancements**
+
+#### **Test Reporting**
+```markdown
+### **CI/CD Integration**
+
+#### **1. Test Result Reporting**
+- **Coverage Reports**: Generate HTML coverage reports
+- **Performance Reports**: Track performance regression over time
+- **Failure Analysis**: Categorize test failures (data, performance, integration)
+- **Trend Analysis**: Track test execution time trends
+
+#### **2. Automated Test Data Refresh**
+- **Weekly Refresh**: Update test database with latest production data sample
+- **Data Validation**: Ensure test data remains representative
+- **Schema Validation**: Verify test data matches current schema
+```
+
+#### **Test Execution Optimization**
+```rust
+// Add to tests/helpers/test_runner.rs
+pub struct TestRunner {
+    pub parallel_tests: bool,
+    pub test_timeout: Duration,
+    pub memory_limit: usize,
+}
+
+impl TestRunner {
+    pub async fn run_performance_tests(&self) -> TestResults {
+        // Run performance tests with timing
+    }
+    
+    pub async fn run_integration_tests(&self) -> TestResults {
+        // Run integration tests with workflow validation
+    }
+    
+    pub async fn run_stress_tests(&self) -> TestResults {
+        // Run stress tests with high load
+    }
+}
+```

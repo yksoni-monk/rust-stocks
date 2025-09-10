@@ -2,6 +2,7 @@ use sqlx::{SqlitePool, Row};
 use chrono::NaiveDate;
 use crate::api::alpha_vantage_client::ConvertedDailyPrice;
 use std::sync::Arc;
+use std::str::FromStr;
 use tokio::sync::RwLock;
 
 // Test database pool for injection during testing
@@ -36,9 +37,20 @@ pub async fn get_database_connection() -> Result<SqlitePool, String> {
     }
     drop(test_pool);
     
-    // Use production database
+    // Use production database with WAL mode and connection pooling for better concurrency
     let database_url = "sqlite:db/stocks.db";
-    SqlitePool::connect(database_url).await
+    sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(20) // Allow multiple concurrent connections for production
+        .min_connections(5)
+        .acquire_timeout(std::time::Duration::from_secs(10))
+        .idle_timeout(Some(std::time::Duration::from_secs(600)))
+        .connect_with(
+            sqlx::sqlite::SqliteConnectOptions::from_str(database_url)
+                .map_err(|e| format!("Database URL parsing failed: {}", e))?
+                .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+                .busy_timeout(std::time::Duration::from_secs(30))
+                .synchronous(sqlx::sqlite::SqliteSynchronous::Normal)
+        ).await
         .map_err(|e| format!("Database connection failed: {}", e))
 }
 

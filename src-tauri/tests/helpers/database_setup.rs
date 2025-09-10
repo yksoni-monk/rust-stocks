@@ -1,6 +1,7 @@
 use sqlx::{SqlitePool, Row};
 use std::path::Path;
 use std::fs;
+use std::str::FromStr;
 use crate::helpers::test_config::TestConfig;
 
 /// Test database setup utilities
@@ -27,9 +28,19 @@ impl TestDatabase {
             is_copy = Self::setup_test_database_copy(&config.test_db_path).await?;
         }
         
-        // Connect to the database
+        // Connect to the database with WAL mode and connection pool for proper concurrency
         let database_url = config.get_database_url();
-        let pool = SqlitePool::connect(&database_url).await?;
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(10) // Allow multiple concurrent connections
+            .min_connections(2)
+            .acquire_timeout(std::time::Duration::from_secs(10))
+            .idle_timeout(Some(std::time::Duration::from_secs(300)))
+            .connect_with(
+                sqlx::sqlite::SqliteConnectOptions::from_str(&database_url)?
+                    .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+                    .busy_timeout(std::time::Duration::from_secs(30))
+                    .synchronous(sqlx::sqlite::SqliteSynchronous::Normal)
+            ).await?;
         
         println!("✅ Connected to test database: {}", database_url);
         
@@ -117,7 +128,11 @@ impl TestDatabase {
     async fn validate_existing_test_db(db_path: &str) -> Result<bool, Box<dyn std::error::Error>> {
         let database_url = format!("sqlite:{}", db_path);
         
-        match SqlitePool::connect(&database_url).await {
+        match SqlitePool::connect_with(
+            sqlx::sqlite::SqliteConnectOptions::from_str(&database_url)?
+                .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+                .busy_timeout(std::time::Duration::from_secs(10))
+        ).await {
             Ok(pool) => {
                 // Try a simple query to verify the database is not corrupted
                 match sqlx::query("SELECT COUNT(*) FROM sqlite_master").fetch_one(&pool).await {
@@ -144,9 +159,14 @@ impl TestDatabase {
             fs::create_dir_all(parent)?;
         }
         
-        // Connect to new database
+        // Connect to new database with WAL mode
         let database_url = format!("sqlite:{}", test_db_path);
-        let pool = SqlitePool::connect(&database_url).await?;
+        let pool = SqlitePool::connect_with(
+            sqlx::sqlite::SqliteConnectOptions::from_str(&database_url)?
+                .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+                .create_if_missing(true)
+                .busy_timeout(std::time::Duration::from_secs(30))
+        ).await?;
         
         // Run migrations
         sqlx::migrate!("./db/migrations").run(&pool).await?;

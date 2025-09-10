@@ -230,7 +230,104 @@ CREATE TABLE option_chains (
 );
 ```
 
-## Current Frontend Architecture - Expandable Panels System
+## Frontend Architecture
+
+### Current State: Backend Code Mixed with UI Components
+
+**Issues Identified:**
+
+1. **No API Service Layer**: All 29 `invoke()` calls are directly embedded in React components
+2. **Inconsistent Error Handling**: Each component handles errors differently with custom logic
+3. **Duplicate API Calls**: Same operations repeated across multiple components
+4. **Tight Coupling**: UI components directly depend on backend API structure
+5. **No Caching**: No data caching or request deduplication
+6. **Hard to Test**: Cannot mock backend calls for unit testing
+7. **Maintenance Nightmare**: Backend changes require touching multiple UI files
+
+### Backend Actions Inventory
+
+**Stock Operations (4):**
+- `get_stocks_paginated` - Fetch paginated stock list
+- `get_stocks_with_data_status` - Get all stocks with data status  
+- `search_stocks` - Search stocks by query
+- `get_sp500_symbols` - Get S&P 500 symbols list
+
+**Analysis Operations (5):**
+- `get_stock_date_range` - Get date range for stock data
+- `get_price_history` - Get price history data
+- `get_valuation_ratios` - Get P/S, EV/S ratios
+- `get_ps_evs_history` - Get P/S and EV/S history
+- `export_data` - Export stock data
+
+**Recommendations Operations (2):**
+- `get_undervalued_stocks_by_ps` - Get undervalued stocks by P/S ratio
+- `get_value_recommendations_with_stats` - Get value recommendations with statistics
+
+**System Operations (2):**
+- `get_initialization_status` - Get system initialization status
+- `get_database_stats` - Get database statistics
+
+**Total: 13 unique backend operations across 4 components**
+
+### Solution Design: Clean Architecture
+
+#### Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    UI Components                            │
+│  (App.jsx, AnalysisPanel.jsx, RecommendationsPanel.jsx)   │
+└─────────────────────┬───────────────────────────────────────┘
+                      │
+                      │ Uses
+                      ▼
+┌─────────────────────────────────────────────────────────────┐
+│                Data Service Layer                          │
+│  (stockDataService, analysisDataService, etc.)            │
+│  • Business logic & data transformation                    │
+│  • Complex operations combining multiple API calls        │
+│  • Data aggregation and caching                            │
+└─────────────────────┬───────────────────────────────────────┘
+                      │
+                      │ Uses
+                      ▼
+┌─────────────────────────────────────────────────────────────┐
+│                  API Service Layer                         │
+│  (stockAPI, analysisAPI, recommendationsAPI, etc.)        │
+│  • Direct invoke() calls to Tauri backend                 │
+│  • Consistent error handling                               │
+│  • Response normalization                                  │
+└─────────────────────┬───────────────────────────────────────┘
+                      │
+                      │ Uses
+                      ▼
+┌─────────────────────────────────────────────────────────────┐
+│                Tauri Backend                              │
+│  (Rust commands and database operations)                   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### Service Layer Structure
+
+**1. `api.js` - Raw API Layer**
+- Contains all direct `invoke()` calls to Tauri backend
+- Organized by functional areas (stock, analysis, recommendations, etc.)
+- Provides consistent error handling wrapper
+- **Purpose**: Abstract Tauri-specific communication
+
+**2. `dataService.js` - Business Logic Layer**  
+- Contains complex data operations and business logic
+- Handles data transformation and aggregation
+- Provides higher-level operations that combine multiple API calls
+- **Purpose**: Handle business rules and data processing
+
+#### Design Principles
+
+1. **Single Responsibility**: Each service handles one domain
+2. **Dependency Inversion**: UI depends on abstractions, not concrete implementations
+3. **Consistent Error Handling**: All services return normalized error responses
+4. **Reusability**: Services can be used across multiple components
+5. **Testability**: Services can be easily mocked for unit testing
 
 ### React Component Structure (Current Implementation)
 
@@ -242,15 +339,15 @@ frontend/src/
 │   ├── ExpandablePanel.jsx   # Generic expandable container with animations
 │   ├── AnalysisPanel.jsx     # User-driven metric analysis interface  
 │   ├── DataFetchingPanel.jsx # Unified data fetching interface
-│   └── [Legacy components preserved for future reference]
-├── hooks/
-│   ├── useStocks.js         # Stock data management
-│   ├── useAnalysis.js       # Analysis calculations
-│   └── useTauri.js          # Tauri API integration
+│   └── RecommendationsPanel.jsx # Value recommendations interface
+├── services/                  # NEW: Service layer architecture
+│   ├── api.js               # Raw API layer with invoke() calls
+│   ├── dataService.js       # Business logic layer
+│   └── README.md            # Service layer documentation
 └── utils/
     ├── formatters.js        # Data formatting utilities
     ├── calculations.js      # Financial calculations
-    └── api.js              # API helper functions
+    └── api.js              # Legacy API helper functions
 ```
 
 ### Current Features (Phase 3 Complete)
@@ -262,6 +359,86 @@ frontend/src/
 6. **Visual Data Indicators**: 📊 for stocks with data, 📋 for no data
 7. **Multiple Panel Support**: Multiple stocks can have expanded panels simultaneously
 8. **Smooth Animations**: Professional expand/collapse transitions
+
+### Frontend Refactoring Strategy
+
+#### Phase 1: Service Layer Creation ✅
+- [x] Create `api.js` with all backend operations
+- [x] Create `dataService.js` with business logic
+- [x] Document architecture and design decisions
+
+#### Phase 2: Component Refactoring 🔄
+- [ ] Refactor `App.jsx` to use `stockDataService`
+- [ ] Refactor `AnalysisPanel.jsx` to use `analysisDataService`
+- [ ] Refactor `RecommendationsPanel.jsx` to use `recommendationsDataService`
+- [ ] Refactor `DataFetchingPanel.jsx` to use `systemDataService`
+
+#### Phase 3: Cleanup 🔄
+- [ ] Remove all direct `invoke()` calls from components
+- [ ] Remove unused imports (`@tauri-apps/api/core`)
+- [ ] Add consistent error handling across all components
+- [ ] Add loading states management
+
+#### Phase 4: Optimization 🔄
+- [ ] Add data caching where appropriate
+- [ ] Implement request deduplication
+- [ ] Add retry logic for failed requests
+- [ ] Add request cancellation for component unmounting
+
+#### Usage Examples
+
+**Before (Mixed UI and Backend):**
+```javascript
+// In React component - BAD
+const loadData = async () => {
+  try {
+    setLoading(true);
+    const history = await invoke('get_price_history', {
+      symbol: stock.symbol,
+      startDate,
+      endDate
+    });
+    setPriceHistory(history);
+    setLoading(false);
+  } catch (err) {
+    setError(`Failed to fetch data: ${err}`);
+    setLoading(false);
+  }
+};
+```
+
+**After (Clean Separation):**
+```javascript
+// In React component - GOOD
+import { analysisDataService } from '../services/dataService.js';
+
+const loadData = async () => {
+  setLoading(true);
+  const result = await analysisDataService.loadStockAnalysis(
+    stock.symbol, 
+    startDate, 
+    endDate
+  );
+  
+  if (result.error) {
+    setError(result.error);
+  } else {
+    setPriceHistory(result.priceHistory);
+    setValuationRatios(result.valuationRatios);
+  }
+  setLoading(false);
+};
+```
+
+#### Expected Benefits
+
+1. **Separation of Concerns**: UI components only handle UI logic
+2. **Reusability**: API services can be used across multiple components
+3. **Testability**: Services can be easily mocked for testing
+4. **Consistency**: Centralized error handling and data transformation
+5. **Maintainability**: Backend changes only require service layer updates
+6. **Performance**: Data caching and request deduplication
+7. **Developer Experience**: Clear separation makes code easier to understand and modify
 
 ## Current Backend Architecture (Tauri + SimFin)
 

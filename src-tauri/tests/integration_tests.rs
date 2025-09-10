@@ -5,11 +5,16 @@
 mod helpers;
 
 use helpers::{TestDatabase, TestAssertions};
+use rust_stocks_tauri_lib::database::helpers::set_test_database_pool;
 use std::time::{Duration, Instant};
 
 /// Test the database setup itself
 #[tokio::test]
 async fn test_database_setup() {
+    // Phase 1: Run intelligent sync (copies production data to test.db)
+    TestDatabase::intelligent_sync().await.expect("Intelligent sync failed");
+    
+    // Phase 2: Connect to test database (now has production data)
     let test_db = TestDatabase::new().await.expect("Failed to create test database");
     test_db.verify_test_data().await.expect("Test data verification failed");
     test_db.cleanup().await.expect("Cleanup failed");
@@ -22,6 +27,10 @@ async fn test_database_setup() {
 /// Test stock pagination (HIGH priority - core functionality)
 #[tokio::test]
 async fn test_get_stocks_paginated() {
+    // Phase 1: Run intelligent sync (copies production data to test.db)
+    TestDatabase::intelligent_sync().await.expect("Intelligent sync failed");
+    
+    // Phase 2: Connect to test database (now has production data)
     let test_db = TestDatabase::new().await.unwrap();
     set_test_database_pool(test_db.pool().clone()).await;
     
@@ -47,10 +56,10 @@ async fn test_get_stocks_paginated() {
     
     // Test edge case: limit larger than available data
     let result_large = get_stocks_paginated(100, 0).await.expect("Large limit failed");
-    assert_eq!(result_large.len(), 10, "Should return all 10 test stocks");
+    assert_eq!(result_large.len(), 100, "Should return 100 stocks as requested");
     
-    // Test edge case: offset beyond data
-    let result_beyond = get_stocks_paginated(10, 100).await.expect("Beyond offset failed");
+    // Test edge case: offset way beyond data
+    let result_beyond = get_stocks_paginated(10, 10000).await.expect("Beyond offset failed");
     assert_eq!(result_beyond.len(), 0, "Should return empty result for offset beyond data");
     
     test_db.cleanup().await.unwrap();
@@ -66,14 +75,15 @@ async fn test_get_stocks_with_data_status() {
     
     let result = get_stocks_with_data_status().await.expect("get_stocks_with_data_status failed");
     
-    assert_eq!(result.len(), 10, "Should return all 10 test stocks");
+    assert!(result.len() > 1000, "Should return many stocks from production data");
     
-    // Verify data status flags
+    // Verify data status flags with real production data
     let aapl_stock = result.iter().find(|s| s.symbol == "AAPL").expect("AAPL should be present");
     assert!(aapl_stock.has_data, "AAPL should have data");
     
-    let minimal_stock = result.iter().find(|s| s.symbol == "MINIMAL").expect("MINIMAL should be present");
-    // MINIMAL has price data but limited financial data
+    // Find any stock that has data
+    let stocks_with_data: Vec<_> = result.iter().filter(|s| s.has_data).collect();
+    assert!(stocks_with_data.len() > 100, "Should have many stocks with data");
     
     for stock in &result {
         TestAssertions::assert_stock_data_valid(stock);
@@ -92,7 +102,7 @@ async fn test_get_sp500_symbols() {
     
     let result = get_sp500_symbols().await.expect("get_sp500_symbols failed");
     
-    assert_eq!(result.len(), 8, "Should return 8 test S&P 500 symbols");
+    assert!(result.len() > 400, "Should return many S&P 500 symbols from production data");
     
     // Verify expected symbols are present
     let expected_symbols = vec!["AAPL", "MSFT", "GOOGL", "TSLA", "AMZN", "NVDA", "META", "NFLX"];
@@ -161,7 +171,7 @@ async fn test_get_valuation_ratios() {
             assert!(ratios.evs_ratio_ttm.is_some(), "AAPL should have EV/S ratio");
             assert!(ratios.market_cap.is_some(), "AAPL should have market cap");
             assert!(ratios.revenue_ttm.is_some(), "AAPL should have TTM revenue");
-            assert_eq!(ratios.data_completeness_score, Some(100), "AAPL should have 100% data completeness");
+            assert_eq!(ratios.data_completeness_score, 100, "AAPL should have 100% data completeness");
         }
         None => panic!("AAPL should have valuation ratios"),
     }
@@ -259,7 +269,7 @@ async fn test_get_value_recommendations_with_stats() {
     // Verify stats structure
     assert!(result.stats.total_sp500_stocks > 0, "Should have total S&P 500 count");
     assert!(result.stats.stocks_with_pe_data >= 0, "Should have P/E data count");
-    assert!(result.stats.value_stocks_found >= result.recommendations.len(), "Value stocks found should be >= recommendations count");
+    assert!(result.stats.value_stocks_found >= result.recommendations.len() as usize, "Value stocks found should be >= recommendations count");
     
     // Verify recommendations quality
     for rec in &result.recommendations {
@@ -357,12 +367,11 @@ async fn test_get_database_stats() {
     let result = get_database_stats().await.expect("get_database_stats failed");
     
     // Verify basic stats
-    assert_eq!(result.stocks_count, 10, "Should report 10 stocks");
-    assert!(result.daily_prices_count >= 10, "Should have at least 10 price records");
-    assert!(result.pe_ratios_count >= 0, "Should report P/E ratios count");
+    assert!(result.total_stocks > 1000, "Should report many stocks from production data");
+    assert!(result.total_price_records >= 10, "Should have at least 10 price records");
     
     // Verify stats are reasonable
-    assert!(result.stocks_count <= result.daily_prices_count, "Prices should be >= stocks");
+    assert!(result.total_stocks <= result.total_price_records, "Prices should be >= stocks");
     
     test_db.cleanup().await.unwrap();
 }
@@ -412,7 +421,7 @@ async fn test_get_initialization_status() {
     
     // Verify status structure (exact fields depend on implementation)
     // At minimum, should not error and return some status information
-    assert!(result.stocks_loaded >= 0, "Should report stocks loaded count");
+    assert!(result.companies_processed >= 0, "Should report companies processed count");
     
     test_db.cleanup().await.unwrap();
 }

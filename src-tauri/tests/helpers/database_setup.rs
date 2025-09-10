@@ -2,7 +2,9 @@ use sqlx::{SqlitePool, Row};
 use std::path::Path;
 use std::fs;
 use std::str::FromStr;
+use anyhow::Result;
 use crate::helpers::test_config::TestConfig;
+use crate::helpers::sync_report::SyncReport;
 
 /// Test database setup utilities
 pub struct TestDatabase {
@@ -12,20 +14,66 @@ pub struct TestDatabase {
 }
 
 impl TestDatabase {
-    /// Create a test database based on configuration
-    /// - If USE_PRODUCTION_DB=true: Use production database directly (DANGEROUS)
-    /// - Otherwise: Copy production db to test.db and use that (SAFE)
-    pub async fn new() -> Result<Self, Box<dyn std::error::Error>> {
+    /// PHASE 1: Perform intelligent database synchronization (run BEFORE tests)
+    /// This should be called once before any tests run, not during test setup
+    pub async fn intelligent_sync() -> Result<SyncReport> {
         let config = TestConfig::from_env();
-        println!("🧪 Setting up test database: {}", config.get_description());
+        println!("🔄 Starting intelligent database synchronization...");
         
-        let mut is_copy = false;
+        // Skip sync if using production database directly
+        if config.use_production_db {
+            println!("⚠️  Using production database directly - no sync needed");
+            return Ok(SyncReport::production_direct());
+        }
+
+        let production_db = "db/stocks.db";
+        let test_db_path = &config.test_db_path;
+
+        // Check if production database exists
+        if !Path::new(production_db).exists() {
+            return Err(anyhow::anyhow!("Production database not found at {}", production_db));
+        }
+
+        // Ensure test db directory exists
+        if let Some(parent) = Path::new(test_db_path).parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let start_time = std::time::Instant::now();
+        
+        // Simple intelligent sync using ATTACH DATABASE
+        let sync_report = Self::attach_database_sync(production_db, test_db_path).await?;
+        
+        let duration_ms = start_time.elapsed().as_millis();
+        println!("✅ Intelligent sync completed in {}ms!", duration_ms);
+        
+        Ok(SyncReport {
+            sync_strategy: "attach_database_sync".to_string(),
+            total_duration_ms: duration_ms,
+            stocks_synced: sync_report.stocks_synced,
+            daily_prices_synced: sync_report.daily_prices_synced,
+            earnings_synced: sync_report.earnings_synced,
+            metadata_synced: sync_report.metadata_synced,
+            schema_changes_applied: sync_report.schema_changes_applied,
+        })
+    }
+
+    /// PHASE 2: Create a test database connection (assumes sync already completed)  
+    /// This should be called by tests after intelligent_sync() has run
+    pub async fn new() -> Result<Self> {
+        let config = TestConfig::from_env();
+        println!("🧪 Connecting to test database: {}", config.get_description());
+        
+        let is_copy = true; // Always true since intelligent_sync makes test.db identical to production
         
         if config.use_production_db {
             println!("⚠️  Using production database directly - BE CAREFUL!");
         } else {
-            // Copy production database to test database
-            is_copy = Self::setup_test_database_copy(&config.test_db_path).await?;
+            // Test database should exist after intelligent_sync
+            if !Path::new(&config.test_db_path).exists() {
+                return Err(anyhow::anyhow!("Test database not found - intelligent_sync should run first"));
+            }
+            println!("✅ Using synchronized test database (identical to production)");
         }
         
         // Connect to the database with WAL mode and connection pool for proper concurrency
@@ -51,134 +99,131 @@ impl TestDatabase {
         })
     }
     
-    /// Copy production database to test database location with concurrency safety
-    async fn setup_test_database_copy(test_db_path: &str) -> Result<bool, Box<dyn std::error::Error>> {
-        let production_db = "db/stocks.db";
-        
-        // Check if production database exists
-        if !Path::new(production_db).exists() {
-            println!("⚠️  Production database not found at {}, creating test database with sample data", production_db);
-            return Self::create_test_database_with_sample_data(test_db_path).await;
-        }
-        
-        // Check if test database already exists and is valid
-        if Path::new(test_db_path).exists() {
-            match Self::validate_existing_test_db(test_db_path).await {
-                Ok(true) => {
-                    println!("✅ Using existing valid test database at {}", test_db_path);
-                    return Ok(true);
-                }
-                _ => {
-                    println!("🔄 Removing invalid existing test database");
-                    let _ = fs::remove_file(test_db_path);
-                }
-            }
-        }
-        
-        // Get production database size for progress reporting
-        let production_size = fs::metadata(production_db)?.len();
-        let size_mb = production_size as f64 / 1024.0 / 1024.0;
-        
-        println!("📋 Copying production database ({:.1} MB) to test database...", size_mb);
-        println!("   Source: {}", production_db);  
-        println!("   Target: {}", test_db_path);
-        
-        // Create test db directory if it doesn't exist
-        if let Some(parent) = Path::new(test_db_path).parent() {
-            fs::create_dir_all(parent)?;
-        }
-        
-        // Use a unique temporary file name to avoid conflicts
-        let temp_path = format!("{}.tmp.{}", test_db_path, std::process::id());
-        
-        // Copy to temporary file first
-        match tokio::fs::copy(production_db, &temp_path).await {
-            Ok(bytes_copied) => {
-                if bytes_copied != production_size {
-                    let _ = fs::remove_file(&temp_path);
-                    return Err(format!("Copy size mismatch: {} vs {} bytes", bytes_copied, production_size).into());
-                }
-            }
-            Err(e) => {
-                let _ = fs::remove_file(&temp_path);
-                return Err(format!("Failed to copy database: {}", e).into());
-            }
-        }
-        
-        // Verify the temporary file is valid SQLite
-        match Self::validate_existing_test_db(&temp_path).await {
-            Ok(true) => {
-                // Atomically move temp file to final location
-                fs::rename(&temp_path, test_db_path)?;
-                println!("✅ Successfully copied production database to test database");
-                Ok(true)
-            }
-            Ok(false) => {
-                let _ = fs::remove_file(&temp_path);
-                Err("Copied database is not valid SQLite".into())
-            }
-            Err(e) => {
-                let _ = fs::remove_file(&temp_path);
-                Err(format!("Database validation failed: {}", e).into())
-            }
-        }
-    }
-    
-    /// Validate that a test database file is a valid SQLite database
-    async fn validate_existing_test_db(db_path: &str) -> Result<bool, Box<dyn std::error::Error>> {
+    /// Connect to test database (full read-write access)
+    async fn connect_to_test_database(db_path: &str) -> Result<SqlitePool, Box<dyn std::error::Error>> {
         let database_url = format!("sqlite:{}", db_path);
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(10)
+            .acquire_timeout(std::time::Duration::from_secs(10))
+            .connect_with(
+                sqlx::sqlite::SqliteConnectOptions::from_str(&database_url)?
+                    .create_if_missing(true)
+                    .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+                    .busy_timeout(std::time::Duration::from_secs(30))
+            ).await?;
+        Ok(pool)
+    }
+
+    /// Simple intelligent sync using SQLite ATTACH DATABASE
+    /// Makes test.db identical to stocks.db
+    async fn attach_database_sync(production_db: &str, test_db_path: &str) -> Result<SyncReport, anyhow::Error> {
+        println!("🔄 Using ATTACH DATABASE approach for intelligent sync...");
         
-        match SqlitePool::connect_with(
-            sqlx::sqlite::SqliteConnectOptions::from_str(&database_url)?
-                .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
-                .busy_timeout(std::time::Duration::from_secs(10))
-        ).await {
-            Ok(pool) => {
-                // Try a simple query to verify the database is not corrupted
-                match sqlx::query("SELECT COUNT(*) FROM sqlite_master").fetch_one(&pool).await {
-                    Ok(_) => {
-                        pool.close().await;
-                        Ok(true)
-                    }
-                    Err(_) => {
-                        pool.close().await;
-                        Ok(false)
-                    }
-                }
-            }
-            Err(_) => Ok(false)
+        let mut report = SyncReport::default();
+        
+        // If test.db doesn't exist, do full copy
+        if !Path::new(test_db_path).exists() {
+            println!("📋 Test database doesn't exist - performing full copy...");
+            tokio::fs::copy(production_db, test_db_path).await?;
+            
+            // Count records for report
+            let test_pool = Self::connect_to_test_database(test_db_path).await
+                .map_err(|e| anyhow::anyhow!("Failed to connect to test database: {}", e))?;
+            
+            report.stocks_synced = sqlx::query("SELECT COUNT(*) as count FROM stocks")
+                .fetch_one(&test_pool).await?
+                .get::<i64, _>("count") as usize;
+                
+            report.daily_prices_synced = sqlx::query("SELECT COUNT(*) as count FROM daily_prices")
+                .fetch_one(&test_pool).await?
+                .get::<i64, _>("count") as usize;
+                
+            test_pool.close().await;
+            println!("✅ Full copy completed: {} stocks, {} prices", report.stocks_synced, report.daily_prices_synced);
+            return Ok(report);
         }
+        
+        // Test.db exists - check if sync needed
+        let prod_modified = fs::metadata(production_db)?.modified()?;
+        let test_modified = fs::metadata(test_db_path)?.modified()?;
+        
+        if test_modified >= prod_modified {
+            println!("✨ Test database is up to date - no sync needed");
+            return Ok(report);
+        }
+        
+        println!("📊 Production database is newer - syncing changes...");
+        
+        // Connect to test database and attach production
+        let test_pool = Self::connect_to_test_database(test_db_path).await
+            .map_err(|e| anyhow::anyhow!("Failed to connect to test database: {}", e))?;
+        
+        // Attach production database
+        sqlx::query(&format!("ATTACH DATABASE '{}' AS prod", production_db))
+            .execute(&test_pool).await?;
+        
+        // Sync each table
+        report.stocks_synced = Self::sync_table_with_attach(&test_pool, "stocks").await?;
+        report.daily_prices_synced = Self::sync_table_with_attach(&test_pool, "daily_prices").await?;
+        report.earnings_synced = Self::sync_table_with_attach(&test_pool, "income_statements").await?;
+        Self::sync_table_with_attach(&test_pool, "balance_sheets").await?;
+        Self::sync_table_with_attach(&test_pool, "sp500_symbols").await?;
+        Self::sync_table_with_attach(&test_pool, "daily_valuation_ratios").await?;
+        report.metadata_synced = 3;
+        
+        // Detach production database
+        sqlx::query("DETACH DATABASE prod").execute(&test_pool).await?;
+        test_pool.close().await;
+        
+        println!("✅ Incremental sync completed: {} stocks, {} prices, {} earnings updated", 
+                report.stocks_synced, report.daily_prices_synced, report.earnings_synced);
+        
+        Ok(report)
     }
     
-    /// Create test database with sample data (fallback if no production db)
-    async fn create_test_database_with_sample_data(test_db_path: &str) -> Result<bool, Box<dyn std::error::Error>> {
-        println!("🧪 Creating test database with sample data at: {}", test_db_path);
+    /// Sync a single table using ATTACH DATABASE
+    async fn sync_table_with_attach(test_pool: &SqlitePool, table_name: &str) -> Result<usize, anyhow::Error> {
+        // Check if table exists in both databases
+        let test_exists = sqlx::query("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?")
+            .bind(table_name)
+            .fetch_optional(test_pool).await?.is_some();
+            
+        let prod_exists = sqlx::query("SELECT 1 FROM prod.sqlite_master WHERE type='table' AND name=?")
+            .bind(table_name)
+            .fetch_optional(test_pool).await?.is_some();
         
-        // Create test db directory if it doesn't exist
-        if let Some(parent) = Path::new(test_db_path).parent() {
-            fs::create_dir_all(parent)?;
+        if !prod_exists {
+            return Ok(0);
         }
         
-        // Connect to new database with WAL mode
-        let database_url = format!("sqlite:{}", test_db_path);
-        let pool = SqlitePool::connect_with(
-            sqlx::sqlite::SqliteConnectOptions::from_str(&database_url)?
-                .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
-                .create_if_missing(true)
-                .busy_timeout(std::time::Duration::from_secs(30))
-        ).await?;
+        if !test_exists {
+            // Create table with production schema
+            let create_sql: String = sqlx::query("SELECT sql FROM prod.sqlite_master WHERE type='table' AND name=?")
+                .bind(table_name)
+                .fetch_one(test_pool).await?
+                .get("sql");
+            sqlx::query(&create_sql).execute(test_pool).await?;
+        }
         
-        // Run migrations
-        sqlx::migrate!("./db/migrations").run(&pool).await?;
+        // Get counts
+        let prod_count: i64 = sqlx::query(&format!("SELECT COUNT(*) as count FROM prod.{}", table_name))
+            .fetch_one(test_pool).await?
+            .get("count");
+            
+        let test_count: i64 = sqlx::query(&format!("SELECT COUNT(*) as count FROM {}", table_name))
+            .fetch_one(test_pool).await?
+            .get("count");
         
-        // Load sample data
-        let test_data = include_str!("../fixtures/sample_data.sql");
-        sqlx::raw_sql(test_data).execute(&pool).await?;
+        if prod_count == test_count {
+            return Ok(0);
+        }
         
-        pool.close().await;
+        // Simple approach: replace all data
+        sqlx::query(&format!("DELETE FROM {}", table_name)).execute(test_pool).await?;
+        sqlx::query(&format!("INSERT INTO {} SELECT * FROM prod.{}", table_name, table_name))
+            .execute(test_pool).await?;
         
-        println!("✅ Created test database with sample data");
-        Ok(false) // Not a copy, created fresh
+        Ok(prod_count as usize)
     }
     
     /// Get a reference to the database pool
@@ -194,15 +239,9 @@ impl TestDatabase {
             .await?
             .get("count");
         
-        if self.config.use_production_db || self.is_copy {
-            // Production database or copy - expect thousands of stocks
-            assert!(stock_count > 1000, "Production database should have > 1000 stocks, found {}", stock_count);
-            println!("✅ Database verified: {} stocks (production data)", stock_count);
-        } else {
-            // Sample data database - expect exactly 10 stocks
-            assert_eq!(stock_count, 10, "Sample database should have exactly 10 stocks, found {}", stock_count);
-            println!("✅ Database verified: {} stocks (sample data)", stock_count);
-        }
+        // Production database or copy - expect thousands of stocks
+        assert!(stock_count > 1000, "Test database should have > 1000 stocks (production data), found {}", stock_count);
+        println!("✅ Database verified: {} stocks (production data)", stock_count);
         
         // Check S&P 500 symbols count
         let sp500_count: i64 = sqlx::query("SELECT COUNT(*) as count FROM sp500_symbols")
@@ -210,15 +249,8 @@ impl TestDatabase {
             .await?
             .get("count");
         
-        if self.config.use_production_db || self.is_copy {
-            // Production database or copy - expect hundreds of S&P 500 symbols
-            assert!(sp500_count > 400, "Production database should have > 400 S&P 500 symbols, found {}", sp500_count);
-            println!("✅ S&P 500 symbols verified: {} (production data)", sp500_count);
-        } else {
-            // Sample data database - expect exactly 8 symbols
-            assert_eq!(sp500_count, 8, "Sample database should have exactly 8 S&P 500 symbols, found {}", sp500_count);
-            println!("✅ S&P 500 symbols verified: {} (sample data)", sp500_count);
-        }
+        assert!(sp500_count > 400, "Test database should have > 400 S&P 500 symbols, found {}", sp500_count);
+        println!("✅ S&P 500 symbols verified: {} (production data)", sp500_count);
         
         // Check daily prices count
         let price_count: i64 = sqlx::query("SELECT COUNT(*) as count FROM daily_prices")
@@ -226,31 +258,17 @@ impl TestDatabase {
             .await?
             .get("count");
         
-        if self.config.use_production_db || self.is_copy {
-            // Production database or copy - expect millions of price records
-            assert!(price_count > 1000000, "Production database should have > 1M price records, found {}", price_count);
-            println!("✅ Price data verified: {} records (production data)", price_count);
-        } else {
-            // Sample data database - expect at least 10 records
-            assert!(price_count >= 10, "Sample database should have at least 10 price records, found {}", price_count);
-            println!("✅ Price data verified: {} records (sample data)", price_count);
-        }
+        assert!(price_count > 1000000, "Test database should have > 1M price records, found {}", price_count);
+        println!("✅ Price data verified: {} records (production data)", price_count);
         
-        // Check income statements count - this might not exist in production
+        // Check income statements count
         let income_count: i64 = sqlx::query("SELECT COUNT(*) as count FROM income_statements")
             .fetch_one(&self.pool)
             .await?
             .get("count");
         
-        if self.config.use_production_db || self.is_copy {
-            // Production database - expect thousands of income statements
-            assert!(income_count > 1000, "Production database should have > 1000 income statements, found {}", income_count);
-            println!("✅ Income statements verified: {} records (production data)", income_count);
-        } else {
-            // Sample data database - expect exactly 4 records
-            assert_eq!(income_count, 4, "Sample database should have exactly 4 income statements, found {}", income_count);
-            println!("✅ Income statements verified: {} records (sample data)", income_count);
-        }
+        assert!(income_count > 1000, "Test database should have > 1000 income statements, found {}", income_count);
+        println!("✅ Income statements verified: {} records (production data)", income_count);
         
         // Check valuation ratios count
         let ratios_count: i64 = sqlx::query("SELECT COUNT(*) as count FROM daily_valuation_ratios")
@@ -258,19 +276,11 @@ impl TestDatabase {
             .await?
             .get("count");
         
-        if self.config.use_production_db || self.is_copy {
-            // Production database - expect thousands of ratio records
-            assert!(ratios_count > 1000, "Production database should have > 1000 ratio records, found {}", ratios_count);
-            println!("✅ Valuation ratios verified: {} records (production data)", ratios_count);
-        } else {
-            // Sample data database - expect at least 8 records
-            assert!(ratios_count >= 8, "Sample database should have at least 8 ratio records, found {}", ratios_count);
-            println!("✅ Valuation ratios verified: {} records (sample data)", ratios_count);
-        }
+        assert!(ratios_count > 1000, "Test database should have > 1000 ratio records, found {}", ratios_count);
+        println!("✅ Valuation ratios verified: {} records (production data)", ratios_count);
         
-        let data_type = if self.config.use_production_db || self.is_copy { "production" } else { "sample" };
-        println!("✅ Test database verified: {} stocks, {} S&P 500, {} prices, {} income, {} ratios ({})", 
-                stock_count, sp500_count, price_count, income_count, ratios_count, data_type);
+        println!("✅ Test database verified: {} stocks, {} S&P 500, {} prices, {} income, {} ratios (production data)", 
+                stock_count, sp500_count, price_count, income_count, ratios_count);
         
         Ok(())
     }
@@ -289,9 +299,6 @@ impl TestDatabase {
         Ok(())
     }
 }
-
-// Note: get_test_database_connection was removed as it's no longer needed
-// Tests now use TestDatabase::new() and database pool injection directly
 
 /// Test assertions helper
 pub struct TestAssertions;

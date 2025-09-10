@@ -33,6 +33,7 @@ struct FinancialData {
     latest_ttm_revenue: Option<f64>,
     latest_ttm_report_date: Option<NaiveDate>,
     latest_price: Option<f64>,
+    #[allow(dead_code)] // May be needed for future price date validation
     latest_price_date: Option<NaiveDate>,
     shares_outstanding: Option<f64>,
     cash_and_equivalents: Option<f64>,

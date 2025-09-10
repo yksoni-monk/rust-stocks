@@ -3,7 +3,7 @@
 
 mod helpers;
 
-use helpers::{TestDatabase, TestAssertions};
+use helpers::TestDatabase;
 use std::time::{Duration, Instant};
 
 /// Performance benchmarks for critical backend functions
@@ -217,15 +217,9 @@ async fn test_concurrent_access_performance() {
     let total_duration = start.elapsed();
     
     // Verify all tasks completed successfully
-    let mut total_results = 0;
     for (i, result) in results.into_iter().enumerate() {
         match result {
-            Ok(Ok(data)) => {
-                let count = match data {
-                    // Handle both Vec<StockWithData> and Vec<StockWithData> return types
-                    _ => 1, // Just count that it succeeded
-                };
-                total_results += count;
+            Ok(Ok(_data)) => {
                 println!("✅ Concurrent task {} completed successfully", i + 1);
             }
             Ok(Err(e)) => println!("❌ Concurrent task {} failed: {}", i + 1, e),

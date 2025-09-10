@@ -270,13 +270,8 @@ impl TestDatabase {
     }
 }
 
-/// Mock database connection helper for testing
-/// This replaces the real get_database_connection() function during tests
-pub async fn get_test_database_connection() -> Result<SqlitePool, String> {
-    // This should be set by the test setup
-    // For now, we'll use a simple approach where tests set up their own database
-    Err("Use TestDatabase::new() instead".to_string())
-}
+// Note: get_test_database_connection was removed as it's no longer needed
+// Tests now use TestDatabase::new() and database pool injection directly
 
 /// Test assertions helper
 pub struct TestAssertions;
@@ -296,6 +291,7 @@ impl TestAssertions {
         assert!(!price.date.is_empty(), "Date should not be empty");
     }
     
+    #[allow(dead_code)] // Available for future use in valuation ratio tests
     pub fn assert_valuation_ratios_valid(ratios: &rust_stocks_tauri_lib::commands::analysis::ValuationRatios) {
         if let Some(ps_ratio) = ratios.ps_ratio_ttm {
             assert!(ps_ratio > 0.0, "P/S ratio should be positive");

@@ -419,6 +419,8 @@ impl RecommendationEngine {
     }
 
     /// Get the most recent P/E ratio for a stock
+    /// Available for future recommendation enhancements
+    #[allow(dead_code)]
     async fn get_current_pe_ratio(&self, stock_id: i64) -> Result<Option<f64>, Box<dyn std::error::Error>> {
         let query = "
             SELECT pe_ratio

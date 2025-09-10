@@ -162,6 +162,8 @@ fn parse_optional_f64(value: &Option<String>) -> Option<f64> {
 }
 
 /// Parse optional string field to i64
+/// Note: Currently unused but may be needed for future financial data parsing
+#[allow(dead_code)]
 fn parse_optional_i64(value: &Option<String>) -> Option<i64> {
     value.as_ref().and_then(|s| {
         if s.trim().is_empty() {

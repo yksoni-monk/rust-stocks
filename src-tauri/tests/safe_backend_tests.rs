@@ -187,7 +187,7 @@ async fn test_database_stats_with_real_data() {
     
     // Validate stats make sense
     assert!(stats.total_stocks > 0, "Should have at least some stocks");
-    assert!(stats.total_price_records >= 0, "Price records count should be non-negative");
+    // Note: total_price_records is usize, so always non-negative
     assert!(stats.data_coverage_percentage >= 0.0, "Coverage percentage should be non-negative");
     
     if test_db.is_copy || test_db.config.use_production_db {

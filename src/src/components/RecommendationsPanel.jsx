@@ -8,11 +8,12 @@ function RecommendationsPanel({ onClose }) {
   const [error, setError] = useState(null);
   const [limit, setLimit] = useState(20);
   const [screeningType, setScreeningType] = useState('pe'); // 'pe' or 'ps'
-  const [psRatio, setPsRatio] = useState(1.0);
+  const [psRatio, setPsRatio] = useState(2.0);
+  const [minMarketCap, setMinMarketCap] = useState(500_000_000); // Default $500M
 
   useEffect(() => {
     loadRecommendationsWithStats();
-  }, [limit, screeningType, psRatio]);
+  }, [limit, screeningType, psRatio, minMarketCap]);
 
   async function loadRecommendationsWithStats() {
     try {
@@ -20,7 +21,7 @@ function RecommendationsPanel({ onClose }) {
       
       if (screeningType === 'ps') {
         // P/S ratio screening for undervalued stocks
-        const result = await recommendationsDataService.loadUndervaluedStocksByPs(psRatio, limit);
+        const result = await recommendationsDataService.loadUndervaluedStocksByPs(psRatio, limit, minMarketCap);
         
         if (result.error) {
           setError(result.error);
@@ -142,7 +143,7 @@ function RecommendationsPanel({ onClose }) {
             <h2 className="text-2xl font-bold">Stock Value Recommendations</h2>
             <p className="text-blue-100 mt-1">
               {screeningType === 'ps' 
-                ? `P/S ratio-based value screening (P/S ≤ ${psRatio})` 
+                ? `P/S ratio-based undervalued stock screening (P/S ≤ ${psRatio}, Market Cap > $${(minMarketCap / 1_000_000).toFixed(0)}M)` 
                 : 'P/E ratio-based value screening for S&P 500 stocks'
               }
             </p>
@@ -204,19 +205,40 @@ function RecommendationsPanel({ onClose }) {
 
               {/* P/S Ratio Threshold (only show for P/S screening) */}
               {screeningType === 'ps' && (
-                <div className="flex items-center gap-2">
-                  <label className="text-sm font-medium text-gray-700">
-                    Max P/S Ratio:
-                  </label>
-                  <input
-                    type="number"
-                    step="0.1"
-                    min="0.1"
-                    max="5.0"
-                    value={psRatio}
-                    onChange={(e) => setPsRatio(Number(e.target.value))}
-                    className="border border-gray-300 rounded px-2 py-1 text-sm w-20"
-                  />
+                <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-2">
+                    <label className="text-sm font-medium text-gray-700">
+                      Max P/S Ratio:
+                    </label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      min="0.1"
+                      max="10.0"
+                      value={psRatio}
+                      onChange={(e) => setPsRatio(Number(e.target.value))}
+                      className="border border-gray-300 rounded px-2 py-1 text-sm w-20"
+                    />
+                  </div>
+                  
+                  <div className="flex items-center gap-2">
+                    <label className="text-sm font-medium text-gray-700">
+                      Min Market Cap:
+                    </label>
+                    <select
+                      value={minMarketCap}
+                      onChange={(e) => setMinMarketCap(Number(e.target.value))}
+                      className="border border-gray-300 rounded px-2 py-1 text-sm"
+                    >
+                      <option value={100_000_000}>$100M</option>
+                      <option value={250_000_000}>$250M</option>
+                      <option value={500_000_000}>$500M</option>
+                      <option value={1_000_000_000}>$1B</option>
+                      <option value={2_000_000_000}>$2B</option>
+                      <option value={5_000_000_000}>$5B</option>
+                      <option value={10_000_000_000}>$10B</option>
+                    </select>
+                  </div>
                 </div>
               )}
 
@@ -360,7 +382,7 @@ function RecommendationsPanel({ onClose }) {
           <div className="text-xs text-gray-600 space-y-1">
             {screeningType === 'ps' ? (
               <>
-                <p><strong>P/S Screening Criteria:</strong> TTM P/S ratio ≤ {psRatio} (stocks trading at low price-to-sales multiples)</p>
+                <p><strong>P/S Screening Criteria:</strong> TTM P/S ratio ≤ {psRatio} (undervalued stocks with quality filters: P/S > 0.01, Market Cap > $${(minMarketCap / 1_000_000).toFixed(0)}M)</p>
                 <p><strong>Value Score:</strong> Higher is better (0-100). Based on how low the P/S ratio is relative to threshold.</p>
                 <p><strong>Risk Score:</strong> Lower is better (0-100). Higher P/S ratios indicate higher valuation risk.</p>
                 <p><strong>TTM:</strong> Trailing Twelve Months financial data from SimFin.</p>

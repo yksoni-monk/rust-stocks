@@ -141,9 +141,9 @@ export const recommendationsDataService = {
   },
 
   // Load undervalued stocks by P/S ratio
-  async loadUndervaluedStocksByPs(maxPsRatio = 1.0, limit = 20) {
+  async loadUndervaluedStocksByPs(maxPsRatio = 2.0, limit = 20, minMarketCap = 500_000_000) {
     const result = await apiCall(
-      () => recommendationsAPI.getUndervaluedStocksByPs(maxPsRatio, limit),
+      () => recommendationsAPI.getUndervaluedStocksByPs(maxPsRatio, limit, minMarketCap),
       'load undervalued stocks by P/S'
     );
 

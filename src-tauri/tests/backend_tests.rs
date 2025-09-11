@@ -238,7 +238,7 @@ async fn test_get_undervalued_stocks_by_ps() {
     
     use rust_stocks_tauri_lib::commands::analysis::get_undervalued_stocks_by_ps;
     
-    let undervalued = get_undervalued_stocks_by_ps(2.0, Some(10)).await.expect("Undervalued stocks failed");
+    let undervalued = get_undervalued_stocks_by_ps(2.0, Some(10), Some(500_000_000.0)).await.expect("Undervalued stocks failed");
     
     // CRITICAL: Should find undervalued stocks if P/S data exists
     assert!(!undervalued.is_empty(), "Should find undervalued stocks with P/S <= 2.0 (found {} stocks)", undervalued.len());
@@ -276,16 +276,16 @@ async fn test_get_undervalued_stocks_by_ps() {
     }
     
     // Test with different thresholds to ensure screening works
-    let very_undervalued = get_undervalued_stocks_by_ps(1.0, Some(5)).await.expect("Very undervalued stocks failed");
+    let very_undervalued = get_undervalued_stocks_by_ps(1.0, Some(5), Some(500_000_000.0)).await.expect("Very undervalued stocks failed");
     println!("✅ Found {} very undervalued stocks (P/S <= 1.0)", very_undervalued.len());
     
     // Test 2: Look for traditionally high P/S ratio stocks that are now undervalued
     // (Stocks that were expensive but are now cheap - potential recovery plays)
-    let recovery_candidates = get_undervalued_stocks_by_ps(1.5, Some(10)).await.expect("Recovery candidates failed");
+    let recovery_candidates = get_undervalued_stocks_by_ps(1.5, Some(10), Some(500_000_000.0)).await.expect("Recovery candidates failed");
     println!("✅ Found {} recovery candidates (P/S <= 1.5)", recovery_candidates.len());
     
     // Test 3: Deep value stocks (P/S <= 0.5)
-    let deep_value = get_undervalued_stocks_by_ps(0.5, Some(5)).await.expect("Deep value stocks failed");
+    let deep_value = get_undervalued_stocks_by_ps(0.5, Some(5), Some(500_000_000.0)).await.expect("Deep value stocks failed");
     println!("✅ Found {} deep value stocks (P/S <= 0.5)", deep_value.len());
     
     println!("✅ P/S screening test passed - found {} undervalued stocks (P/S <= 2.0), {} with P/S data", 

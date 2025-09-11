@@ -274,10 +274,11 @@ pub async fn get_ps_evs_history(symbol: String, start_date: String, end_date: St
 }
 
 #[tauri::command]
-pub async fn get_undervalued_stocks_by_ps(max_ps_ratio: f64, limit: Option<i32>) -> Result<Vec<ValuationRatios>, String> {
+pub async fn get_undervalued_stocks_by_ps(maxPsRatio: f64, limit: Option<i32>, minMarketCap: Option<f64>) -> Result<Vec<ValuationRatios>, String> {
     let pool = get_database_connection().await?;
     
     let limit_value = limit.unwrap_or(50);
+    let min_market_cap = minMarketCap.unwrap_or(500_000_000.0); // Default $500M
     
     let query = "
         SELECT 
@@ -298,14 +299,15 @@ pub async fn get_undervalued_stocks_by_ps(max_ps_ratio: f64, limit: Option<i32>)
           AND dvr.ps_ratio_ttm > 0 
           AND dvr.ps_ratio_ttm <= ?1
           AND dvr.ps_ratio_ttm > 0.01
-          AND dvr.market_cap > 1000000
+          AND dvr.market_cap > ?3
         ORDER BY dvr.ps_ratio_ttm ASC
         LIMIT ?2
     ";
     
     match sqlx::query(query)
-        .bind(max_ps_ratio)
+        .bind(maxPsRatio)
         .bind(limit_value)
+        .bind(min_market_cap)
         .fetch_all(&pool).await 
     {
         Ok(rows) => {

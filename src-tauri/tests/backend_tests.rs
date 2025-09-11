@@ -186,10 +186,11 @@ async fn test_get_ps_evs_history() {
     
     use rust_stocks_tauri_lib::commands::analysis::get_ps_evs_history;
     
+    // Use actual date range where data exists (2019-2024, not 2025)
     let history = get_ps_evs_history(
         "AAPL".to_string(),
-        "2025-09-01".to_string(),
-        "2025-09-15".to_string()
+        "2024-01-01".to_string(),
+        "2024-09-13".to_string()
     ).await.expect("P/S EV/S history failed");
     
     // CRITICAL: Validate that we have actual P/S ratio data, not just empty records
@@ -252,17 +253,23 @@ async fn test_get_undervalued_stocks_by_ps() {
     assert!(stocks_with_ps > 0, "Should have stocks with P/S ratios (found {} stocks)", stocks_with_ps);
     assert!(stocks_with_ps >= undervalued.len() / 2, "At least half of results should have P/S ratios");
     
-    // Validate each stock meets the screening criteria
+    // Validate each stock meets the screening criteria (filter out penny stocks)
     for stock in &undervalued {
         assert!(!stock.symbol.is_empty(), "Stock symbol should not be empty");
         
         if let Some(ps_ratio) = stock.ps_ratio_ttm {
-            // Validate P/S ratio meets screening criteria
+            // Validate P/S ratio meets screening criteria (investment-grade only)
             assert!(ps_ratio <= 2.0, "P/S ratio should be within threshold (<=2.0), got {}", ps_ratio);
             assert!(ps_ratio > 0.0, "P/S ratio should be positive, got {}", ps_ratio);
             assert!(ps_ratio > 0.01, "P/S ratio should be meaningful (>0.01), got {}", ps_ratio);
             
-            println!("✅ Undervalued stock: {} - P/S: {:.2}", stock.symbol, ps_ratio);
+            // Additional validation: market cap should be reasonable (not penny stock)
+            if let Some(market_cap) = stock.market_cap {
+                assert!(market_cap > 1_000_000.0, "Market cap should be > $1M (not penny stock), got ${:.0}", market_cap);
+            }
+            
+            println!("✅ Quality undervalued stock: {} - P/S: {:.2}, Market Cap: ${:.0}M", 
+                     stock.symbol, ps_ratio, stock.market_cap.unwrap_or(0.0) / 1_000_000.0);
         } else {
             println!("⚠️  Stock {} has no P/S ratio data", stock.symbol);
         }
@@ -271,6 +278,15 @@ async fn test_get_undervalued_stocks_by_ps() {
     // Test with different thresholds to ensure screening works
     let very_undervalued = get_undervalued_stocks_by_ps(1.0, Some(5)).await.expect("Very undervalued stocks failed");
     println!("✅ Found {} very undervalued stocks (P/S <= 1.0)", very_undervalued.len());
+    
+    // Test 2: Look for traditionally high P/S ratio stocks that are now undervalued
+    // (Stocks that were expensive but are now cheap - potential recovery plays)
+    let recovery_candidates = get_undervalued_stocks_by_ps(1.5, Some(10)).await.expect("Recovery candidates failed");
+    println!("✅ Found {} recovery candidates (P/S <= 1.5)", recovery_candidates.len());
+    
+    // Test 3: Deep value stocks (P/S <= 0.5)
+    let deep_value = get_undervalued_stocks_by_ps(0.5, Some(5)).await.expect("Deep value stocks failed");
+    println!("✅ Found {} deep value stocks (P/S <= 0.5)", deep_value.len());
     
     println!("✅ P/S screening test passed - found {} undervalued stocks (P/S <= 2.0), {} with P/S data", 
              undervalued.len(), stocks_with_ps);

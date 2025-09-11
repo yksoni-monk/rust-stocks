@@ -297,6 +297,8 @@ pub async fn get_undervalued_stocks_by_ps(max_ps_ratio: f64, limit: Option<i32>)
         WHERE dvr.ps_ratio_ttm IS NOT NULL 
           AND dvr.ps_ratio_ttm > 0 
           AND dvr.ps_ratio_ttm <= ?1
+          AND dvr.ps_ratio_ttm > 0.01
+          AND dvr.market_cap > 1000000
         ORDER BY dvr.ps_ratio_ttm ASC
         LIMIT ?2
     ";

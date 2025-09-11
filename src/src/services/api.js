@@ -50,6 +50,11 @@ export const analysisAPI = {
     return await invoke('get_ps_evs_history', { symbol, startDate, endDate });
   },
 
+  // Get valuation extremes (all-time high/low P/E and P/S ratios)
+  async getValuationExtremes(symbol) {
+    return await invoke('get_valuation_extremes', { symbol });
+  },
+
   // Export data
   async exportData(symbol, format) {
     return await invoke('export_data', { symbol, format });

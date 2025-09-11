@@ -36,6 +36,17 @@ pub struct ValuationRatios {
     pub last_financial_update: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValuationExtremes {
+    pub symbol: String,
+    pub min_pe_ratio: Option<f64>,
+    pub max_pe_ratio: Option<f64>,
+    pub min_ps_ratio: Option<f64>,
+    pub max_ps_ratio: Option<f64>,
+    pub min_evs_ratio: Option<f64>,
+    pub max_evs_ratio: Option<f64>,
+}
+
 async fn get_database_connection() -> Result<SqlitePool, String> {
     let database_url = "sqlite:db/stocks.db";
     SqlitePool::connect(database_url).await
@@ -334,4 +345,67 @@ pub async fn get_undervalued_stocks_by_ps(maxPsRatio: f64, limit: Option<i32>, m
             Err(format!("Database query failed: {}", e))
         }
     }
+}
+
+#[tauri::command]
+pub async fn get_valuation_extremes(symbol: String) -> Result<ValuationExtremes, String> {
+    let pool = get_database_connection().await?;
+    
+    // Get P/E ratio extremes
+    let pe_extremes = sqlx::query_as::<_, (Option<f64>, Option<f64>)>(
+        "
+        SELECT 
+            MIN(CASE WHEN pe_ratio > 0 THEN pe_ratio END) as min_pe,
+            MAX(CASE WHEN pe_ratio > 0 THEN pe_ratio END) as max_pe
+        FROM daily_prices dp
+        JOIN stocks s ON dp.stock_id = s.id
+        WHERE s.symbol = ?1 AND pe_ratio IS NOT NULL AND pe_ratio > 0
+        "
+    )
+    .bind(&symbol)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| format!("Failed to fetch P/E extremes: {}", e))?;
+    
+    // Get P/S ratio extremes
+    let ps_extremes = sqlx::query_as::<_, (Option<f64>, Option<f64>)>(
+        "
+        SELECT 
+            MIN(CASE WHEN ps_ratio_ttm > 0 THEN ps_ratio_ttm END) as min_ps,
+            MAX(CASE WHEN ps_ratio_ttm > 0 THEN ps_ratio_ttm END) as max_ps
+        FROM daily_valuation_ratios dvr
+        JOIN stocks s ON dvr.stock_id = s.id
+        WHERE s.symbol = ?1 AND ps_ratio_ttm IS NOT NULL AND ps_ratio_ttm > 0
+        "
+    )
+    .bind(&symbol)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| format!("Failed to fetch P/S extremes: {}", e))?;
+    
+    // Get EV/S ratio extremes
+    let evs_extremes = sqlx::query_as::<_, (Option<f64>, Option<f64>)>(
+        "
+        SELECT 
+            MIN(CASE WHEN evs_ratio_ttm > 0 THEN evs_ratio_ttm END) as min_evs,
+            MAX(CASE WHEN evs_ratio_ttm > 0 THEN evs_ratio_ttm END) as max_evs
+        FROM daily_valuation_ratios dvr
+        JOIN stocks s ON dvr.stock_id = s.id
+        WHERE s.symbol = ?1 AND evs_ratio_ttm IS NOT NULL AND evs_ratio_ttm > 0
+        "
+    )
+    .bind(&symbol)
+    .fetch_one(&pool)
+    .await
+    .map_err(|e| format!("Failed to fetch EV/S extremes: {}", e))?;
+    
+    Ok(ValuationExtremes {
+        symbol,
+        min_pe_ratio: pe_extremes.0,
+        max_pe_ratio: pe_extremes.1,
+        min_ps_ratio: ps_extremes.0,
+        max_ps_ratio: ps_extremes.1,
+        min_evs_ratio: evs_extremes.0,
+        max_evs_ratio: evs_extremes.1,
+    })
 }

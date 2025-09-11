@@ -10,6 +10,7 @@ function RecommendationsPanel({ onClose }) {
   const [screeningType, setScreeningType] = useState('pe'); // 'pe' or 'ps'
   const [psRatio, setPsRatio] = useState(2.0);
   const [minMarketCap, setMinMarketCap] = useState(500_000_000); // Default $500M
+  const [valuationExtremes, setValuationExtremes] = useState({});
 
   useEffect(() => {
     loadRecommendationsWithStats();
@@ -56,6 +57,9 @@ function RecommendationsPanel({ onClose }) {
           average_value_score: transformedRecommendations.reduce((sum, r) => sum + r.value_score, 0) / transformedRecommendations.length || 0,
           average_risk_score: transformedRecommendations.reduce((sum, r) => sum + r.risk_score, 0) / transformedRecommendations.length || 0
         });
+        
+        // Load valuation extremes for each stock
+        await loadValuationExtremesForStocks(transformedRecommendations);
       } else {
         // Original P/E ratio screening
         const result = await recommendationsDataService.loadValueRecommendations(limit);
@@ -68,6 +72,9 @@ function RecommendationsPanel({ onClose }) {
         
         setRecommendations(result.recommendations);
         setStats(result.stats);
+        
+        // Load valuation extremes for each stock
+        await loadValuationExtremesForStocks(result.recommendations);
       }
     } catch (err) {
       setError(`Failed to load recommendations: ${err}`);
@@ -75,6 +82,26 @@ function RecommendationsPanel({ onClose }) {
     } finally {
       setLoading(false);
     }
+  }
+
+  async function loadValuationExtremesForStocks(stocks) {
+    const extremes = {};
+    
+    // Load extremes for each stock (limit to first 10 to avoid too many API calls)
+    const stocksToLoad = stocks.slice(0, 10);
+    
+    for (const stock of stocksToLoad) {
+      try {
+        const result = await recommendationsDataService.loadValuationExtremes(stock.symbol);
+        if (result.extremes) {
+          extremes[stock.symbol] = result.extremes;
+        }
+      } catch (err) {
+        console.warn(`Failed to load extremes for ${stock.symbol}:`, err);
+      }
+    }
+    
+    setValuationExtremes(extremes);
   }
 
   const getValueScoreColor = (score) => {
@@ -322,6 +349,22 @@ function RecommendationsPanel({ onClose }) {
                             </div>
                             <div className="text-xs text-gray-500">Market Cap</div>
                           </div>
+
+                          {/* Valuation Extremes */}
+                          {valuationExtremes[rec.symbol] && (
+                            <div className="text-center">
+                              <div className="text-xs text-gray-500 mb-1">Historical Range</div>
+                              <div className="text-xs text-gray-600">
+                                P/E: {valuationExtremes[rec.symbol].min_pe_ratio?.toFixed(1) || 'N/A'} - {valuationExtremes[rec.symbol].max_pe_ratio?.toFixed(1) || 'N/A'}
+                              </div>
+                              <div className="text-xs text-gray-600">
+                                P/S: {valuationExtremes[rec.symbol].min_ps_ratio?.toFixed(2) || 'N/A'} - {valuationExtremes[rec.symbol].max_ps_ratio?.toFixed(2) || 'N/A'}
+                              </div>
+                              <div className="text-xs text-gray-600">
+                                EV/S: {valuationExtremes[rec.symbol].min_evs_ratio?.toFixed(2) || 'N/A'} - {valuationExtremes[rec.symbol].max_evs_ratio?.toFixed(2) || 'N/A'}
+                              </div>
+                            </div>
+                          )}
                         </>
                       ) : (
                         <>

@@ -109,6 +109,19 @@ export const analysisDataService = {
     };
   },
 
+  // Load valuation extremes (all-time high/low ratios)
+  async loadValuationExtremes(symbol) {
+    const result = await apiCall(
+      () => analysisAPI.getValuationExtremes(symbol),
+      'load valuation extremes'
+    );
+
+    return {
+      extremes: result.success ? result.data : null,
+      error: result.success ? null : result.error
+    };
+  },
+
   // Export stock data
   async exportStockData(stockSymbol, format) {
     const result = await apiCall(

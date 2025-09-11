@@ -385,3 +385,13 @@ pub struct FetchRequest {
     pub intraday_interval: Option<String>,
 }
 
+// Valuation extremes for historical context
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValuationExtremes {
+    pub symbol: String,
+    pub min_pe_ratio: Option<f64>,
+    pub max_pe_ratio: Option<f64>,
+    pub min_ps_ratio: Option<f64>,
+    pub max_ps_ratio: Option<f64>,
+}
+

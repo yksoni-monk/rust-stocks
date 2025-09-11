@@ -500,3 +500,63 @@ async fn test_concurrent_access_performance() {
     rust_stocks_tauri_lib::database::helpers::clear_test_database_pool().await;
     test_db.cleanup().await.unwrap();
 }
+
+#[tokio::test]
+async fn test_get_valuation_extremes() {
+    let test_db = SimpleTestDatabase::new().await.unwrap();
+    rust_stocks_tauri_lib::database::helpers::set_test_database_pool(test_db.pool().clone()).await;
+    
+    use rust_stocks_tauri_lib::commands::analysis::get_valuation_extremes;
+    
+    // Test with AAPL which should have data
+    let extremes = get_valuation_extremes("AAPL".to_string()).await.expect("Valuation extremes failed");
+    
+    // Validate the response structure
+    assert_eq!(extremes.symbol, "AAPL");
+    
+    // Check that we have some data (at least one extreme should be available)
+    let has_pe_data = extremes.min_pe_ratio.is_some() || extremes.max_pe_ratio.is_some();
+    let has_ps_data = extremes.min_ps_ratio.is_some() || extremes.max_ps_ratio.is_some();
+    let has_evs_data = extremes.min_evs_ratio.is_some() || extremes.max_evs_ratio.is_some();
+    
+    // Should have at least P/E, P/S, or EV/S data
+    assert!(has_pe_data || has_ps_data || has_evs_data, "Should have at least P/E, P/S, or EV/S extreme data for AAPL");
+    
+    // If we have P/E data, validate it's reasonable
+    if let (Some(min_pe), Some(max_pe)) = (extremes.min_pe_ratio, extremes.max_pe_ratio) {
+        assert!(min_pe > 0.0, "Min P/E should be positive, got {}", min_pe);
+        assert!(max_pe > 0.0, "Max P/E should be positive, got {}", max_pe);
+        assert!(min_pe <= max_pe, "Min P/E should be <= Max P/E: {} vs {}", min_pe, max_pe);
+        assert!(max_pe < 1000.0, "Max P/E should be reasonable (<1000), got {}", max_pe);
+    }
+    
+    // If we have P/S data, validate it's reasonable
+    if let (Some(min_ps), Some(max_ps)) = (extremes.min_ps_ratio, extremes.max_ps_ratio) {
+        assert!(min_ps > 0.0, "Min P/S should be positive, got {}", min_ps);
+        assert!(max_ps > 0.0, "Max P/S should be positive, got {}", max_ps);
+        assert!(min_ps <= max_ps, "Min P/S should be <= Max P/S: {} vs {}", min_ps, max_ps);
+        assert!(max_ps < 1000.0, "Max P/S should be reasonable (<1000), got {}", max_ps);
+    }
+    
+    // If we have EV/S data, validate it's reasonable
+    if let (Some(min_evs), Some(max_evs)) = (extremes.min_evs_ratio, extremes.max_evs_ratio) {
+        assert!(min_evs > 0.0, "Min EV/S should be positive, got {}", min_evs);
+        assert!(max_evs > 0.0, "Max EV/S should be positive, got {}", max_evs);
+        assert!(min_evs <= max_evs, "Min EV/S should be <= Max EV/S: {} vs {}", min_evs, max_evs);
+        assert!(max_evs < 1000.0, "Max EV/S should be reasonable (<1000), got {}", max_evs);
+    }
+    
+    println!("✅ Valuation extremes test passed for AAPL:");
+    println!("   P/E Range: {} - {}", 
+             extremes.min_pe_ratio.map(|v| v.to_string()).unwrap_or("N/A".to_string()),
+             extremes.max_pe_ratio.map(|v| v.to_string()).unwrap_or("N/A".to_string()));
+    println!("   P/S Range: {} - {}", 
+             extremes.min_ps_ratio.map(|v| v.to_string()).unwrap_or("N/A".to_string()),
+             extremes.max_ps_ratio.map(|v| v.to_string()).unwrap_or("N/A".to_string()));
+    println!("   EV/S Range: {} - {}", 
+             extremes.min_evs_ratio.map(|v| v.to_string()).unwrap_or("N/A".to_string()),
+             extremes.max_evs_ratio.map(|v| v.to_string()).unwrap_or("N/A".to_string()));
+    
+    rust_stocks_tauri_lib::database::helpers::clear_test_database_pool().await;
+    test_db.cleanup().await.unwrap();
+}

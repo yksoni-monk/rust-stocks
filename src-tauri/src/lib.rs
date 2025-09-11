@@ -90,6 +90,7 @@ pub fn run() {
             commands::analysis::get_valuation_ratios,
             commands::analysis::get_ps_evs_history,
             commands::analysis::get_undervalued_stocks_by_ps,
+            commands::analysis::get_valuation_extremes,
             
             // Recommendation commands
             recommendations::get_value_recommendations_with_stats,

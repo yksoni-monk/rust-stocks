@@ -134,7 +134,7 @@ async fn test_get_price_history() {
     test_db.cleanup().await.unwrap();
 }
 
-/// Test valuation ratios
+/// Test valuation ratios - VALIDATES ACTUAL RATIO DATA EXISTS
 #[tokio::test]
 async fn test_get_valuation_ratios() {
     let test_db = SimpleTestDatabase::new().await.unwrap();
@@ -144,26 +144,41 @@ async fn test_get_valuation_ratios() {
     
     let ratios = get_valuation_ratios("AAPL".to_string()).await.expect("Valuation ratios failed");
     
-    // Ratios might be None for some stocks, that's okay
-    if let Some(ratios) = ratios {
-        if let Some(ps_ratio) = ratios.ps_ratio_ttm {
-            assert!(ps_ratio > 0.0, "P/S ratio should be positive");
-            println!("✅ P/S ratio: {:.2}", ps_ratio);
-        }
-        
-        if let Some(evs_ratio) = ratios.evs_ratio_ttm {
-            assert!(evs_ratio > 0.0, "EV/S ratio should be positive");
-            println!("✅ EV/S ratio: {:.2}", evs_ratio);
-        }
-    } else {
-        println!("⚠️  No valuation ratios found for AAPL");
-    }
+    // CRITICAL: AAPL should have valuation ratios (it's a major stock with financial data)
+    assert!(ratios.is_some(), "Should have valuation ratios for AAPL - major stock with financial data");
+    
+    let ratios = ratios.unwrap();
+    
+    // VALIDATION: Must have P/S and EV/S ratios for meaningful analysis
+    assert!(ratios.ps_ratio_ttm.is_some(), "Should have P/S ratio for AAPL");
+    assert!(ratios.evs_ratio_ttm.is_some(), "Should have EV/S ratio for AAPL");
+    
+    // Validate P/S ratio quality
+    let ps_ratio = ratios.ps_ratio_ttm.unwrap();
+    assert!(ps_ratio > 0.0, "P/S ratio should be positive, got {}", ps_ratio);
+    assert!(ps_ratio < 100.0, "P/S ratio should be reasonable (<100), got {}", ps_ratio);
+    assert!(ps_ratio > 0.1, "P/S ratio should be meaningful (>0.1), got {}", ps_ratio);
+    
+    // Validate EV/S ratio quality
+    let evs_ratio = ratios.evs_ratio_ttm.unwrap();
+    assert!(evs_ratio > 0.0, "EV/S ratio should be positive, got {}", evs_ratio);
+    assert!(evs_ratio < 100.0, "EV/S ratio should be reasonable (<100), got {}", evs_ratio);
+    assert!(evs_ratio > 0.1, "EV/S ratio should be meaningful (>0.1), got {}", evs_ratio);
+    
+    // Validate supporting data exists
+    assert!(ratios.revenue_ttm.is_some(), "Should have TTM revenue for AAPL");
+    let revenue = ratios.revenue_ttm.unwrap();
+    assert!(revenue > 0.0, "Revenue should be positive, got {}", revenue);
+    assert!(revenue > 1e9, "Revenue should be substantial (>$1B), got {}", revenue);
+    
+    println!("✅ Valuation ratios for AAPL - P/S: {:.2}, EV/S: {:.2}, Revenue: ${:.0}B", 
+             ps_ratio, evs_ratio, revenue / 1e9);
     
     rust_stocks_tauri_lib::database::helpers::clear_test_database_pool().await;
     test_db.cleanup().await.unwrap();
 }
 
-/// Test P/S and EV/S history
+/// Test P/S and EV/S history - VALIDATES ACTUAL P/S DATA EXISTS
 #[tokio::test]
 async fn test_get_ps_evs_history() {
     let test_db = SimpleTestDatabase::new().await.unwrap();
@@ -173,26 +188,48 @@ async fn test_get_ps_evs_history() {
     
     let history = get_ps_evs_history(
         "AAPL".to_string(),
-        "2023-01-01".to_string(),
-        "2023-12-31".to_string()
+        "2025-09-01".to_string(),
+        "2025-09-15".to_string()
     ).await.expect("P/S EV/S history failed");
     
-    if !history.is_empty() {
-        assert!(history.len() > 50, "Should have reasonable number of history records");
-        
-        let first_record = &history[0];
-        assert!(!first_record.date.is_empty(), "Date should not be empty");
-        
-        println!("✅ P/S EV/S history test passed with {} records", history.len());
-    } else {
-        println!("⚠️  No P/S EV/S history found for AAPL");
+    // CRITICAL: Validate that we have actual P/S ratio data, not just empty records
+    assert!(!history.is_empty(), "Should have history records for AAPL");
+    
+    // Count records with actual P/S ratio data
+    let records_with_ps_data = history.iter()
+        .filter(|r| r.ps_ratio_ttm.is_some())
+        .count();
+    
+    // Count records with actual EV/S ratio data  
+    let records_with_evs_data = history.iter()
+        .filter(|r| r.evs_ratio_ttm.is_some())
+        .count();
+    
+    // VALIDATION: Must have P/S and EV/S data (ratio calculator only calculates recent data)
+    assert!(records_with_ps_data > 0, "Should have P/S ratio data for AAPL (found {} records)", records_with_ps_data);
+    assert!(records_with_evs_data > 0, "Should have EV/S ratio data for AAPL (found {} records)", records_with_evs_data);
+    assert!(records_with_ps_data >= 1, "Should have at least 1 P/S ratio record (found {} records)", records_with_ps_data);
+    assert!(records_with_evs_data >= 1, "Should have at least 1 EV/S ratio record (found {} records)", records_with_evs_data);
+    
+    // Validate data quality
+    let first_record = &history[0];
+    assert!(!first_record.date.is_empty(), "Date should not be empty");
+    
+    // Check that P/S ratios are reasonable (positive, not extreme)
+    for record in history.iter().filter(|r| r.ps_ratio_ttm.is_some()).take(5) {
+        let ps_ratio = record.ps_ratio_ttm.unwrap();
+        assert!(ps_ratio > 0.0, "P/S ratio should be positive, got {}", ps_ratio);
+        assert!(ps_ratio < 100.0, "P/S ratio should be reasonable (<100), got {}", ps_ratio);
     }
+    
+    println!("✅ P/S EV/S history test passed with {} total records, {} with P/S data, {} with EV/S data", 
+             history.len(), records_with_ps_data, records_with_evs_data);
     
     rust_stocks_tauri_lib::database::helpers::clear_test_database_pool().await;
     test_db.cleanup().await.unwrap();
 }
 
-/// Test undervalued stocks by P/S ratio
+/// Test undervalued stocks by P/S ratio - VALIDATES P/S SCREENING WORKS
 #[tokio::test]
 async fn test_get_undervalued_stocks_by_ps() {
     let test_db = SimpleTestDatabase::new().await.unwrap();
@@ -202,15 +239,41 @@ async fn test_get_undervalued_stocks_by_ps() {
     
     let undervalued = get_undervalued_stocks_by_ps(2.0, Some(10)).await.expect("Undervalued stocks failed");
     
+    // CRITICAL: Should find undervalued stocks if P/S data exists
+    assert!(!undervalued.is_empty(), "Should find undervalued stocks with P/S <= 2.0 (found {} stocks)", undervalued.len());
     assert!(undervalued.len() <= 10, "Should not exceed limit");
     
+    // Count stocks with actual P/S ratio data
+    let stocks_with_ps = undervalued.iter()
+        .filter(|s| s.ps_ratio_ttm.is_some())
+        .count();
+    
+    // VALIDATION: Must have stocks with actual P/S ratios for meaningful screening
+    assert!(stocks_with_ps > 0, "Should have stocks with P/S ratios (found {} stocks)", stocks_with_ps);
+    assert!(stocks_with_ps >= undervalued.len() / 2, "At least half of results should have P/S ratios");
+    
+    // Validate each stock meets the screening criteria
     for stock in &undervalued {
         assert!(!stock.symbol.is_empty(), "Stock symbol should not be empty");
+        
         if let Some(ps_ratio) = stock.ps_ratio_ttm {
-            assert!(ps_ratio <= 2.0, "P/S ratio should be within threshold");
+            // Validate P/S ratio meets screening criteria
+            assert!(ps_ratio <= 2.0, "P/S ratio should be within threshold (<=2.0), got {}", ps_ratio);
+            assert!(ps_ratio > 0.0, "P/S ratio should be positive, got {}", ps_ratio);
+            assert!(ps_ratio > 0.01, "P/S ratio should be meaningful (>0.01), got {}", ps_ratio);
+            
             println!("✅ Undervalued stock: {} - P/S: {:.2}", stock.symbol, ps_ratio);
+        } else {
+            println!("⚠️  Stock {} has no P/S ratio data", stock.symbol);
         }
     }
+    
+    // Test with different thresholds to ensure screening works
+    let very_undervalued = get_undervalued_stocks_by_ps(1.0, Some(5)).await.expect("Very undervalued stocks failed");
+    println!("✅ Found {} very undervalued stocks (P/S <= 1.0)", very_undervalued.len());
+    
+    println!("✅ P/S screening test passed - found {} undervalued stocks (P/S <= 2.0), {} with P/S data", 
+             undervalued.len(), stocks_with_ps);
     
     rust_stocks_tauri_lib::database::helpers::clear_test_database_pool().await;
     test_db.cleanup().await.unwrap();

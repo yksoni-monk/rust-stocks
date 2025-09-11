@@ -100,6 +100,56 @@ pub async fn calculate_ps_and_evs_ratios(pool: &SqlitePool) -> Result<RatioCalcu
     Ok(stats)
 }
 
+/// Calculate P/S and EV/S ratios for ALL historical dates (not just recent)
+pub async fn calculate_historical_ps_and_evs_ratios(pool: &SqlitePool) -> Result<RatioCalculationStats> {
+    println!("🧮 Starting HISTORICAL P/S and EV/S ratio calculations...");
+    
+    let historical_data = fetch_historical_financial_data(pool).await?;
+    println!("📊 Found {} historical financial records", historical_data.len());
+    
+    if historical_data.is_empty() {
+        return Ok(RatioCalculationStats::default());
+    }
+
+    let pb = ProgressBar::new(historical_data.len() as u64);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos:>7}/{len:7} {msg}")
+            .unwrap()
+            .progress_chars("#>-")
+    );
+    pb.set_message("Calculating historical ratios...");
+
+    let mut stats = RatioCalculationStats::default();
+
+    for data in historical_data {
+        stats.stocks_processed += 1;
+        
+        let ratios = calculate_stock_ratios(&data);
+        
+        match store_calculated_ratios(pool, &data, &ratios, data.latest_ttm_report_date.unwrap()).await {
+            Ok(stored_stats) => {
+                stats.ps_ratios_calculated += stored_stats.ps_ratios_calculated;
+                stats.evs_ratios_calculated += stored_stats.evs_ratios_calculated;
+                stats.market_caps_calculated += stored_stats.market_caps_calculated;
+                stats.enterprise_values_calculated += stored_stats.enterprise_values_calculated;
+            }
+            Err(e) => {
+                eprintln!("Failed to store ratios for {}: {}", data.symbol, e);
+                stats.errors += 1;
+            }
+        }
+
+        pb.inc(1);
+        if stats.stocks_processed % 100 == 0 {
+            pb.set_message(format!("Processed {} historical records...", stats.stocks_processed));
+        }
+    }
+
+    pb.finish_with_message("✅ Historical ratio calculations completed");
+    Ok(stats)
+}
+
 /// Fetch financial data for all stocks with TTM data
 async fn fetch_financial_data(pool: &SqlitePool) -> Result<Vec<FinancialData>> {
     println!("  📊 Fetching financial data...");
@@ -162,6 +212,68 @@ async fn fetch_financial_data(pool: &SqlitePool) -> Result<Vec<FinancialData>> {
     }
     
     println!("  ✅ Found {} stocks with TTM financial data", financial_data.len());
+    Ok(financial_data)
+}
+
+/// Fetch ALL historical financial data for ratio calculations (not just latest)
+async fn fetch_historical_financial_data(pool: &SqlitePool) -> Result<Vec<FinancialData>> {
+    println!("  📊 Fetching ALL historical financial data...");
+    
+    let query = r#"
+        SELECT 
+            s.id as stock_id,
+            s.symbol,
+            i.revenue as latest_ttm_revenue,
+            i.report_date as latest_ttm_report_date,
+            
+            -- Get price data closest to the TTM report date
+            (SELECT close_price FROM daily_prices dp 
+             WHERE dp.stock_id = s.id AND dp.date <= i.report_date
+             ORDER BY dp.date DESC LIMIT 1) as latest_price,
+            (SELECT date FROM daily_prices dp 
+             WHERE dp.stock_id = s.id AND dp.date <= i.report_date
+             ORDER BY dp.date DESC LIMIT 1) as latest_price_date,
+            (SELECT shares_outstanding FROM daily_prices dp 
+             WHERE dp.stock_id = s.id AND dp.shares_outstanding IS NOT NULL
+             AND dp.date <= i.report_date
+             ORDER BY dp.date DESC LIMIT 1) as shares_outstanding,
+             
+            -- Get balance sheet data closest to the TTM report date
+            (SELECT cash_and_equivalents FROM balance_sheets b
+             WHERE b.stock_id = s.id AND b.period_type = 'TTM'
+             AND b.report_date <= i.report_date
+             ORDER BY b.report_date DESC LIMIT 1) as cash_and_equivalents,
+            (SELECT total_debt FROM balance_sheets b
+             WHERE b.stock_id = s.id AND b.period_type = 'TTM'
+             AND b.report_date <= i.report_date
+             ORDER BY b.report_date DESC LIMIT 1) as total_debt
+        FROM stocks s
+        JOIN income_statements i ON s.id = i.stock_id
+        WHERE i.period_type = 'TTM' 
+        AND i.revenue IS NOT NULL 
+        AND i.revenue > 0
+        ORDER BY s.symbol, i.report_date DESC
+    "#;
+
+    let rows = sqlx::query(query).fetch_all(pool).await?;
+    
+    let mut financial_data = Vec::new();
+    for row in rows {
+        let data = FinancialData {
+            stock_id: row.get("stock_id"),
+            symbol: row.get("symbol"),
+            latest_ttm_revenue: row.get("latest_ttm_revenue"),
+            latest_ttm_report_date: row.get("latest_ttm_report_date"),
+            latest_price: row.get("latest_price"),
+            latest_price_date: row.get("latest_price_date"),
+            shares_outstanding: row.get("shares_outstanding"),
+            cash_and_equivalents: row.get("cash_and_equivalents"),
+            total_debt: row.get("total_debt"),
+        };
+        financial_data.push(data);
+    }
+    
+    println!("  ✅ Found {} historical TTM financial records", financial_data.len());
     Ok(financial_data)
 }
 

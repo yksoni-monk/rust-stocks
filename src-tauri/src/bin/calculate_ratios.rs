@@ -6,6 +6,7 @@ use anyhow::Result;
 // Import the ratio calculator module
 use rust_stocks_tauri_lib::tools::ratio_calculator::{
     calculate_ps_and_evs_ratios,
+    calculate_historical_ps_and_evs_ratios,
     calculate_ratios_for_negative_earnings_stocks,
     generate_ratio_summary_report,
 };
@@ -29,11 +30,16 @@ async fn main() -> Result<()> {
             .long("report")
             .help("Generate summary report of existing ratios without recalculating")
             .action(clap::ArgAction::SetTrue))
+        .arg(Arg::new("historical")
+            .long("historical")
+            .help("Calculate ratios for ALL historical dates (not just recent)")
+            .action(clap::ArgAction::SetTrue))
         .get_matches();
 
     let db_path = matches.get_one::<String>("database").unwrap();
     let negative_earnings_only = matches.get_flag("negative_earnings_only");
     let report_only = matches.get_flag("report_only");
+    let historical = matches.get_flag("historical");
 
     println!("🧮 P/S AND EV/S RATIO CALCULATOR");
     println!("💾 Database: {}", db_path);
@@ -42,8 +48,10 @@ async fn main() -> Result<()> {
         println!("🎯 Focus: Stocks with negative earnings (P/E invalid)");
     } else if report_only {
         println!("📊 Mode: Report only (no calculations)");
+    } else if historical {
+        println!("📊 Mode: Calculate P/S and EV/S ratios for ALL historical dates");
     } else {
-        println!("📊 Mode: Calculate all available P/S and EV/S ratios");
+        println!("📊 Mode: Calculate P/S and EV/S ratios for recent dates only");
     }
     
     println!("{}", "=".repeat(60));
@@ -103,9 +111,26 @@ async fn main() -> Result<()> {
                 return Err(e);
             }
         }
+    } else if historical {
+        // Calculate historical P/S and EV/S ratios
+        println!("\n🧮 Calculating HISTORICAL P/S and EV/S ratios for all stocks...");
+        match calculate_historical_ps_and_evs_ratios(&pool).await {
+            Ok(stats) => {
+                let duration = start_time.elapsed();
+                print_calculation_summary(&stats, duration);
+                
+                // Generate report
+                println!("\n📋 Generating summary report...");
+                generate_ratio_summary_report(&pool).await?;
+            }
+            Err(e) => {
+                eprintln!("❌ Historical calculation failed: {}", e);
+                return Err(e);
+            }
+        }
     } else {
-        // Calculate all P/S and EV/S ratios
-        println!("\n🧮 Calculating P/S and EV/S ratios for all stocks...");
+        // Calculate recent P/S and EV/S ratios only
+        println!("\n🧮 Calculating P/S and EV/S ratios for recent dates...");
         match calculate_ps_and_evs_ratios(&pool).await {
             Ok(stats) => {
                 let duration = start_time.elapsed();

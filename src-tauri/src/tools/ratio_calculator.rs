@@ -70,14 +70,16 @@ pub async fn calculate_ps_and_evs_ratios(pool: &SqlitePool) -> Result<RatioCalcu
     pb.set_message("Calculating ratios...");
 
     let mut stats = RatioCalculationStats::default();
-    let current_date = Utc::now().date_naive();
 
     for data in financial_data {
         stats.stocks_processed += 1;
         
         let ratios = calculate_stock_ratios(&data);
         
-        match store_calculated_ratios(pool, &data, &ratios, current_date).await {
+        // Use the latest price date instead of today's date to avoid creating records for non-existent dates
+        let calculation_date = data.latest_price_date.unwrap_or_else(|| Utc::now().date_naive());
+        
+        match store_calculated_ratios(pool, &data, &ratios, calculation_date).await {
             Ok(stored_stats) => {
                 stats.ps_ratios_calculated += stored_stats.ps_ratios_calculated;
                 stats.evs_ratios_calculated += stored_stats.evs_ratios_calculated;
@@ -233,10 +235,7 @@ async fn fetch_historical_financial_data(pool: &SqlitePool) -> Result<Vec<Financ
             (SELECT date FROM daily_prices dp 
              WHERE dp.stock_id = s.id AND dp.date <= i.report_date
              ORDER BY dp.date DESC LIMIT 1) as latest_price_date,
-            (SELECT shares_outstanding FROM daily_prices dp 
-             WHERE dp.stock_id = s.id AND dp.shares_outstanding IS NOT NULL
-             AND dp.date <= i.report_date
-             ORDER BY dp.date DESC LIMIT 1) as shares_outstanding,
+            i.shares_diluted as shares_outstanding,
              
             -- Get balance sheet data closest to the TTM report date
             (SELECT cash_and_equivalents FROM balance_sheets b

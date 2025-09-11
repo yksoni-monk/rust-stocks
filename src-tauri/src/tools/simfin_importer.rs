@@ -522,6 +522,66 @@ async fn insert_quarterly_financial(
     Ok(())
 }
 
+/// Update shares outstanding in daily_prices table using data from income statements
+pub async fn update_shares_outstanding_from_income_statements(pool: &SqlitePool) -> Result<usize> {
+    println!("🔄 Updating shares outstanding from income statements...");
+    
+    // Get the latest shares outstanding data for each stock from quarterly_financials
+    let shares_data = sqlx::query(
+        "SELECT 
+            stock_id, 
+            shares_diluted,
+            report_date,
+            ROW_NUMBER() OVER (PARTITION BY stock_id ORDER BY report_date DESC) as rn
+         FROM quarterly_financials 
+         WHERE shares_diluted IS NOT NULL AND shares_diluted > 0"
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut updated_count = 0;
+    let mut validation_failed_count = 0;
+    
+    for record in shares_data {
+        let rn: i64 = record.get("rn");
+        if rn != 1 {
+            continue; // Only process the latest record for each stock
+        }
+        
+        let stock_id: i64 = record.get("stock_id");
+        let shares_diluted: i64 = record.get("shares_diluted");
+        let report_date: chrono::NaiveDate = record.get("report_date");
+        
+        // Data validation: shares outstanding should be reasonable (1M to 10B shares)
+        if shares_diluted < 1_000_000 || shares_diluted > 10_000_000_000 {
+            println!("⚠️  Skipping stock_id {}: shares_diluted {} is outside reasonable range (1M-10B)", 
+                     stock_id, shares_diluted);
+            validation_failed_count += 1;
+            continue;
+        }
+        
+        // Update all daily_prices records for this stock with the correct shares outstanding
+        let result = sqlx::query(
+            "UPDATE daily_prices 
+             SET shares_outstanding = ?1
+             WHERE stock_id = ?2"
+        )
+        .bind(shares_diluted)
+        .bind(stock_id)
+        .execute(pool)
+        .await?;
+        
+        updated_count += result.rows_affected() as usize;
+    }
+    
+    println!("✅ Updated {} daily price records with correct shares outstanding", updated_count);
+    if validation_failed_count > 0 {
+        println!("⚠️  Skipped {} stocks due to validation failures", validation_failed_count);
+    }
+    
+    Ok(updated_count)
+}
+
 /// Calculate and store EPS values (Net Income / Diluted Shares Outstanding)
 pub async fn calculate_and_store_eps(pool: &SqlitePool) -> Result<usize> {
     println!("🧮 Calculating EPS values (Net Income ÷ Diluted Shares Outstanding)...");

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { recommendationsDataService } from '../services/dataService.js';
+import { recommendationsDataService, analysisDataService } from '../services/dataService.js';
+import { analysisAPI } from '../services/api.js';
 
 function RecommendationsPanel({ onClose }) {
   const [recommendations, setRecommendations] = useState([]);
@@ -90,17 +91,19 @@ function RecommendationsPanel({ onClose }) {
     // Load extremes for each stock (limit to first 10 to avoid too many API calls)
     const stocksToLoad = stocks.slice(0, 10);
     
-    for (const stock of stocksToLoad) {
+    // Run all API calls in parallel for better performance
+    const promises = stocksToLoad.map(async (stock) => {
       try {
-        const result = await recommendationsDataService.loadValuationExtremes(stock.symbol);
+        const result = await analysisDataService.loadValuationExtremes(stock.symbol);
         if (result.extremes) {
           extremes[stock.symbol] = result.extremes;
         }
       } catch (err) {
         console.warn(`Failed to load extremes for ${stock.symbol}:`, err);
       }
-    }
+    });
     
+    await Promise.all(promises);
     setValuationExtremes(extremes);
   }
 
@@ -310,7 +313,7 @@ function RecommendationsPanel({ onClose }) {
           ) : (
             <div className="divide-y divide-gray-200">
               {recommendations.map((rec) => (
-                <div key={rec.symbol} className="p-4 hover:bg-gray-50">
+                <div key={`${rec.symbol}-${rec.rank}`} className="p-4 hover:bg-gray-50">
                   <div className="flex items-center justify-between">
                     {/* Stock Info */}
                     <div className="flex-1">
@@ -334,14 +337,6 @@ function RecommendationsPanel({ onClose }) {
                             <div className="text-xs text-gray-500">P/S Ratio (TTM)</div>
                           </div>
 
-                          {/* EV/S Ratio */}
-                          <div className="text-center">
-                            <div className="text-lg font-bold text-gray-900">
-                              {rec.evs_ratio_ttm ? rec.evs_ratio_ttm.toFixed(2) : 'N/A'}
-                            </div>
-                            <div className="text-xs text-gray-500">EV/S Ratio (TTM)</div>
-                          </div>
-
                           {/* Market Cap */}
                           <div className="text-center">
                             <div className="text-sm text-gray-700">
@@ -351,18 +346,17 @@ function RecommendationsPanel({ onClose }) {
                           </div>
 
                           {/* Valuation Extremes */}
-                          {valuationExtremes[rec.symbol] && (
+                          {valuationExtremes[rec.symbol] ? (
                             <div className="text-center">
                               <div className="text-xs text-gray-500 mb-1">Historical Range</div>
-                              <div className="text-xs text-gray-600">
-                                P/E: {valuationExtremes[rec.symbol].min_pe_ratio?.toFixed(1) || 'N/A'} - {valuationExtremes[rec.symbol].max_pe_ratio?.toFixed(1) || 'N/A'}
-                              </div>
+                              {/* Only show P/S for P/S screening */}
                               <div className="text-xs text-gray-600">
                                 P/S: {valuationExtremes[rec.symbol].min_ps_ratio?.toFixed(2) || 'N/A'} - {valuationExtremes[rec.symbol].max_ps_ratio?.toFixed(2) || 'N/A'}
                               </div>
-                              <div className="text-xs text-gray-600">
-                                EV/S: {valuationExtremes[rec.symbol].min_evs_ratio?.toFixed(2) || 'N/A'} - {valuationExtremes[rec.symbol].max_evs_ratio?.toFixed(2) || 'N/A'}
-                              </div>
+                            </div>
+                          ) : (
+                            <div className="text-center">
+                              <div className="text-xs text-gray-400">Loading ranges...</div>
                             </div>
                           )}
                         </>

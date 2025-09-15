@@ -8,6 +8,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use anyhow::{Result, anyhow};
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)] // Fields may be used in future versions or tests
 struct SimFinDailyPrice {
     #[serde(rename = "Ticker")]
     ticker: String,
@@ -23,12 +24,8 @@ struct SimFinDailyPrice {
     low: Option<String>,
     #[serde(rename = "Close")]
     close: Option<String>,
-    #[serde(rename = "Adj. Close")]
-    adj_close: Option<String>,
     #[serde(rename = "Volume")]
     volume: Option<String>,
-    #[serde(rename = "Dividend")]
-    dividend: Option<String>,
     #[serde(rename = "Shares Outstanding")]
     shares_outstanding: Option<String>,
 }
@@ -550,7 +547,7 @@ pub async fn update_shares_outstanding_from_income_statements(pool: &SqlitePool)
         
         let stock_id: i64 = record.get("stock_id");
         let shares_diluted: i64 = record.get("shares_diluted");
-        let report_date: chrono::NaiveDate = record.get("report_date");
+        let _report_date: chrono::NaiveDate = record.get("report_date");
         
         // Data validation: shares outstanding should be reasonable (1M to 10B shares)
         if shares_diluted < 1_000_000 || shares_diluted > 10_000_000_000 {

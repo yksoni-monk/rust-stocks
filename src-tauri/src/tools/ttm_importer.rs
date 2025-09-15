@@ -8,6 +8,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use anyhow::{Result, anyhow};
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)] // Fields may be used in future versions or tests
 struct SimFinTTMIncome {
     #[serde(rename = "Ticker")]
     ticker: String,
@@ -68,6 +69,7 @@ struct SimFinTTMIncome {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)] // Fields may be used in future versions or tests
 struct SimFinTTMBalance {
     #[serde(rename = "Ticker")]
     ticker: String,

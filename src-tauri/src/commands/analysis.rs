@@ -305,11 +305,11 @@ pub struct SmartUndervaluedStock {
 pub async fn get_undervalued_stocks_by_ps(
     stock_tickers: Vec<String>, 
     limit: Option<i32>, 
-    minMarketCap: Option<f64>
+    min_market_cap: Option<f64>
 ) -> Result<Vec<SmartUndervaluedStock>, String> {
     let pool = get_database_connection().await?;
     let limit_value = limit.unwrap_or(50);
-    let min_market_cap = minMarketCap.unwrap_or(500_000_000.0); // Default $500M
+    let min_market_cap_value = min_market_cap.unwrap_or(500_000_000.0); // Default $500M
     
     if stock_tickers.is_empty() {
         return Ok(vec![]);
@@ -442,8 +442,8 @@ pub async fn get_undervalued_stocks_by_ps(
     }
     
     // Bind min market cap (used twice in the query)
-    query_builder = query_builder.bind(min_market_cap);
-    query_builder = query_builder.bind(min_market_cap);
+    query_builder = query_builder.bind(min_market_cap_value);
+    query_builder = query_builder.bind(min_market_cap_value);
     query_builder = query_builder.bind(limit_value);
     
     match query_builder.fetch_all(&pool).await {

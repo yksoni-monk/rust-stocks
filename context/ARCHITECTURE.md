@@ -1031,52 +1031,109 @@ CREATE INDEX idx_income_statements_period_lookup ...;
 - **Ratio Comparison Charts**: Visual comparison of valuation ratios over time
 - **Smart Filtering**: Auto-switch to P/S when P/E is invalid (negative earnings)
 
-## S&P 500 P/S Screening Algorithm Architecture
+## Enhanced P/S Screening Algorithm Architecture
 
 ### Overview
-Smart algorithm to screen S&P 500 stocks for undervalued opportunities based on P/S ratio fluctuations using historical data analysis.
+Sophisticated algorithm to screen S&P 500 stocks for undervalued opportunities based on P/S ratio fluctuations AND revenue growth requirements. Combines statistical undervaluation detection with fundamental quality filters.
 
-### Algorithm Design
+### Algorithm Evolution
+
+#### Phase 1: Basic P/S Screening (Current)
+- **Logic**: P/S < (Historical Mean - 0.5 × Std Dev) AND P/S < Historical Median
+- **Data Requirements**: Minimum 20 historical data points
+- **Limitations**: No revenue growth consideration, simple statistical threshold
+
+#### Phase 2: Enhanced P/S Screening (Proposed)
+- **Logic**: P/S < (Historical Median - 1.0 × Std Dev) AND Revenue Growth > 0%
+- **Data Requirements**: Minimum 50 historical data points
+- **Enhancements**: Revenue growth validation, quality scoring, enhanced Z-score
+
+### Enhanced Algorithm Design
 
 #### 1. Data Sources
 - **S&P 500 Symbols**: From `sp500_symbols` table (503 stocks)
 - **Historical P/S Data**: From `daily_valuation_ratios` table (4-5 years of data)
+- **Revenue Growth Data**: From `income_statements` table (TTM and Annual periods)
 - **Current P/S Data**: Latest available P/S ratios from TTM/annual data
 
 #### 2. Statistical Analysis
-**Historical Statistics Calculation**:
+**Enhanced Historical Statistics**:
 - **Mean P/S**: Average P/S ratio over historical period
-- **Median P/S**: Median P/S ratio over historical period  
+- **Median P/S**: Median P/S ratio over historical period (more robust than mean)
 - **Standard Deviation**: P/S volatility measure
 - **Min/Max P/S**: Historical range boundaries
-- **Data Points**: Minimum 20 historical records required
+- **Data Points**: Minimum 50 historical records required (vs 20 in basic)
 
-**Current P/S Calculation**:
-- Uses latest available P/S ratio from `daily_valuation_ratios`
-- Filters: P/S > 0.01, Market Cap > $500M (configurable)
+**Revenue Growth Analysis**:
+- **TTM Growth Rate**: (Current TTM Revenue - Previous TTM Revenue) / Previous TTM Revenue × 100
+- **Annual Growth Rate**: (Current Annual Revenue - Previous Annual Revenue) / Previous Annual Revenue × 100
+- **Growth Requirement**: Either TTM or Annual growth rate > 0%
 
-#### 3. Undervalued Detection Logic
-**Dual Criteria Approach**:
+#### 3. Enhanced Undervalued Detection Logic
+**Triple Criteria Approach**:
 ```sql
--- Stock is undervalued if BOTH conditions are met:
-1. Current P/S < (Historical Mean - 1.5 × Std Dev)  -- Statistical undervaluation
-2. Current P/S < Historical Median                  -- Median-based undervaluation
+-- Stock is undervalued if ALL THREE conditions are met:
+1. Current P/S < (Historical Median - 1.0 × Std Dev)  -- Statistical undervaluation
+2. Revenue Growth > 0% (TTM OR Annual)               -- Growth requirement
+3. Quality Score >= 50                               -- Data quality filter
 ```
 
-**Quality Filters**:
-- Minimum 20 historical data points (reliability)
+**Enhanced Quality Filters**:
+- Minimum 50 historical data points (reliability)
 - P/S ratio > 0.01 (avoid penny stocks)
 - Market Cap > $500M (configurable minimum)
+- Revenue growth validation (TTM or Annual > 0%)
 - S&P 500 stocks only
 
-#### 4. Z-Score Calculation
+#### 4. Enhanced Z-Score Calculation
 ```sql
-Z-Score = (Current P/S - Historical Mean) / Historical Std Dev
+-- Enhanced Z-score based on median (more robust than mean)
+Z-Score = (Current P/S - Historical Median) / Historical Std Dev
 ```
 
 ### Backend Implementation
 
-#### Command: `get_undervalued_stocks_by_ps`
+#### Enhanced Command: `get_enhanced_undervalued_stocks_by_ps`
+**Parameters**:
+- `stock_tickers: Vec<String>` - S&P 500 symbols to analyze
+- `limit: Option<i32>` - Maximum results (default: 50)
+- `minMarketCap: Option<f64>` - Minimum market cap (default: $500M)
+- `minGrowthRate: Option<f64>` - Minimum growth rate filter (default: 0.0%)
+
+**Return Type**: `Vec<EnhancedUndervaluedStock>`
+```rust
+pub struct EnhancedUndervaluedStock {
+    pub stock_id: i32,
+    pub symbol: String,
+    pub current_ps: f64,
+    
+    // Historical P/S statistics
+    pub historical_mean: f64,
+    pub historical_median: f64,
+    pub historical_stddev: f64,
+    pub historical_min: f64,
+    pub historical_max: f64,
+    pub data_points: i32,
+    
+    // Revenue growth metrics
+    pub current_ttm_revenue: Option<f64>,
+    pub ttm_growth_rate: Option<f64>,
+    pub current_annual_revenue: Option<f64>,
+    pub annual_growth_rate: Option<f64>,
+    
+    // Enhanced metrics
+    pub z_score: f64,
+    pub quality_score: i32,
+    pub is_undervalued: bool,
+    
+    // Market metrics
+    pub market_cap: f64,
+    pub price: f64,
+    pub data_completeness_score: i32,
+}
+```
+
+#### Legacy Command: `get_undervalued_stocks_by_ps` (Basic Algorithm)
 **Parameters**:
 - `stock_tickers: Vec<String>` - S&P 500 symbols to analyze
 - `limit: Option<i32>` - Maximum results (default: 50)
@@ -1113,36 +1170,50 @@ pub struct SmartUndervaluedStock {
 
 ### Frontend Integration Architecture
 
-#### 1. API Service Layer (`src/services/api.js`)
-**Function**: `getUndervaluedStocksByPs(stockTickers, limit, minMarketCap)`
-- Calls Tauri command `get_undervalued_stocks_by_ps`
+#### 1. Enhanced API Service Layer (`src/services/api.js`)
+**Enhanced Function**: `getEnhancedUndervaluedStocksByPs(stockTickers, limit, minMarketCap, minGrowthRate)`
+- Calls Tauri command `get_enhanced_undervalued_stocks_by_ps`
 - Handles parameter mapping (camelCase ↔ snake_case)
 - Error handling and response formatting
 
-#### 2. Data Service Layer (`src/services/dataService.js`)
-**Function**: `loadUndervaluedStocksByPs(stockTickers, limit, minMarketCap)`
-- Business logic wrapper around API call
-- Default parameter handling
+**Legacy Function**: `getUndervaluedStocksByPs(stockTickers, limit, minMarketCap)`
+- Calls Tauri command `get_undervalued_stocks_by_ps` (basic algorithm)
+- Maintains backward compatibility
+
+#### 2. Enhanced Data Service Layer (`src/services/dataService.js`)
+**Enhanced Function**: `loadEnhancedUndervaluedStocksByPs(stockTickers, limit, minMarketCap, minGrowthRate)`
+- Business logic wrapper around enhanced API call
+- Default parameter handling (minGrowthRate = 0.0%)
 - Error handling and data transformation
 - Returns structured result with success/error states
 
-#### 3. UI Component (`src/components/RecommendationsPanel.jsx`)
-**Integration Points**:
+**Legacy Function**: `loadUndervaluedStocksByPs(stockTickers, limit, minMarketCap)`
+- Maintains backward compatibility for basic algorithm
+
+#### 3. Enhanced UI Component (`src/components/RecommendationsPanel.jsx`)
+**Enhanced Integration Points**:
 - **S&P 500 Symbol Loading**: Uses `stockDataService.loadSp500Symbols()`
-- **Smart Algorithm Trigger**: When `screeningType === 'ps'`
-- **Parameter Configuration**: Market cap dropdown, limit selection
-- **Results Display**: Transforms `SmartUndervaluedStock` to UI format
+- **Algorithm Selection**: Enhanced dropdown with "P/S Ratio (Enhanced)" option
+- **Growth Rate Configuration**: New filter for minimum growth rate
+- **Quality Score Display**: Shows data quality metrics
+- **Results Display**: Transforms `EnhancedUndervaluedStock` to UI format
 
-**UI Flow**:
+**Enhanced UI Flow**:
 1. Load S&P 500 symbols on component mount
-2. User selects "P/S Ratio (TTM)" screening type
-3. User configures market cap filter and limit
-4. Call `recommendationsDataService.loadUndervaluedStocksByPs(sp500Symbols, limit, minMarketCap)`
-5. Transform results for display with historical statistics
-6. Show undervalued stocks with reasoning
+2. User selects "P/S Ratio (Enhanced)" screening type
+3. User configures market cap filter, limit, and minimum growth rate
+4. Call `recommendationsDataService.loadEnhancedUndervaluedStocksByPs(sp500Symbols, limit, minMarketCap, minGrowthRate)`
+5. Transform results for display with historical statistics and growth metrics
+6. Show undervalued stocks with enhanced reasoning including growth rates
 
-#### 4. Data Transformation
-**Backend → Frontend Mapping**:
+**Enhanced UI Features**:
+- **Growth Rate Filter**: Dropdown for minimum growth rate (0%, 5%, 10%, 15%, 20%)
+- **Quality Score Indicator**: Visual indicator of data quality (0-100)
+- **Growth Metrics Display**: Shows both TTM and Annual growth rates
+- **Enhanced Reasoning**: More detailed explanation including growth validation
+
+#### 4. Enhanced Data Transformation
+**Enhanced Backend → Frontend Mapping**:
 ```javascript
 const transformedRecommendations = result.stocks.map((stock, index) => ({
   rank: index + 1,
@@ -1151,8 +1222,42 @@ const transformedRecommendations = result.stocks.map((stock, index) => ({
   current_pe: null,  // Not used in P/S screening
   ps_ratio_ttm: stock.current_ps,
   market_cap: stock.market_cap,
-  reasoning: `Smart algorithm: P/S ${stock.current_ps.toFixed(2)} (Z-score: ${stock.z_score.toFixed(2)})`,
-  // Smart algorithm specific fields
+  
+  // Enhanced reasoning with growth metrics
+  reasoning: `Enhanced algorithm: P/S ${stock.current_ps.toFixed(2)} (Z-score: ${stock.z_score.toFixed(2)}) | TTM Growth: ${stock.ttm_growth_rate?.toFixed(1) || 'N/A'}% | Quality: ${stock.quality_score}/100`,
+  
+  // Enhanced algorithm specific fields
+  historical_mean: stock.historical_mean,
+  historical_median: stock.historical_median,
+  historical_stddev: stock.historical_stddev,
+  historical_min: stock.historical_min,
+  historical_max: stock.historical_max,
+  data_points: stock.data_points,
+  
+  // Revenue growth metrics
+  current_ttm_revenue: stock.current_ttm_revenue,
+  ttm_growth_rate: stock.ttm_growth_rate,
+  current_annual_revenue: stock.current_annual_revenue,
+  annual_growth_rate: stock.annual_growth_rate,
+  
+  // Enhanced metrics
+  z_score: stock.z_score,
+  quality_score: stock.quality_score,
+  is_undervalued: stock.is_undervalued
+}));
+```
+
+**Legacy Backend → Frontend Mapping** (for basic algorithm):
+```javascript
+const transformedRecommendations = result.stocks.map((stock, index) => ({
+  rank: index + 1,
+  symbol: stock.symbol,
+  company_name: stock.symbol,
+  current_pe: null,  // Not used in P/S screening
+  ps_ratio_ttm: stock.current_ps,
+  market_cap: stock.market_cap,
+  reasoning: `Basic algorithm: P/S ${stock.current_ps.toFixed(2)} (Z-score: ${stock.z_score.toFixed(2)})`,
+  // Basic algorithm specific fields
   historical_mean: stock.historical_mean,
   historical_median: stock.historical_median,
   historical_min: stock.historical_min,
@@ -1163,17 +1268,31 @@ const transformedRecommendations = result.stocks.map((stock, index) => ({
 }));
 ```
 
-### Performance Characteristics
-- **On-the-fly Calculation**: No caching, calculates statistics in real-time
-- **S&P 500 Focus**: Only processes ~503 stocks instead of 5,000+
-- **Efficient SQL**: Uses CTEs and window functions for optimal performance
-- **Configurable Limits**: Default 50 results, user-adjustable
+### Enhanced Performance Characteristics
 
-### Error Handling
-- **Data Validation**: Minimum historical data points requirement
+#### Enhanced Algorithm Performance
+- **Query Time**: ~2-3 seconds for S&P 500 analysis (vs ~1 second for basic)
+- **Data Requirements**: Minimum 50 historical data points per stock (vs 20 for basic)
+- **Coverage**: ~80-90% of S&P 500 stocks (vs ~95% for basic)
+- **Precision**: Higher precision, lower recall (fewer but higher quality results)
+- **On-the-fly Calculation**: No caching, calculates statistics and growth rates in real-time
+- **Efficient SQL**: Uses CTEs, window functions, and revenue growth joins for optimal performance
+
+#### Basic Algorithm Performance (Legacy)
+- **Query Time**: ~1 second for S&P 500 analysis
+- **Data Requirements**: Minimum 20 historical data points per stock
+- **Coverage**: ~95% of S&P 500 stocks
+- **On-the-fly Calculation**: No caching, calculates statistics in real-time
+- **Efficient SQL**: Uses CTEs and window functions for optimal performance
+
+### Enhanced Error Handling
+- **Data Validation**: Minimum historical data points requirement (50 for enhanced, 20 for basic)
+- **Revenue Growth Validation**: Handles missing TTM/Annual revenue data gracefully
+- **Quality Score Validation**: Ensures minimum quality score thresholds
 - **Graceful Degradation**: Returns empty results if insufficient data
-- **User Feedback**: Clear error messages for data issues
-- **Fallback Logic**: Handles missing historical statistics
+- **User Feedback**: Clear error messages for data issues and growth rate problems
+- **Fallback Logic**: Handles missing historical statistics and revenue growth data
+- **Algorithm Selection**: Users can fall back to basic algorithm if enhanced fails
 
 ## Production-Grade Testing Architecture
 
@@ -1428,5 +1547,286 @@ cargo test --test backend_tests --features test-utils -- --nocapture
 - CI/CD pipeline integration
 
 ---
+
+## Enhanced P/S Screening Algorithm Architecture
+
+### Overview
+The enhanced P/S screening algorithm provides sophisticated undervaluation detection using historical statistical analysis combined with revenue growth requirements. This represents a significant upgrade from simple P/S ratio screening to a multi-dimensional value + growth hybrid approach.
+
+### Algorithm Design
+
+#### Core Screening Criteria
+The algorithm screens stocks that meet **ALL THREE** conditions:
+
+1. **Statistical Undervaluation**: Current P/S < (Historical Median - 1.0 × Standard Deviation)
+2. **Revenue Growth Requirement**: TTM Revenue Growth > 0% (positive growth)
+3. **Data Quality Filter**: Quality Score >= 50 (sufficient data completeness)
+
+#### Enhanced Data Coverage
+- **Annual Revenue Data**: ~500+ stocks with 4-5 years of annual revenue data
+- **Quarterly Revenue Data**: ~500+ stocks with 16-20 quarters of quarterly revenue data  
+- **TTM Revenue Data**: ~500+ stocks with 4-5 years of TTM revenue data
+- **Balance Sheet Data**: Cash, debt data for EV/S calculations
+- **S&P 500 Coverage**: ~95%+ coverage (vs previous 82.7%)
+
+#### Statistical Analysis
+- **Historical Period**: Last 4-5 years of P/S ratio data
+- **Minimum Data Points**: >= 10 data points required for statistical validity
+- **Statistical Measures**: Mean, Median, Standard Deviation, Min, Max
+- **Z-Score Calculation**: (Current P/S - Historical Mean) / Historical Std Dev
+
+#### Revenue Growth Analysis
+- **Primary Metric**: TTM Revenue Growth Rate
+- **Growth Calculation**: (Current TTM Revenue - Previous TTM Revenue) / Previous TTM Revenue × 100
+- **Growth Threshold**: > 0% (positive growth required)
+- **Data Validation**: Cross-reference with Annual revenue trends
+
+### Backend Implementation
+
+#### New Command: `get_enhanced_undervalued_stocks_by_ps`
+```rust
+#[tauri::command]
+pub async fn get_enhanced_undervalued_stocks_by_ps(
+    pool: &SqlitePool,
+    min_market_cap: Option<f64>,
+    max_results: Option<i32>,
+    min_growth_rate: Option<f64>,
+    min_quality_score: Option<i32>,
+) -> Result<Vec<EnhancedUndervaluedStock>, String>
+```
+
+#### Enhanced Data Structure
+```rust
+pub struct EnhancedUndervaluedStock {
+    pub stock_id: i32,
+    pub symbol: String,
+    pub current_ps: f64,
+    
+    // Historical P/S statistics
+    pub historical_mean: f64,
+    pub historical_median: f64,
+    pub historical_stddev: f64,
+    pub historical_min: f64,
+    pub historical_max: f64,
+    pub data_points: i32,
+    
+    // Revenue growth metrics
+    pub current_ttm_revenue: Option<f64>,
+    pub ttm_growth_rate: Option<f64>,
+    pub current_annual_revenue: Option<f64>,
+    pub annual_growth_rate: Option<f64>,
+    
+    // Enhanced metrics
+    pub z_score: f64,
+    pub quality_score: i32,
+    pub is_undervalued: bool,
+    
+    // Market metrics
+    pub market_cap: f64,
+    pub price: f64,
+    pub data_completeness_score: i32,
+}
+```
+
+#### SQL Query Architecture
+```sql
+-- Enhanced P/S screening with statistical analysis
+WITH historical_ps_stats AS (
+    SELECT 
+        stock_id,
+        AVG(ps_ratio_ttm) as mean_ps,
+        PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ps_ratio_ttm) as median_ps,
+        STDDEV(ps_ratio_ttm) as stddev_ps,
+        MIN(ps_ratio_ttm) as min_ps,
+        MAX(ps_ratio_ttm) as max_ps,
+        COUNT(*) as data_points
+    FROM daily_valuation_ratios 
+    WHERE ps_ratio_ttm IS NOT NULL 
+        AND ps_ratio_ttm > 0
+        AND date >= date('now', '-5 years')
+    GROUP BY stock_id
+    HAVING COUNT(*) >= 10
+),
+revenue_growth_analysis AS (
+    SELECT 
+        s.id as stock_id,
+        s.symbol,
+        
+        -- Current TTM revenue
+        ttm_current.revenue as current_ttm_revenue,
+        
+        -- TTM revenue growth
+        CASE 
+            WHEN ttm_previous.revenue > 0 THEN 
+                (ttm_current.revenue - ttm_previous.revenue) / ttm_previous.revenue * 100
+            ELSE NULL 
+        END as ttm_growth_rate,
+        
+        -- Data quality scoring
+        CASE 
+            WHEN ttm_current.revenue IS NOT NULL AND annual_current.revenue IS NOT NULL THEN 100
+            WHEN ttm_current.revenue IS NOT NULL THEN 75
+            ELSE 50
+        END as quality_score
+        
+    FROM stocks s
+    LEFT JOIN income_statements ttm_current ON s.id = ttm_current.stock_id 
+        AND ttm_current.period_type = 'TTM'
+        AND ttm_current.report_date = (
+            SELECT MAX(report_date) FROM income_statements 
+            WHERE stock_id = s.id AND period_type = 'TTM'
+        )
+    LEFT JOIN income_statements ttm_previous ON s.id = ttm_previous.stock_id 
+        AND ttm_previous.period_type = 'TTM'
+        AND ttm_previous.report_date = (
+            SELECT MAX(report_date) FROM income_statements 
+            WHERE stock_id = s.id AND period_type = 'TTM'
+            AND report_date < ttm_current.report_date
+        )
+    LEFT JOIN income_statements annual_current ON s.id = annual_current.stock_id 
+        AND annual_current.period_type = 'Annual'
+        AND annual_current.report_date = (
+            SELECT MAX(report_date) FROM income_statements 
+            WHERE stock_id = s.id AND period_type = 'Annual'
+        )
+)
+SELECT 
+    s.id as stock_id,
+    s.symbol,
+    dp.close_price as price,
+    dp.market_cap,
+    dp.ps_ratio_ttm as current_ps,
+    
+    -- Historical statistics
+    hps.mean_ps as historical_mean,
+    hps.median_ps as historical_median,
+    hps.stddev_ps as historical_stddev,
+    hps.min_ps as historical_min,
+    hps.max_ps as historical_max,
+    hps.data_points,
+    
+    -- Revenue growth data
+    rga.current_ttm_revenue,
+    rga.ttm_growth_rate,
+    rga.quality_score,
+    
+    -- Enhanced calculations
+    CASE 
+        WHEN hps.stddev_ps > 0 THEN 
+            (dp.ps_ratio_ttm - hps.mean_ps) / hps.stddev_ps
+        ELSE 0
+    END as z_score,
+    
+    -- Undervaluation determination
+    CASE 
+        WHEN dp.ps_ratio_ttm < (hps.median_ps - 1.0 * hps.stddev_ps)
+            AND rga.ttm_growth_rate > 0
+            AND rga.quality_score >= 50
+        THEN 1 ELSE 0
+    END as is_undervalued
+    
+FROM stocks s
+INNER JOIN sp500_symbols sp ON s.symbol = sp.symbol
+INNER JOIN daily_prices dp ON s.id = dp.stock_id 
+    AND dp.date = (SELECT MAX(date) FROM daily_prices WHERE stock_id = s.id)
+INNER JOIN historical_ps_stats hps ON s.id = hps.stock_id
+LEFT JOIN revenue_growth_analysis rga ON s.id = rga.stock_id
+WHERE dp.market_cap > COALESCE(?, 500000000)  -- Default $500M minimum
+    AND dp.ps_ratio_ttm IS NOT NULL
+    AND dp.ps_ratio_ttm > 0
+    AND hps.data_points >= 10
+ORDER BY 
+    CASE 
+        WHEN dp.ps_ratio_ttm < (hps.median_ps - 1.0 * hps.stddev_ps)
+            AND rga.ttm_growth_rate > 0
+            AND rga.quality_score >= 50
+        THEN (hps.median_ps - dp.ps_ratio_ttm) / hps.stddev_ps
+        ELSE 0
+    END DESC,
+    rga.quality_score DESC
+LIMIT COALESCE(?, 50);  -- Default 50 results
+```
+
+### Frontend Integration
+
+#### Enhanced UI Components
+- **Pre-filter Selection**: P/E vs P/S screening method selection
+- **Advanced Filtering**: Growth rate, quality score, market cap filters
+- **Statistical Display**: Historical P/S statistics, Z-scores, growth rates
+- **Quality Indicators**: Data completeness scores and confidence levels
+
+#### User Experience Improvements
+- **Default P/S Screening**: P/S algorithm set as default (more sophisticated)
+- **Collapsible Footer**: Space-efficient display of algorithm details
+- **Real-time Filtering**: Dynamic result updates based on filter changes
+- **Enhanced Tooltips**: Detailed explanations of statistical measures
+
+### Performance Characteristics
+
+#### Query Optimization
+- **Indexed Lookups**: Optimized indexes for multi-period data analysis
+- **CTE Performance**: Common Table Expressions for complex statistical calculations
+- **Batch Processing**: Efficient handling of large datasets
+- **Caching Strategy**: Intelligent caching of statistical calculations
+
+#### Expected Performance
+- **Query Time**: < 2 seconds for S&P 500 analysis
+- **Memory Usage**: Optimized for large historical datasets
+- **Scalability**: Supports expansion to full market coverage
+- **Real-time Updates**: Efficient incremental data updates
+
+### Error Handling and Validation
+
+#### Data Quality Assurance
+- **Statistical Validation**: Minimum data point requirements
+- **Growth Rate Validation**: Revenue data consistency checks
+- **Outlier Detection**: Statistical outlier identification and handling
+- **Data Completeness**: Quality scoring based on available data
+
+#### Error Recovery
+- **Graceful Degradation**: Fallback to simpler algorithms if data insufficient
+- **User Feedback**: Clear error messages and data quality indicators
+- **Logging**: Comprehensive logging for debugging and monitoring
+- **Validation Queries**: Post-import data integrity verification
+
+### Migration and Deployment
+
+#### Database Migration
+- **Migration File**: `20250915000006_complete_revenue_import.sql`
+- **Additive Changes**: No data destruction, only additions
+- **Backup Strategy**: Automatic backups before migration
+- **Rollback Support**: Timestamped backups for restoration
+
+#### Import Process
+- **Complete Import Tool**: `import_complete_revenue` binary
+- **Batch Processing**: Efficient handling of large CSV files
+- **Progress Tracking**: Real-time import progress indicators
+- **Error Handling**: Robust error handling with detailed logging
+
+#### Data Validation
+- **Post-Import Verification**: Automated data integrity checks
+- **Coverage Analysis**: S&P 500 coverage verification
+- **Quality Metrics**: Data completeness and accuracy validation
+- **Performance Testing**: Query performance validation
+
+### Future Enhancements
+
+#### Algorithm Improvements
+- **Multi-Period Growth**: Annual + Quarterly + TTM growth analysis
+- **Sector Analysis**: Sector-specific P/S ratio normalization
+- **Market Cycle Awareness**: Economic cycle-adjusted screening
+- **Machine Learning**: ML-enhanced undervaluation detection
+
+#### Data Expansion
+- **Full Market Coverage**: Expansion beyond S&P 500
+- **International Markets**: Global stock screening capabilities
+- **Alternative Data**: ESG, sentiment, and alternative data integration
+- **Real-time Updates**: Live data feed integration
+
+#### User Experience
+- **Advanced Analytics**: Portfolio analysis and backtesting
+- **Custom Screens**: User-defined screening criteria
+- **Export Capabilities**: Data export for external analysis
+- **Mobile Support**: Mobile-optimized interface
 *Last Updated: 2025-09-10*
 *Version: 3.4 - Consolidated Testing Architecture Documentation*

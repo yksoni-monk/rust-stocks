@@ -60,8 +60,9 @@ export const stockDataService = {
       () => stockAPI.getSp500Symbols(),
       'load S&P 500 symbols'
     );
-
+    
     return {
+      success: result.success,
       symbols: result.success ? result.data : [],
       error: result.success ? null : result.error
     };
@@ -153,11 +154,11 @@ export const recommendationsDataService = {
     };
   },
 
-  // Load undervalued stocks by P/S ratio
-  async loadUndervaluedStocksByPs(maxPsRatio = 2.0, limit = 20, minMarketCap = 500_000_000) {
+  // Load undervalued stocks by P/S ratio (smart algorithm)
+  async loadUndervaluedStocksByPs(stockTickers, limit = 20, minMarketCap = 500_000_000) {
     const result = await apiCall(
-      () => recommendationsAPI.getUndervaluedStocksByPs(maxPsRatio, limit, minMarketCap),
-      'load undervalued stocks by P/S'
+      () => recommendationsAPI.getUndervaluedStocksByPs(stockTickers, limit, minMarketCap),
+      'load undervalued stocks by P/S (smart algorithm)'
     );
 
     return {

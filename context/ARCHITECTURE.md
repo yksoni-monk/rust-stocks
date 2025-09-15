@@ -1031,6 +1031,150 @@ CREATE INDEX idx_income_statements_period_lookup ...;
 - **Ratio Comparison Charts**: Visual comparison of valuation ratios over time
 - **Smart Filtering**: Auto-switch to P/S when P/E is invalid (negative earnings)
 
+## S&P 500 P/S Screening Algorithm Architecture
+
+### Overview
+Smart algorithm to screen S&P 500 stocks for undervalued opportunities based on P/S ratio fluctuations using historical data analysis.
+
+### Algorithm Design
+
+#### 1. Data Sources
+- **S&P 500 Symbols**: From `sp500_symbols` table (503 stocks)
+- **Historical P/S Data**: From `daily_valuation_ratios` table (4-5 years of data)
+- **Current P/S Data**: Latest available P/S ratios from TTM/annual data
+
+#### 2. Statistical Analysis
+**Historical Statistics Calculation**:
+- **Mean P/S**: Average P/S ratio over historical period
+- **Median P/S**: Median P/S ratio over historical period  
+- **Standard Deviation**: P/S volatility measure
+- **Min/Max P/S**: Historical range boundaries
+- **Data Points**: Minimum 20 historical records required
+
+**Current P/S Calculation**:
+- Uses latest available P/S ratio from `daily_valuation_ratios`
+- Filters: P/S > 0.01, Market Cap > $500M (configurable)
+
+#### 3. Undervalued Detection Logic
+**Dual Criteria Approach**:
+```sql
+-- Stock is undervalued if BOTH conditions are met:
+1. Current P/S < (Historical Mean - 1.5 × Std Dev)  -- Statistical undervaluation
+2. Current P/S < Historical Median                  -- Median-based undervaluation
+```
+
+**Quality Filters**:
+- Minimum 20 historical data points (reliability)
+- P/S ratio > 0.01 (avoid penny stocks)
+- Market Cap > $500M (configurable minimum)
+- S&P 500 stocks only
+
+#### 4. Z-Score Calculation
+```sql
+Z-Score = (Current P/S - Historical Mean) / Historical Std Dev
+```
+
+### Backend Implementation
+
+#### Command: `get_undervalued_stocks_by_ps`
+**Parameters**:
+- `stock_tickers: Vec<String>` - S&P 500 symbols to analyze
+- `limit: Option<i32>` - Maximum results (default: 50)
+- `minMarketCap: Option<f64>` - Minimum market cap (default: $500M)
+
+**Return Type**: `Vec<SmartUndervaluedStock>`
+```rust
+pub struct SmartUndervaluedStock {
+    pub stock_id: i32,
+    pub symbol: String,
+    pub current_ps: f64,
+    pub historical_mean: f64,
+    pub historical_median: f64,
+    pub historical_min: f64,
+    pub historical_max: f64,
+    pub historical_variance: f64,  // Actually std_dev
+    pub z_score: f64,
+    pub is_undervalued: bool,
+    pub market_cap: f64,
+    pub price: f64,
+    pub data_completeness_score: i32,
+}
+```
+
+#### SQL Query Architecture
+**Multi-CTE Approach**:
+1. `sp500_stocks` - Filter to S&P 500 symbols only
+2. `historical_ps_data` - Get all historical P/S data with row numbers
+3. `current_data` - Latest P/S data (rn = 1)
+4. `historical_stats` - Calculate mean, min, max, std_dev from historical data
+5. `median_calc` - Calculate median using window functions
+6. `median_data` - Extract median values
+7. `market_stats` - Overall market statistics for context
+
+### Frontend Integration Architecture
+
+#### 1. API Service Layer (`src/services/api.js`)
+**Function**: `getUndervaluedStocksByPs(stockTickers, limit, minMarketCap)`
+- Calls Tauri command `get_undervalued_stocks_by_ps`
+- Handles parameter mapping (camelCase ↔ snake_case)
+- Error handling and response formatting
+
+#### 2. Data Service Layer (`src/services/dataService.js`)
+**Function**: `loadUndervaluedStocksByPs(stockTickers, limit, minMarketCap)`
+- Business logic wrapper around API call
+- Default parameter handling
+- Error handling and data transformation
+- Returns structured result with success/error states
+
+#### 3. UI Component (`src/components/RecommendationsPanel.jsx`)
+**Integration Points**:
+- **S&P 500 Symbol Loading**: Uses `stockDataService.loadSp500Symbols()`
+- **Smart Algorithm Trigger**: When `screeningType === 'ps'`
+- **Parameter Configuration**: Market cap dropdown, limit selection
+- **Results Display**: Transforms `SmartUndervaluedStock` to UI format
+
+**UI Flow**:
+1. Load S&P 500 symbols on component mount
+2. User selects "P/S Ratio (TTM)" screening type
+3. User configures market cap filter and limit
+4. Call `recommendationsDataService.loadUndervaluedStocksByPs(sp500Symbols, limit, minMarketCap)`
+5. Transform results for display with historical statistics
+6. Show undervalued stocks with reasoning
+
+#### 4. Data Transformation
+**Backend → Frontend Mapping**:
+```javascript
+const transformedRecommendations = result.stocks.map((stock, index) => ({
+  rank: index + 1,
+  symbol: stock.symbol,
+  company_name: stock.symbol,
+  current_pe: null,  // Not used in P/S screening
+  ps_ratio_ttm: stock.current_ps,
+  market_cap: stock.market_cap,
+  reasoning: `Smart algorithm: P/S ${stock.current_ps.toFixed(2)} (Z-score: ${stock.z_score.toFixed(2)})`,
+  // Smart algorithm specific fields
+  historical_mean: stock.historical_mean,
+  historical_median: stock.historical_median,
+  historical_min: stock.historical_min,
+  historical_max: stock.historical_max,
+  historical_variance: stock.historical_variance,
+  z_score: stock.z_score,
+  is_undervalued: stock.is_undervalued
+}));
+```
+
+### Performance Characteristics
+- **On-the-fly Calculation**: No caching, calculates statistics in real-time
+- **S&P 500 Focus**: Only processes ~503 stocks instead of 5,000+
+- **Efficient SQL**: Uses CTEs and window functions for optimal performance
+- **Configurable Limits**: Default 50 results, user-adjustable
+
+### Error Handling
+- **Data Validation**: Minimum historical data points requirement
+- **Graceful Degradation**: Returns empty results if insufficient data
+- **User Feedback**: Clear error messages for data issues
+- **Fallback Logic**: Handles missing historical statistics
+
 ## Production-Grade Testing Architecture
 
 ### Simplified Test Architecture (Current Implementation)

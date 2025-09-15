@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { recommendationsDataService, analysisDataService } from '../services/dataService.js';
+import { recommendationsDataService, analysisDataService, stockDataService } from '../services/dataService.js';
 import { analysisAPI } from '../services/api.js';
 
 function RecommendationsPanel({ onClose }) {
@@ -12,42 +12,77 @@ function RecommendationsPanel({ onClose }) {
   const [psRatio, setPsRatio] = useState(2.0);
   const [minMarketCap, setMinMarketCap] = useState(500_000_000); // Default $500M
   const [valuationExtremes, setValuationExtremes] = useState({});
+  const [sp500Symbols, setSp500Symbols] = useState([]); // S&P 500 symbols for smart screening
 
+  // Load S&P 500 symbols for smart screening first
   useEffect(() => {
+    loadSp500Symbols();
+  }, []);
+
+  // Load recommendations after S&P 500 symbols are loaded
+  useEffect(() => {
+    if (screeningType === 'ps' && sp500Symbols.length === 0) {
+      // Don't load recommendations yet if we need S&P 500 symbols but they're not loaded
+      return;
+    }
     loadRecommendationsWithStats();
-  }, [limit, screeningType, psRatio, minMarketCap]);
+  }, [limit, screeningType, psRatio, minMarketCap, sp500Symbols]);
+
+  async function loadSp500Symbols() {
+    try {
+      const result = await stockDataService.loadSp500Symbols();
+      
+      if (result.success) {
+        setSp500Symbols(result.symbols);
+        setError(null); // Clear any previous errors
+      } else {
+        setError(`Failed to load S&P 500 symbols: ${result.error || 'Unknown error'}`);
+      }
+    } catch (err) {
+      setError(`Failed to load S&P 500 symbols: ${err.message || err}`);
+    }
+  }
 
   async function loadRecommendationsWithStats() {
     try {
       setLoading(true);
       
       if (screeningType === 'ps') {
-        // P/S ratio screening for undervalued stocks
-        const result = await recommendationsDataService.loadUndervaluedStocksByPs(psRatio, limit, minMarketCap);
+        // Use smart algorithm with S&P 500 stocks only
+        
+        const result = await recommendationsDataService.loadUndervaluedStocksByPs(sp500Symbols, limit, minMarketCap);
         
         if (result.error) {
           setError(result.error);
-          console.error('Error loading P/S recommendations:', result.error);
+          console.error('Error loading smart P/S recommendations:', result.error);
           return;
         }
         
-        // Transform P/S data to match recommendations format
+        // Transform smart algorithm data to match recommendations format
         const transformedRecommendations = result.stocks.map((stock, index) => ({
           rank: index + 1,
           symbol: stock.symbol,
-          company_name: stock.symbol, // We'll use symbol as company name for now
+          company_name: stock.symbol,
           current_pe: null,
           current_pe_date: null,
           historical_min_pe: 0,
           historical_max_pe: 0,
-          value_score: Math.max(0, Math.min(100, (2.0 - (stock.ps_ratio_ttm || 0)) * 50)), // Higher score for lower P/S
-          risk_score: Math.min(100, (stock.ps_ratio_ttm || 0) * 20), // Lower risk for lower P/S
+          value_score: Math.max(0, Math.min(100, (2.0 - (stock.current_ps || 0)) * 50)),
+          risk_score: Math.min(100, (stock.current_ps || 0) * 20),
           data_points: stock.data_completeness_score || 0,
-          reasoning: `P/S ratio of ${(stock.ps_ratio_ttm || 0).toFixed(2)} indicates potential undervaluation`,
-          ps_ratio_ttm: stock.ps_ratio_ttm,
-          evs_ratio_ttm: stock.evs_ratio_ttm,
+          reasoning: `Smart algorithm: P/S ${(stock.current_ps || 0).toFixed(2)} (Z-score: ${(stock.z_score || 0).toFixed(2)})`,
+          ps_ratio_ttm: stock.current_ps,
+          evs_ratio_ttm: null, // Not used in smart algorithm
           market_cap: stock.market_cap,
-          revenue_ttm: stock.revenue_ttm
+          revenue_ttm: null, // Not used in smart algorithm
+          // Smart algorithm specific fields
+          historical_mean: stock.historical_mean,
+          historical_median: stock.historical_median,
+          historical_min: stock.historical_min,
+          historical_max: stock.historical_max,
+          historical_variance: stock.historical_variance,
+          z_score: stock.z_score,
+          is_undervalued: stock.is_undervalued
         }));
         
         setRecommendations(transformedRecommendations);
@@ -173,7 +208,7 @@ function RecommendationsPanel({ onClose }) {
             <h2 className="text-2xl font-bold">Stock Value Recommendations</h2>
             <p className="text-blue-100 mt-1">
               {screeningType === 'ps' 
-                ? `P/S ratio-based undervalued stock screening (P/S ≤ ${psRatio}, Market Cap > $${(minMarketCap / 1_000_000).toFixed(0)}M)` 
+                ? `Smart P/S Algorithm: Historical + Z-score analysis (S&P 500 only, Market Cap &gt; $${(minMarketCap / 1_000_000).toFixed(0)}M)` 
                 : 'P/E ratio-based value screening for S&P 500 stocks'
               }
             </p>
@@ -233,42 +268,25 @@ function RecommendationsPanel({ onClose }) {
                 </select>
               </div>
 
-              {/* P/S Ratio Threshold (only show for P/S screening) */}
+              {/* Market Cap Filter (only show for P/S screening) */}
               {screeningType === 'ps' && (
-                <div className="flex items-center gap-4">
-                  <div className="flex items-center gap-2">
-                    <label className="text-sm font-medium text-gray-700">
-                      Max P/S Ratio:
-                    </label>
-                    <input
-                      type="number"
-                      step="0.1"
-                      min="0.1"
-                      max="10.0"
-                      value={psRatio}
-                      onChange={(e) => setPsRatio(Number(e.target.value))}
-                      className="border border-gray-300 rounded px-2 py-1 text-sm w-20"
-                    />
-                  </div>
-                  
-                  <div className="flex items-center gap-2">
-                    <label className="text-sm font-medium text-gray-700">
-                      Min Market Cap:
-                    </label>
-                    <select
-                      value={minMarketCap}
-                      onChange={(e) => setMinMarketCap(Number(e.target.value))}
-                      className="border border-gray-300 rounded px-2 py-1 text-sm"
-                    >
-                      <option value={100_000_000}>$100M</option>
-                      <option value={250_000_000}>$250M</option>
-                      <option value={500_000_000}>$500M</option>
-                      <option value={1_000_000_000}>$1B</option>
-                      <option value={2_000_000_000}>$2B</option>
-                      <option value={5_000_000_000}>$5B</option>
-                      <option value={10_000_000_000}>$10B</option>
-                    </select>
-                  </div>
+                <div className="flex items-center gap-2">
+                  <label className="text-sm font-medium text-gray-700">
+                    Min Market Cap:
+                  </label>
+                  <select
+                    value={minMarketCap}
+                    onChange={(e) => setMinMarketCap(Number(e.target.value))}
+                    className="border border-gray-300 rounded px-2 py-1 text-sm"
+                  >
+                    <option value={100_000_000}>$100M</option>
+                    <option value={250_000_000}>$250M</option>
+                    <option value={500_000_000}>$500M</option>
+                    <option value={1_000_000_000}>$1B</option>
+                    <option value={2_000_000_000}>$2B</option>
+                    <option value={5_000_000_000}>$5B</option>
+                    <option value={10_000_000_000}>$10B</option>
+                  </select>
                 </div>
               )}
 
@@ -306,8 +324,10 @@ function RecommendationsPanel({ onClose }) {
               </div>
               <h3 className="text-xl font-medium text-gray-900 mb-2">No Value Stocks Found</h3>
               <p className="text-gray-600">
-                No S&P 500 stocks currently meet our value criteria (P/E ≤ 20% above historical minimum).
-                This could indicate the market is fairly valued or overvalued.
+                {screeningType === 'ps' 
+                  ? `No S&P 500 stocks currently meet our smart P/S criteria (Historical analysis + Z-score screening). This could indicate the market is fairly valued or overvalued.`
+                  : 'No S&P 500 stocks currently meet our value criteria (P/E ≤ 20% above historical minimum). This could indicate the market is fairly valued or overvalued.'
+                }
               </p>
             </div>
           ) : (
@@ -329,12 +349,20 @@ function RecommendationsPanel({ onClose }) {
                     <div className="flex gap-4 items-center">
                       {screeningType === 'ps' ? (
                         <>
-                          {/* P/S Ratio */}
+                          {/* Current P/S Ratio */}
                           <div className="text-center">
                             <div className="text-lg font-bold text-gray-900">
                               {rec.ps_ratio_ttm ? rec.ps_ratio_ttm.toFixed(2) : 'N/A'}
                             </div>
-                            <div className="text-xs text-gray-500">P/S Ratio (TTM)</div>
+                            <div className="text-xs text-gray-500">Current P/S</div>
+                          </div>
+
+                          {/* Z-Score */}
+                          <div className="text-center">
+                            <div className="text-sm font-bold text-gray-700">
+                              {rec.z_score ? rec.z_score.toFixed(2) : 'N/A'}
+                            </div>
+                            <div className="text-xs text-gray-500">Z-Score</div>
                           </div>
 
                           {/* Market Cap */}
@@ -345,13 +373,15 @@ function RecommendationsPanel({ onClose }) {
                             <div className="text-xs text-gray-500">Market Cap</div>
                           </div>
 
-                          {/* Valuation Extremes */}
+                          {/* Historical Range */}
                           {valuationExtremes[rec.symbol] ? (
                             <div className="text-center">
                               <div className="text-xs text-gray-500 mb-1">Historical Range</div>
-                              {/* Only show P/S for P/S screening */}
                               <div className="text-xs text-gray-600">
-                                P/S: {valuationExtremes[rec.symbol].min_ps_ratio?.toFixed(2) || 'N/A'} - {valuationExtremes[rec.symbol].max_ps_ratio?.toFixed(2) || 'N/A'}
+                                P/S: {rec.historical_min?.toFixed(2) || 'N/A'} - {rec.historical_max?.toFixed(2) || 'N/A'}
+                              </div>
+                              <div className="text-xs text-gray-500">
+                                Mean: {rec.historical_mean?.toFixed(2) || 'N/A'} (±{rec.historical_variance ? Math.sqrt(rec.historical_variance).toFixed(2) : 'N/A'})
                               </div>
                             </div>
                           ) : (
@@ -419,10 +449,11 @@ function RecommendationsPanel({ onClose }) {
           <div className="text-xs text-gray-600 space-y-1">
             {screeningType === 'ps' ? (
               <>
-                <p><strong>P/S Screening Criteria:</strong> TTM P/S ratio ≤ {psRatio} (undervalued stocks with quality filters: P/S > 0.01, Market Cap > $${(minMarketCap / 1_000_000).toFixed(0)}M)</p>
-                <p><strong>Value Score:</strong> Higher is better (0-100). Based on how low the P/S ratio is relative to threshold.</p>
+                <p><strong>Smart P/S Algorithm:</strong> Historical analysis + Z-score screening (S&P 500 only, Market Cap &gt; $${(minMarketCap / 1_000_000).toFixed(0)}M)</p>
+                <p><strong>Criteria:</strong> Current P/S &lt; (Historical Mean - 2x Std Dev) AND Z-score &lt; -1.0 (requires &gt;=10 data points)</p>
+                <p><strong>Value Score:</strong> Higher is better (0-100). Based on how low the P/S ratio is relative to historical average.</p>
                 <p><strong>Risk Score:</strong> Lower is better (0-100). Higher P/S ratios indicate higher valuation risk.</p>
-                <p><strong>TTM:</strong> Trailing Twelve Months financial data from SimFin.</p>
+                <p><strong>Z-Score:</strong> How many standard deviations below/above the overall S&P 500 P/S mean.</p>
               </>
             ) : (
               <>

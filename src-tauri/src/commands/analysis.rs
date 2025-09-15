@@ -284,64 +284,181 @@ pub async fn get_ps_evs_history(symbol: String, start_date: String, end_date: St
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct SmartUndervaluedStock {
+    pub stock_id: i32,
+    pub symbol: String,
+    pub current_ps: f64,
+    pub historical_mean: f64,
+    pub historical_median: f64,
+    pub historical_min: f64,
+    pub historical_max: f64,
+    pub historical_variance: f64,
+    pub z_score: f64,
+    pub is_undervalued: bool,
+    pub market_cap: f64,
+    pub price: f64,
+    pub data_completeness_score: i32,
+}
+
 #[tauri::command]
-pub async fn get_undervalued_stocks_by_ps(maxPsRatio: f64, limit: Option<i32>, minMarketCap: Option<f64>) -> Result<Vec<ValuationRatios>, String> {
+pub async fn get_undervalued_stocks_by_ps(
+    stock_tickers: Vec<String>, 
+    limit: Option<i32>, 
+    minMarketCap: Option<f64>
+) -> Result<Vec<SmartUndervaluedStock>, String> {
     let pool = get_database_connection().await?;
-    
     let limit_value = limit.unwrap_or(50);
     let min_market_cap = minMarketCap.unwrap_or(500_000_000.0); // Default $500M
     
-    let query = "
-        SELECT 
-            dvr.stock_id,
-            s.symbol,
-            dvr.date,
-            dvr.price,
-            dvr.market_cap,
-            dvr.enterprise_value,
-            dvr.ps_ratio_ttm,
-            dvr.evs_ratio_ttm,
-            dvr.revenue_ttm,
-            dvr.data_completeness_score,
-            dvr.last_financial_update
-        FROM daily_valuation_ratios dvr
-        JOIN stocks s ON dvr.stock_id = s.id
-        WHERE dvr.ps_ratio_ttm IS NOT NULL 
-          AND dvr.ps_ratio_ttm > 0 
-          AND dvr.ps_ratio_ttm <= ?1
-          AND dvr.ps_ratio_ttm > 0.01
-          AND dvr.market_cap > ?3
-        ORDER BY dvr.ps_ratio_ttm ASC
-        LIMIT ?2
-    ";
+    if stock_tickers.is_empty() {
+        return Ok(vec![]);
+    }
     
-    match sqlx::query(query)
-        .bind(maxPsRatio)
-        .bind(limit_value)
-        .bind(min_market_cap)
-        .fetch_all(&pool).await 
-    {
-        Ok(rows) => {
-            let undervalued_stocks: Vec<ValuationRatios> = rows.into_iter().map(|row| {
-                ValuationRatios {
-                    stock_id: row.get("stock_id"),
-                    symbol: row.get("symbol"),
-                    date: row.get("date"),
-                    price: row.get("price"),
-                    market_cap: row.get("market_cap"),
-                    enterprise_value: row.get("enterprise_value"),
-                    ps_ratio_ttm: row.get("ps_ratio_ttm"),
-                    evs_ratio_ttm: row.get("evs_ratio_ttm"),
-                    revenue_ttm: row.get("revenue_ttm"),
-                    data_completeness_score: row.get("data_completeness_score"),
-                    last_financial_update: row.get("last_financial_update"),
-                }
-            }).collect();
+    // Create placeholders for the IN clause
+    let placeholders = stock_tickers.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    
+    // Smart P/S screening algorithm - calculate everything on-the-fly
+    let query = format!("
+        WITH sp500_stocks AS (
+            SELECT s.id, s.symbol
+            FROM stocks s
+            WHERE s.symbol IN ({})
+        ),
+        historical_ps_data AS (
+            SELECT 
+                s.id as stock_id,
+                s.symbol,
+                dvr.ps_ratio_ttm,
+                dvr.date,
+                dvr.price,
+                dvr.market_cap,
+                dvr.data_completeness_score,
+                ROW_NUMBER() OVER (PARTITION BY s.id ORDER BY dvr.date DESC) as rn
+            FROM sp500_stocks s
+            JOIN daily_valuation_ratios dvr ON s.id = dvr.stock_id
+            WHERE dvr.ps_ratio_ttm IS NOT NULL 
+              AND dvr.ps_ratio_ttm > 0.01
+              AND dvr.market_cap > ?
+        ),
+        current_data AS (
+            SELECT * FROM historical_ps_data WHERE rn = 1
+        ),
+        historical_stats AS (
+            SELECT 
+                stock_id,
+                AVG(ps_ratio_ttm) as hist_mean,
+                MIN(ps_ratio_ttm) as hist_min,
+                MAX(ps_ratio_ttm) as hist_max,
+                COUNT(*) as data_points
+            FROM historical_ps_data 
+            WHERE rn > 1  -- Exclude current data point for historical analysis
+            GROUP BY stock_id
+            HAVING COUNT(*) >= 20  -- Require at least 20 historical data points (roughly 1 month)
+        ),
+        variance_calc AS (
+            SELECT 
+                h.stock_id,
+                AVG((s.ps_ratio_ttm - h.hist_mean) * (s.ps_ratio_ttm - h.hist_mean)) as hist_variance
+            FROM historical_ps_data s
+            JOIN historical_stats h ON s.stock_id = h.stock_id
+            WHERE s.rn > 1  -- Exclude current data point
+            GROUP BY h.stock_id
+        ),
+        median_calc AS (
+            SELECT 
+                stock_id,
+                ps_ratio_ttm,
+                ROW_NUMBER() OVER (PARTITION BY stock_id ORDER BY ps_ratio_ttm) as rn,
+                COUNT(*) OVER (PARTITION BY stock_id) as total_count
+            FROM historical_ps_data 
+            WHERE rn > 1  -- Exclude current data point
+        ),
+        median_data AS (
+            SELECT 
+                stock_id,
+                AVG(ps_ratio_ttm) as hist_median
+            FROM median_calc
+            WHERE rn IN ((total_count + 1) / 2, (total_count + 2) / 2)
+            GROUP BY stock_id
+        ),
+        market_mean AS (
+            SELECT AVG(ps_ratio_ttm) as market_mean FROM current_data
+        ),
+        market_variance AS (
+            SELECT 
+                AVG((c.ps_ratio_ttm - m.market_mean) * (c.ps_ratio_ttm - m.market_mean)) as market_variance
+            FROM current_data c
+            CROSS JOIN market_mean m
+        )
+        SELECT 
+            c.stock_id,
+            c.symbol,
+            c.ps_ratio_ttm as current_ps,
+            COALESCE(h.hist_mean, 0.0) as historical_mean,
+            COALESCE(m.hist_median, 0.0) as historical_median,
+            COALESCE(h.hist_min, 0.0) as historical_min,
+            COALESCE(h.hist_max, 0.0) as historical_max,
+            COALESCE(v.hist_variance, 0.0) as historical_variance,
+            CASE 
+                WHEN v.hist_variance > 0 THEN (c.ps_ratio_ttm - h.hist_mean) / v.hist_variance
+                ELSE 0.0
+            END as z_score,
+            CASE 
+                WHEN h.hist_mean > 0 AND v.hist_variance > 0 AND h.data_points >= 20 THEN
+                    -- Stock is undervalued if current P/S is significantly below historical mean
+                    -- Using a simple threshold: current P/S < mean - 0.5 * variance
+                    c.ps_ratio_ttm < (h.hist_mean - 0.5 * v.hist_variance) AND
+                    -- And also below historical median
+                    c.ps_ratio_ttm < m.hist_median
+                ELSE false
+            END as is_undervalued,
+            c.market_cap,
+            c.price,
+            c.data_completeness_score
+        FROM current_data c
+        LEFT JOIN historical_stats h ON c.stock_id = h.stock_id
+        LEFT JOIN variance_calc v ON c.stock_id = v.stock_id
+        LEFT JOIN median_data m ON c.stock_id = m.stock_id
+        CROSS JOIN market_mean mm
+        CROSS JOIN market_variance mv
+        WHERE c.market_cap > ?
+        ORDER BY 
+            CASE 
+                WHEN h.hist_mean > 0 AND v.hist_variance > 0 AND h.data_points >= 20 THEN
+                    c.ps_ratio_ttm < (h.hist_mean - 0.5 * v.hist_variance) AND
+                    c.ps_ratio_ttm < m.hist_median
+                ELSE false
+            END DESC,
+            c.ps_ratio_ttm ASC
+        LIMIT ?
+    ", placeholders);
+    
+    let mut query_builder = sqlx::query_as::<_, SmartUndervaluedStock>(&query);
+    
+    // Bind stock tickers
+    for ticker in &stock_tickers {
+        query_builder = query_builder.bind(ticker);
+    }
+    
+    // Bind min market cap (used twice in the query)
+    query_builder = query_builder.bind(min_market_cap);
+    query_builder = query_builder.bind(min_market_cap);
+    query_builder = query_builder.bind(limit_value);
+    
+    match query_builder.fetch_all(&pool).await {
+        Ok(stocks) => {
+            // Filter to only return truly undervalued stocks
+            let undervalued_stocks: Vec<SmartUndervaluedStock> = stocks
+                .into_iter()
+                .filter(|stock| stock.is_undervalued)
+                .take(limit_value as usize)
+                .collect();
             
             Ok(undervalued_stocks)
         }
         Err(e) => {
-            eprintln!("Undervalued stocks query error: {}", e);
+            eprintln!("Smart undervalued stocks query error: {}", e);
             Err(format!("Database query failed: {}", e))
         }
     }

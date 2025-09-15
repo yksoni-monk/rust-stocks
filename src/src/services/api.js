@@ -63,9 +63,9 @@ export const analysisAPI = {
 
 // Recommendations API
 export const recommendationsAPI = {
-  // Get undervalued stocks by P/S ratio
-  async getUndervaluedStocksByPs(maxPsRatio, limit, minMarketCap) {
-    return await invoke('get_undervalued_stocks_by_ps', { maxPsRatio, limit, minMarketCap });
+  // Get undervalued stocks by P/S ratio (smart algorithm)
+  async getUndervaluedStocksByPs(stockTickers, limit, minMarketCap) {
+    return await invoke('get_undervalued_stocks_by_ps', { stockTickers, limit, minMarketCap });
   },
 
   // Get value recommendations with stats

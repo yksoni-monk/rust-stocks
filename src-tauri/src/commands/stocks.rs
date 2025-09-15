@@ -236,15 +236,9 @@ async fn fetch_sp500_from_github_with_timeout() -> Result<Vec<String>, String> {
 }
 
 async fn update_sp500_in_database(pool: &SqlitePool, symbols: &[String]) -> Result<(), String> {
-    // Clear existing S&P 500 symbols
-    sqlx::query("DELETE FROM sp500_symbols")
-        .execute(pool)
-        .await
-        .map_err(|e| format!("Failed to clear S&P 500 symbols: {}", e))?;
-    
-    // Insert new symbols
+    // Insert/update symbols using INSERT OR REPLACE to handle existing records
     for symbol in symbols {
-        sqlx::query("INSERT INTO sp500_symbols (symbol) VALUES (?)")
+        sqlx::query("INSERT OR REPLACE INTO sp500_symbols (symbol) VALUES (?)")
             .bind(symbol)
             .execute(pool)
             .await

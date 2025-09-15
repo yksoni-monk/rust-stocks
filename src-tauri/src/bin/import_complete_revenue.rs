@@ -22,7 +22,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .get_matches();
 
     let db_path = matches.get_one::<String>("database").unwrap();
-    let simfin_dir = matches.get_one::<String>("simfin-dir").unwrap();
+    let simfin_dir = matches.get_one::<String>("simfin-data-dir").unwrap();
 
     println!("🚀 Complete Revenue Data Import Tool");
     println!("  📁 Database: {}", db_path);

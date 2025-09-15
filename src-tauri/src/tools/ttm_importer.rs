@@ -13,7 +13,7 @@ pub use SimFinTTMBalance as SimFinBalance;
 
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)] // Fields may be used in future versions or tests
-struct SimFinTTMIncome {
+pub struct SimFinTTMIncome {
     #[serde(rename = "Ticker")]
     ticker: String,
     #[serde(rename = "SimFinId")]
@@ -74,7 +74,7 @@ struct SimFinTTMIncome {
 
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)] // Fields may be used in future versions or tests
-struct SimFinTTMBalance {
+pub struct SimFinTTMBalance {
     #[serde(rename = "Ticker")]
     ticker: String,
     #[serde(rename = "SimFinId")]
@@ -369,9 +369,9 @@ async fn insert_ttm_income_statement(
             stock_id, period_type, report_date, fiscal_year, fiscal_period,
             revenue, gross_profit, operating_income, net_income,
             shares_basic, shares_diluted, currency, simfin_id, publish_date, 
-            data_source, created_at
+            data_source
         ) VALUES (
-            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, CURRENT_TIMESTAMP
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15
         )"
     )
     .bind(stock_id)
@@ -388,7 +388,7 @@ async fn insert_ttm_income_statement(
     .bind(&record.currency)
     .bind(record.simfin_id)
     .bind(publish_date)
-    .bind("simfin")
+    .bind("simfin") // data_source
     .execute(pool)
     .await?;
 
@@ -419,9 +419,9 @@ async fn insert_ttm_balance_sheet(
             stock_id, period_type, report_date, fiscal_year, fiscal_period,
             cash_and_equivalents, short_term_debt, long_term_debt, total_debt,
             total_assets, total_liabilities, total_equity, shares_outstanding,
-            currency, simfin_id, data_source, created_at
+            currency, simfin_id, data_source
         ) VALUES (
-            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, CURRENT_TIMESTAMP
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16
         )"
     )
     .bind(stock_id)
@@ -850,27 +850,30 @@ async fn insert_annual_income_batch(pool: &SqlitePool, records: &[SimFinIncome])
             .and_then(|n| n.parse::<f64>().ok());
 
         // Insert into income_statements table with period_type = 'Annual'
-        let result = sqlx::query!(
+        let result = sqlx::query(
             r#"
             INSERT OR REPLACE INTO income_statements (
                 stock_id, period_type, report_date, fiscal_year, fiscal_period,
-                revenue, shares_basic, shares_diluted, net_income,
-                currency, simfin_id, publish_date, restated_date, data_source
-            ) VALUES (?, 'Annual', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'simfin')
-            "#,
-            stock_id,
-            report_date,
-            fiscal_year,
-            "FY", // Annual period
-            revenue,
-            shares_basic,
-            shares_diluted,
-            net_income,
-            record.currency,
-            record.simfin_id,
-            record.publish_date,
-            record.restated_date
-        ).execute(pool).await;
+                revenue, gross_profit, operating_income, net_income,
+                shares_basic, shares_diluted, currency, simfin_id, publish_date, 
+                data_source
+            ) VALUES (?, 'Annual', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'simfin')
+            "#
+        )
+        .bind(stock_id)
+        .bind(report_date)
+        .bind(fiscal_year)
+        .bind("FY") // Annual period
+        .bind(revenue)
+        .bind(None::<f64>) // gross_profit - not available in annual data
+        .bind(None::<f64>) // operating_income - not available in annual data
+        .bind(net_income)
+        .bind(shares_basic)
+        .bind(shares_diluted)
+        .bind(&record.currency)
+        .bind(record.simfin_id)
+        .bind(&record.publish_date)
+        .execute(pool).await;
 
         match result {
             Ok(_) => count += 1,
@@ -923,27 +926,30 @@ async fn insert_quarterly_income_batch(pool: &SqlitePool, records: &[SimFinIncom
             .and_then(|n| n.parse::<f64>().ok());
 
         // Insert into income_statements table with period_type = 'Quarterly'
-        let result = sqlx::query!(
+        let result = sqlx::query(
             r#"
             INSERT OR REPLACE INTO income_statements (
                 stock_id, period_type, report_date, fiscal_year, fiscal_period,
-                revenue, shares_basic, shares_diluted, net_income,
-                currency, simfin_id, publish_date, restated_date, data_source
-            ) VALUES (?, 'Quarterly', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'simfin')
-            "#,
-            stock_id,
-            report_date,
-            fiscal_year,
-            fiscal_period,
-            revenue,
-            shares_basic,
-            shares_diluted,
-            net_income,
-            record.currency,
-            record.simfin_id,
-            record.publish_date,
-            record.restated_date
-        ).execute(pool).await;
+                revenue, gross_profit, operating_income, net_income,
+                shares_basic, shares_diluted, currency, simfin_id, publish_date, 
+                data_source
+            ) VALUES (?, 'Quarterly', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'simfin')
+            "#
+        )
+        .bind(stock_id)
+        .bind(report_date)
+        .bind(fiscal_year)
+        .bind(&fiscal_period)
+        .bind(revenue)
+        .bind(None::<f64>) // gross_profit - not available in quarterly data
+        .bind(None::<f64>) // operating_income - not available in quarterly data
+        .bind(net_income)
+        .bind(shares_basic)
+        .bind(shares_diluted)
+        .bind(&record.currency)
+        .bind(record.simfin_id)
+        .bind(&record.publish_date)
+        .execute(pool).await;
 
         match result {
             Ok(_) => count += 1,
@@ -997,32 +1003,37 @@ async fn insert_annual_balance_batch(pool: &SqlitePool, records: &[SimFinBalance
             (None, None) => None,
         };
 
-        // Parse shares outstanding
-        let shares_outstanding = record.shares_outstanding.as_ref()
+        // Parse shares outstanding (use shares_basic as fallback)
+        let shares_outstanding = record.shares_basic.as_ref()
             .and_then(|s| s.parse::<f64>().ok())
             .filter(|&v| v > 0.0);
 
         // Insert into balance_sheets table with period_type = 'Annual'
-        let result = sqlx::query!(
+        let result = sqlx::query(
             r#"
             INSERT OR REPLACE INTO balance_sheets (
                 stock_id, period_type, report_date, fiscal_year, fiscal_period,
                 cash_and_equivalents, short_term_debt, long_term_debt, total_debt,
-                shares_outstanding, currency, simfin_id, data_source
-            ) VALUES (?, 'Annual', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'simfin')
-            "#,
-            stock_id,
-            report_date,
-            fiscal_year,
-            "FY", // Annual period
-            cash_and_equivalents,
-            short_term_debt,
-            long_term_debt,
-            total_debt,
-            shares_outstanding,
-            record.currency,
-            record.simfin_id
-        ).execute(pool).await;
+                total_assets, total_liabilities, total_equity, shares_outstanding,
+                currency, simfin_id, data_source
+            ) VALUES (?, 'Annual', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'simfin')
+            "#
+        )
+        .bind(stock_id)
+        .bind(report_date)
+        .bind(fiscal_year)
+        .bind("FY") // Annual period
+        .bind(cash_and_equivalents)
+        .bind(short_term_debt)
+        .bind(long_term_debt)
+        .bind(total_debt)
+        .bind(None::<f64>) // total_assets - not available in annual data
+        .bind(None::<f64>) // total_liabilities - not available in annual data
+        .bind(None::<f64>) // total_equity - not available in annual data
+        .bind(shares_outstanding)
+        .bind(&record.currency)
+        .bind(record.simfin_id)
+        .execute(pool).await;
 
         match result {
             Ok(_) => count += 1,
@@ -1077,32 +1088,37 @@ async fn insert_quarterly_balance_batch(pool: &SqlitePool, records: &[SimFinBala
             (None, None) => None,
         };
 
-        // Parse shares outstanding
-        let shares_outstanding = record.shares_outstanding.as_ref()
+        // Parse shares outstanding (use shares_basic as fallback)
+        let shares_outstanding = record.shares_basic.as_ref()
             .and_then(|s| s.parse::<f64>().ok())
             .filter(|&v| v > 0.0);
 
         // Insert into balance_sheets table with period_type = 'Quarterly'
-        let result = sqlx::query!(
+        let result = sqlx::query(
             r#"
             INSERT OR REPLACE INTO balance_sheets (
                 stock_id, period_type, report_date, fiscal_year, fiscal_period,
                 cash_and_equivalents, short_term_debt, long_term_debt, total_debt,
-                shares_outstanding, currency, simfin_id, data_source
-            ) VALUES (?, 'Quarterly', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'simfin')
-            "#,
-            stock_id,
-            report_date,
-            fiscal_year,
-            fiscal_period,
-            cash_and_equivalents,
-            short_term_debt,
-            long_term_debt,
-            total_debt,
-            shares_outstanding,
-            record.currency,
-            record.simfin_id
-        ).execute(pool).await;
+                total_assets, total_liabilities, total_equity, shares_outstanding,
+                currency, simfin_id, data_source
+            ) VALUES (?, 'Quarterly', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'simfin')
+            "#
+        )
+        .bind(stock_id)
+        .bind(report_date)
+        .bind(fiscal_year)
+        .bind(&fiscal_period)
+        .bind(cash_and_equivalents)
+        .bind(short_term_debt)
+        .bind(long_term_debt)
+        .bind(total_debt)
+        .bind(None::<f64>) // total_assets - not available in quarterly data
+        .bind(None::<f64>) // total_liabilities - not available in quarterly data
+        .bind(None::<f64>) // total_equity - not available in quarterly data
+        .bind(shares_outstanding)
+        .bind(&record.currency)
+        .bind(record.simfin_id)
+        .execute(pool).await;
 
         match result {
             Ok(_) => count += 1,
@@ -1157,32 +1173,37 @@ async fn insert_ttm_balance_batch(pool: &SqlitePool, records: &[SimFinBalance]) 
             (None, None) => None,
         };
 
-        // Parse shares outstanding
-        let shares_outstanding = record.shares_outstanding.as_ref()
+        // Parse shares outstanding (use shares_basic as fallback)
+        let shares_outstanding = record.shares_basic.as_ref()
             .and_then(|s| s.parse::<f64>().ok())
             .filter(|&v| v > 0.0);
 
         // Insert into balance_sheets table with period_type = 'TTM'
-        let result = sqlx::query!(
+        let result = sqlx::query(
             r#"
             INSERT OR REPLACE INTO balance_sheets (
                 stock_id, period_type, report_date, fiscal_year, fiscal_period,
                 cash_and_equivalents, short_term_debt, long_term_debt, total_debt,
-                shares_outstanding, currency, simfin_id, data_source
-            ) VALUES (?, 'TTM', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'simfin')
-            "#,
-            stock_id,
-            report_date,
-            fiscal_year,
-            fiscal_period,
-            cash_and_equivalents,
-            short_term_debt,
-            long_term_debt,
-            total_debt,
-            shares_outstanding,
-            record.currency,
-            record.simfin_id
-        ).execute(pool).await;
+                total_assets, total_liabilities, total_equity, shares_outstanding,
+                currency, simfin_id, data_source
+            ) VALUES (?, 'TTM', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'simfin')
+            "#
+        )
+        .bind(stock_id)
+        .bind(report_date)
+        .bind(fiscal_year)
+        .bind(&fiscal_period)
+        .bind(cash_and_equivalents)
+        .bind(short_term_debt)
+        .bind(long_term_debt)
+        .bind(total_debt)
+        .bind(None::<f64>) // total_assets - not available in TTM data
+        .bind(None::<f64>) // total_liabilities - not available in TTM data
+        .bind(None::<f64>) // total_equity - not available in TTM data
+        .bind(shares_outstanding)
+        .bind(&record.currency)
+        .bind(record.simfin_id)
+        .execute(pool).await;
 
         match result {
             Ok(_) => count += 1,
@@ -1293,4 +1314,16 @@ pub struct CompleteImportStats {
     pub quarterly_balance_imported: usize,
     pub ttm_balance_imported: usize,
     pub errors: usize,
+}
+
+/// Helper function to get stock_id by ticker symbol
+async fn get_stock_id_by_ticker(pool: &SqlitePool, ticker: &str) -> Result<Option<i32>, anyhow::Error> {
+    let result = sqlx::query_scalar::<_, i32>(
+        "SELECT id FROM stocks WHERE symbol = ?"
+    )
+    .bind(ticker)
+    .fetch_optional(pool)
+    .await?;
+    
+    Ok(result)
 }

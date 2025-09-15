@@ -20,8 +20,7 @@ CREATE INDEX IF NOT EXISTS idx_income_statements_revenue_lookup
 ON income_statements(stock_id, period_type, report_date, revenue);
 
 CREATE INDEX IF NOT EXISTS idx_income_statements_growth_analysis 
-ON income_statements(stock_id, period_type, report_date) 
-WHERE revenue IS NOT NULL AND revenue > 0;
+ON income_statements(stock_id, period_type, report_date);
 
 CREATE INDEX IF NOT EXISTS idx_balance_sheets_ev_calculation 
 ON balance_sheets(stock_id, period_type, report_date, cash_and_equivalents, total_debt);
@@ -249,12 +248,10 @@ ON daily_valuation_ratios(stock_id, date, ps_ratio_ttm, ps_ratio_annual, ps_rati
 
 -- Step 9: Create S&P 500 specific analysis indexes
 CREATE INDEX IF NOT EXISTS idx_sp500_revenue_analysis 
-ON income_statements(stock_id, period_type, report_date, revenue) 
-WHERE stock_id IN (SELECT s.id FROM stocks s INNER JOIN sp500_symbols sp ON s.symbol = sp.symbol);
+ON income_statements(stock_id, period_type, report_date, revenue);
 
 CREATE INDEX IF NOT EXISTS idx_sp500_balance_analysis 
-ON balance_sheets(stock_id, period_type, report_date, cash_and_equivalents, total_debt) 
-WHERE stock_id IN (SELECT s.id FROM stocks s INNER JOIN sp500_symbols sp ON s.symbol = sp.symbol);
+ON balance_sheets(stock_id, period_type, report_date, cash_and_equivalents, total_debt);
 
 -- Migration completed successfully
 -- Next steps:

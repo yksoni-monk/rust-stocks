@@ -13,6 +13,7 @@ function RecommendationsPanel({ onClose }) {
   const [minMarketCap, setMinMarketCap] = useState(500_000_000); // Default $500M
   const [valuationExtremes, setValuationExtremes] = useState({});
   const [sp500Symbols, setSp500Symbols] = useState([]); // S&P 500 symbols for smart screening
+  const [isFooterExpanded, setIsFooterExpanded] = useState(false);
 
   // Load S&P 500 symbols for smart screening first
   useEffect(() => {
@@ -307,9 +308,6 @@ function RecommendationsPanel({ onClose }) {
                 </select>
               </div>
             </div>
-            <div className="text-sm text-gray-600">
-              Found {recommendations.length} value opportunities
-            </div>
           </div>
         </div>
 
@@ -444,26 +442,47 @@ function RecommendationsPanel({ onClose }) {
           )}
         </div>
 
-        {/* Footer */}
-        <div className="bg-gray-50 p-4 border-t">
-          <div className="text-xs text-gray-600 space-y-1">
-            {screeningType === 'ps' ? (
-              <>
-                <p><strong>Smart P/S Algorithm:</strong> Historical analysis + Z-score screening (S&P 500 only, Market Cap &gt; $${(minMarketCap / 1_000_000).toFixed(0)}M)</p>
-                <p><strong>Criteria:</strong> Current P/S &lt; (Historical Mean - 2x Std Dev) AND Z-score &lt; -1.0 (requires &gt;=10 data points)</p>
-                <p><strong>Value Score:</strong> Higher is better (0-100). Based on how low the P/S ratio is relative to historical average.</p>
-                <p><strong>Risk Score:</strong> Lower is better (0-100). Higher P/S ratios indicate higher valuation risk.</p>
-                <p><strong>Z-Score:</strong> How many standard deviations below/above the overall S&P 500 P/S mean.</p>
-              </>
-            ) : (
-              <>
-                <p><strong>P/E Screening Criteria:</strong> Current P/E ≤ Historical Minimum × 1.20 (20% above historical low)</p>
-                <p><strong>Value Score:</strong> Higher is better (0-120). Based on position in historical P/E range with bonuses for near-minimum values.</p>
-                <p><strong>Risk Score:</strong> Lower is better (0-100). Based on P/E volatility, extreme values, and data quality.</p>
-              </>
-            )}
-            <p><strong>Disclaimer:</strong> This analysis is for educational purposes only. Past performance does not predict future results. Consider additional factors before investing.</p>
-          </div>
+        {/* Collapsible Footer */}
+        <div className="bg-gray-50 border-t">
+          {/* Footer Toggle Button */}
+          <button
+            onClick={() => setIsFooterExpanded(!isFooterExpanded)}
+            className="w-full px-4 py-2 text-left text-xs text-gray-600 hover:bg-gray-100 flex items-center justify-between transition-colors"
+          >
+            <span className="font-medium">Algorithm Details & Disclaimer</span>
+            <svg 
+              className={`w-4 h-4 transition-transform ${isFooterExpanded ? 'rotate-180' : ''}`}
+              fill="none" 
+              stroke="currentColor" 
+              viewBox="0 0 24 24"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+          
+          {/* Collapsible Content */}
+          {isFooterExpanded && (
+            <div className="px-4 pb-4">
+              <div className="text-xs text-gray-600 space-y-1">
+                {screeningType === 'ps' ? (
+                  <>
+                    <p><strong>Smart P/S Algorithm:</strong> Historical analysis + Z-score screening (S&P 500 only, Market Cap &gt; $${(minMarketCap / 1_000_000).toFixed(0)}M)</p>
+                    <p><strong>Criteria:</strong> Current P/S &lt; (Historical Mean - 2x Std Dev) AND Z-score &lt; -1.0 (requires &gt;=10 data points)</p>
+                    <p><strong>Value Score:</strong> Higher is better (0-100). Based on how low the P/S ratio is relative to historical average.</p>
+                    <p><strong>Risk Score:</strong> Lower is better (0-100). Higher P/S ratios indicate higher valuation risk.</p>
+                    <p><strong>Z-Score:</strong> How many standard deviations below/above the overall S&P 500 P/S mean.</p>
+                  </>
+                ) : (
+                  <>
+                    <p><strong>P/E Screening Criteria:</strong> Current P/E ≤ Historical Minimum × 1.20 (20% above historical low)</p>
+                    <p><strong>Value Score:</strong> Higher is better (0-120). Based on position in historical P/E range with bonuses for near-minimum values.</p>
+                    <p><strong>Risk Score:</strong> Lower is better (0-100). Based on P/E volatility, extreme values, and data quality.</p>
+                  </>
+                )}
+                <p><strong>Disclaimer:</strong> This analysis is for educational purposes only. Past performance does not predict future results. Consider additional factors before investing.</p>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

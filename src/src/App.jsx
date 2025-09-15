@@ -281,13 +281,6 @@ function App() {
           <div className="flex justify-between items-center">
             <h1 className="text-2xl font-bold">Stock Analysis System</h1>
             <div className="flex items-center space-x-4">
-              <button 
-                onClick={() => setShowRecommendations(true)}
-                className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 flex items-center gap-2"
-              >
-                <span>💎</span>
-                Value Picks
-              </button>
               <input
                 type="text"
                 placeholder="Search stocks..."
@@ -329,6 +322,27 @@ function App() {
               }`}
             >
               {sp500Filter ? 'Show All Stocks' : 'Filter S&P 500'}
+            </button>
+          </div>
+        </div>
+
+        {/* Value Picks Button */}
+        <div className="bg-green-50 p-4 rounded-lg border border-green-200 mb-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="font-semibold text-green-800">💎 Value Stock Analysis</h3>
+              <p className="text-sm text-green-700">
+                Find undervalued stocks using P/E and P/S ratio screening
+              </p>
+              <p className="text-xs text-green-600">
+                Advanced screening with historical context and quality filters
+              </p>
+            </div>
+            <button
+              onClick={() => setShowRecommendations(true)}
+              className="bg-green-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-green-700"
+            >
+              Get Value Stocks
             </button>
           </div>
         </div>

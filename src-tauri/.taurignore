@@ -1,0 +1,4 @@
+# Ignore database files to prevent excessive rebuilds
+db/*.db
+db/*.db-shm
+db/*.db-wal

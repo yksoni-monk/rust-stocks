@@ -17,6 +17,7 @@ function App() {
   const [sp500Filter, setSp500Filter] = useState(false);
   const [sp500Symbols, setSp500Symbols] = useState([]);
   const [showRecommendations, setShowRecommendations] = useState(false);
+  const [selectedScreeningType, setSelectedScreeningType] = useState('ps'); // Default to P/S
   
   const STOCKS_PER_PAGE = 50;
 
@@ -329,7 +330,7 @@ function App() {
         {/* Value Picks Button */}
         <div className="bg-green-50 p-4 rounded-lg border border-green-200 mb-6">
           <div className="flex items-center justify-between">
-            <div>
+            <div className="flex-1">
               <h3 className="font-semibold text-green-800">💎 Value Stock Analysis</h3>
               <p className="text-sm text-green-700">
                 Find undervalued stocks using P/E and P/S ratio screening
@@ -337,10 +338,25 @@ function App() {
               <p className="text-xs text-green-600">
                 Advanced screening with historical context and quality filters
               </p>
+              
+              {/* Filter Selection */}
+              <div className="mt-3 flex items-center gap-4">
+                <label className="text-sm font-medium text-green-800">
+                  Screening Method:
+                </label>
+                <select
+                  value={selectedScreeningType}
+                  onChange={(e) => setSelectedScreeningType(e.target.value)}
+                  className="border border-green-300 rounded px-3 py-1 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-green-500"
+                >
+                  <option value="ps">P/S Ratio (Smart Algorithm) - Default</option>
+                  <option value="pe">P/E Ratio (Historical)</option>
+                </select>
+              </div>
             </div>
             <button
               onClick={() => setShowRecommendations(true)}
-              className="bg-green-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-green-700"
+              className="bg-green-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-green-700 ml-4"
             >
               Get Value Stocks
             </button>
@@ -437,6 +453,7 @@ function App() {
         {showRecommendations && (
           <RecommendationsPanel 
             onClose={() => setShowRecommendations(false)}
+            initialScreeningType={selectedScreeningType}
           />
         )}
       </div>

@@ -2,13 +2,13 @@ import { useState, useEffect } from 'react';
 import { recommendationsDataService, analysisDataService, stockDataService } from '../services/dataService.js';
 import { analysisAPI } from '../services/api.js';
 
-function RecommendationsPanel({ onClose }) {
+function RecommendationsPanel({ onClose, initialScreeningType = 'ps' }) {
   const [recommendations, setRecommendations] = useState([]);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [limit, setLimit] = useState(20);
-  const [screeningType, setScreeningType] = useState('pe'); // 'pe' or 'ps'
+  const [screeningType, setScreeningType] = useState(initialScreeningType); // Use prop as default
   const [psRatio, setPsRatio] = useState(2.0);
   const [minMarketCap, setMinMarketCap] = useState(500_000_000); // Default $500M
   const [valuationExtremes, setValuationExtremes] = useState({});
@@ -19,6 +19,11 @@ function RecommendationsPanel({ onClose }) {
   useEffect(() => {
     loadSp500Symbols();
   }, []);
+
+  // Update screening type when prop changes
+  useEffect(() => {
+    setScreeningType(initialScreeningType);
+  }, [initialScreeningType]);
 
   // Load recommendations after S&P 500 symbols are loaded
   useEffect(() => {

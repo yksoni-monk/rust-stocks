@@ -165,6 +165,19 @@ export const recommendationsDataService = {
       stocks: result.success ? result.data : [],
       error: result.success ? null : result.error
     };
+  },
+
+  // Load P/S screening with revenue growth requirements
+  async loadPsScreeningWithRevenueGrowth(stockTickers, limit = 20, minMarketCap = 500_000_000) {
+    const result = await apiCall(
+      () => recommendationsAPI.getPsScreeningWithRevenueGrowth(stockTickers, limit, minMarketCap),
+      'load P/S screening with revenue growth'
+    );
+
+    return {
+      stocks: result.success ? result.data : [],
+      error: result.success ? null : result.error
+    };
   }
 };
 

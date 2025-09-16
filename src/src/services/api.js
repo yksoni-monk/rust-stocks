@@ -68,6 +68,11 @@ export const recommendationsAPI = {
     return await invoke('get_undervalued_stocks_by_ps', { stockTickers, limit, minMarketCap });
   },
 
+  // Get P/S screening with revenue growth requirements
+  async getPsScreeningWithRevenueGrowth(stockTickers, limit, minMarketCap) {
+    return await invoke('get_ps_screening_with_revenue_growth', { stockTickers, limit, minMarketCap });
+  },
+
   // Get value recommendations with stats
   async getValueRecommendationsWithStats(limit) {
     return await invoke('get_value_recommendations_with_stats', { limit });

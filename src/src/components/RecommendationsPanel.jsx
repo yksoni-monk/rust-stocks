@@ -54,17 +54,17 @@ function RecommendationsPanel({ onClose, initialScreeningType = 'ps' }) {
       setLoading(true);
       
       if (screeningType === 'ps') {
-        // Use smart algorithm with S&P 500 stocks only
+        // Use P/S screening with revenue growth requirements
         
-        const result = await recommendationsDataService.loadUndervaluedStocksByPs(sp500Symbols, limit, minMarketCap);
+        const result = await recommendationsDataService.loadPsScreeningWithRevenueGrowth(sp500Symbols, limit, minMarketCap);
         
         if (result.error) {
           setError(result.error);
-          console.error('Error loading smart P/S recommendations:', result.error);
+          console.error('Error loading P/S screening with revenue growth:', result.error);
           return;
         }
         
-        // Transform smart algorithm data to match recommendations format
+        // Transform P/S screening with revenue growth data to match recommendations format
         const transformedRecommendations = result.stocks.map((stock, index) => ({
           rank: index + 1,
           symbol: stock.symbol,
@@ -75,20 +75,26 @@ function RecommendationsPanel({ onClose, initialScreeningType = 'ps' }) {
           historical_max_pe: 0,
           value_score: Math.max(0, Math.min(100, (2.0 - (stock.current_ps || 0)) * 50)),
           risk_score: Math.min(100, (stock.current_ps || 0) * 20),
-          data_points: stock.data_completeness_score || 0,
-          reasoning: `Smart algorithm: P/S ${(stock.current_ps || 0).toFixed(2)} (Z-score: ${(stock.z_score || 0).toFixed(2)})`,
+          data_points: stock.data_points || 0,
+          reasoning: `P/S ${(stock.current_ps || 0).toFixed(2)} (Z-score: ${(stock.z_score || 0).toFixed(2)}) | Revenue Growth: ${stock.ttm_growth_rate ? stock.ttm_growth_rate.toFixed(1) + '%' : stock.annual_growth_rate ? stock.annual_growth_rate.toFixed(1) + '%' : 'N/A'}`,
           ps_ratio_ttm: stock.current_ps,
-          evs_ratio_ttm: null, // Not used in smart algorithm
+          evs_ratio_ttm: null,
           market_cap: stock.market_cap,
-          revenue_ttm: null, // Not used in smart algorithm
-          // Smart algorithm specific fields
+          revenue_ttm: stock.current_ttm_revenue,
+          // P/S screening with revenue growth specific fields
           historical_mean: stock.historical_mean,
           historical_median: stock.historical_median,
+          historical_stddev: stock.historical_stddev,
           historical_min: stock.historical_min,
           historical_max: stock.historical_max,
-          historical_variance: stock.historical_variance,
+          data_points: stock.data_points,
+          current_ttm_revenue: stock.current_ttm_revenue,
+          ttm_growth_rate: stock.ttm_growth_rate,
+          current_annual_revenue: stock.current_annual_revenue,
+          annual_growth_rate: stock.annual_growth_rate,
           z_score: stock.z_score,
-          is_undervalued: stock.is_undervalued
+          quality_score: stock.quality_score,
+          is_undervalued: stock.undervalued_flag
         }));
         
         setRecommendations(transformedRecommendations);
@@ -214,7 +220,7 @@ function RecommendationsPanel({ onClose, initialScreeningType = 'ps' }) {
             <h2 className="text-2xl font-bold">Stock Value Recommendations</h2>
             <p className="text-blue-100 mt-1">
               {screeningType === 'ps' 
-                ? `Smart P/S Algorithm: Historical + Z-score analysis (S&P 500 only, Market Cap &gt; $${(minMarketCap / 1_000_000).toFixed(0)}M)` 
+                ? `P/S Screening with Revenue Growth: Statistical undervaluation + growth requirements (S&P 500 only, Market Cap > $${(minMarketCap / 1_000_000).toFixed(0)}M)` 
                 : 'P/E ratio-based value screening for S&P 500 stocks'
               }
             </p>
@@ -471,11 +477,12 @@ function RecommendationsPanel({ onClose, initialScreeningType = 'ps' }) {
               <div className="text-xs text-gray-600 space-y-1">
                 {screeningType === 'ps' ? (
                   <>
-                    <p><strong>Smart P/S Algorithm:</strong> Historical analysis + Z-score screening (S&P 500 only, Market Cap &gt; $${(minMarketCap / 1_000_000).toFixed(0)}M)</p>
-                    <p><strong>Criteria:</strong> Current P/S &lt; (Historical Mean - 2x Std Dev) AND Z-score &lt; -1.0 (requires &gt;=10 data points)</p>
+                    <p><strong>P/S Screening with Revenue Growth:</strong> Statistical undervaluation + growth requirements (S&P 500 only, Market Cap > $${(minMarketCap / 1_000_000).toFixed(0)}M)</p>
+                    <p><strong>Criteria:</strong> Current P/S &lt; (Historical Median - 1.0 × Std Dev) AND Revenue Growth &gt; 0% (TTM OR Annual) AND Quality Score ≥ 50</p>
                     <p><strong>Value Score:</strong> Higher is better (0-100). Based on how low the P/S ratio is relative to historical average.</p>
                     <p><strong>Risk Score:</strong> Lower is better (0-100). Higher P/S ratios indicate higher valuation risk.</p>
-                    <p><strong>Z-Score:</strong> How many standard deviations below/above the overall S&P 500 P/S mean.</p>
+                    <p><strong>Z-Score:</strong> How many standard deviations below/above the historical P/S mean.</p>
+                    <p><strong>Revenue Growth:</strong> TTM or Annual revenue growth rate (percentage).</p>
                   </>
                 ) : (
                   <>

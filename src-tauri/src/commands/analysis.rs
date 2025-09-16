@@ -301,6 +301,33 @@ pub struct SmartUndervaluedStock {
     pub data_completeness_score: i32,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct PsRevenueGrowthStock {
+    pub stock_id: i32,
+    pub symbol: String,
+    pub current_ps: f64,
+    // Historical P/S statistics
+    pub historical_mean: f64,
+    pub historical_median: f64,
+    pub historical_stddev: f64,
+    pub historical_min: f64,
+    pub historical_max: f64,
+    pub data_points: i32,
+    // Revenue growth metrics
+    pub current_ttm_revenue: Option<f64>,
+    pub ttm_growth_rate: Option<f64>,
+    pub current_annual_revenue: Option<f64>,
+    pub annual_growth_rate: Option<f64>,
+    // Screening criteria
+    pub z_score: f64,
+    pub quality_score: i32,
+    pub undervalued_flag: bool,
+    // Market metrics
+    pub market_cap: f64,
+    pub price: f64,
+    pub data_completeness_score: i32,
+}
+
 #[tauri::command]
 pub async fn get_undervalued_stocks_by_ps(
     stock_tickers: Vec<String>, 
@@ -459,6 +486,216 @@ pub async fn get_undervalued_stocks_by_ps(
         }
         Err(e) => {
             eprintln!("Smart undervalued stocks query error: {}", e);
+            Err(format!("Database query failed: {}", e))
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn get_ps_screening_with_revenue_growth(
+    stock_tickers: Vec<String>, 
+    limit: Option<i32>, 
+    min_market_cap: Option<f64>
+) -> Result<Vec<PsRevenueGrowthStock>, String> {
+    let pool = get_database_connection().await?;
+    let limit_value = limit.unwrap_or(50);
+    let min_market_cap_value = min_market_cap.unwrap_or(500_000_000.0); // Default $500M
+    
+    if stock_tickers.is_empty() {
+        return Ok(vec![]);
+    }
+    
+    // Create placeholders for the IN clause
+    let placeholders = stock_tickers.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    
+    // P/S screening with revenue growth algorithm
+    let query = format!("
+        WITH sp500_stocks AS (
+            SELECT s.id, s.symbol
+            FROM stocks s
+            WHERE s.symbol IN ({})
+        ),
+        historical_ps_data AS (
+            SELECT 
+                s.id as stock_id,
+                s.symbol,
+                dvr.ps_ratio_ttm,
+                dvr.date,
+                dvr.price,
+                dvr.market_cap,
+                dvr.data_completeness_score,
+                ROW_NUMBER() OVER (PARTITION BY s.id ORDER BY dvr.date DESC) as rn
+            FROM sp500_stocks s
+            JOIN daily_valuation_ratios dvr ON s.id = dvr.stock_id
+            WHERE dvr.ps_ratio_ttm IS NOT NULL 
+              AND dvr.ps_ratio_ttm > 0.01
+              AND dvr.market_cap > ?
+        ),
+        current_data AS (
+            SELECT * FROM historical_ps_data WHERE rn = 1
+        ),
+        historical_stats AS (
+            SELECT 
+                stock_id,
+                AVG(ps_ratio_ttm) as hist_mean,
+                MIN(ps_ratio_ttm) as hist_min,
+                MAX(ps_ratio_ttm) as hist_max,
+                COUNT(*) as data_points
+            FROM historical_ps_data 
+            WHERE rn > 1  -- Exclude current data point for historical analysis
+            GROUP BY stock_id
+            HAVING COUNT(*) >= 10  -- Require at least 10 historical data points
+        ),
+        variance_calc AS (
+            SELECT 
+                h.stock_id,
+                AVG((s.ps_ratio_ttm - h.hist_mean) * (s.ps_ratio_ttm - h.hist_mean)) as hist_variance
+            FROM historical_ps_data s
+            JOIN historical_stats h ON s.stock_id = h.stock_id
+            WHERE s.rn > 1  -- Exclude current data point
+            GROUP BY h.stock_id
+        ),
+        median_calc AS (
+            SELECT 
+                stock_id,
+                ps_ratio_ttm,
+                ROW_NUMBER() OVER (PARTITION BY stock_id ORDER BY ps_ratio_ttm) as rn,
+                COUNT(*) OVER (PARTITION BY stock_id) as total_count
+            FROM historical_ps_data 
+            WHERE rn > 1  -- Exclude current data point
+        ),
+        median_data AS (
+            SELECT 
+                stock_id,
+                AVG(ps_ratio_ttm) as hist_median
+            FROM median_calc
+            WHERE rn IN ((total_count + 1) / 2, (total_count + 2) / 2)
+            GROUP BY stock_id
+        ),
+        stddev_calc AS (
+            SELECT 
+                h.stock_id,
+                v.hist_variance as hist_stddev
+            FROM historical_stats h
+            JOIN variance_calc v ON h.stock_id = v.stock_id
+        ),
+        -- Revenue data for TTM growth (simplified)
+        ttm_growth AS (
+            SELECT 
+                c.stock_id,
+                current_ttm.revenue as current_ttm_revenue,
+                CASE 
+                    WHEN prev_ttm.revenue > 0 THEN 
+                        ((current_ttm.revenue - prev_ttm.revenue) / prev_ttm.revenue) * 100
+                    ELSE NULL
+                END as ttm_growth_rate
+            FROM current_data c
+            LEFT JOIN (
+                SELECT stock_id, revenue, ROW_NUMBER() OVER (PARTITION BY stock_id ORDER BY report_date DESC) as rn
+                FROM income_statements 
+                WHERE period_type = 'TTM'
+            ) current_ttm ON c.stock_id = current_ttm.stock_id AND current_ttm.rn = 1
+            LEFT JOIN (
+                SELECT stock_id, revenue, ROW_NUMBER() OVER (PARTITION BY stock_id ORDER BY report_date DESC) as rn
+                FROM income_statements 
+                WHERE period_type = 'TTM'
+            ) prev_ttm ON c.stock_id = prev_ttm.stock_id AND prev_ttm.rn = 2
+        ),
+        -- Revenue data for Annual growth (simplified)
+        annual_growth AS (
+            SELECT 
+                c.stock_id,
+                current_annual.revenue as current_annual_revenue,
+                CASE 
+                    WHEN prev_annual.revenue > 0 THEN 
+                        ((current_annual.revenue - prev_annual.revenue) / prev_annual.revenue) * 100
+                    ELSE NULL
+                END as annual_growth_rate
+            FROM current_data c
+            LEFT JOIN (
+                SELECT stock_id, revenue, ROW_NUMBER() OVER (PARTITION BY stock_id ORDER BY fiscal_year DESC) as rn
+                FROM income_statements 
+                WHERE period_type = 'Annual'
+            ) current_annual ON c.stock_id = current_annual.stock_id AND current_annual.rn = 1
+            LEFT JOIN (
+                SELECT stock_id, revenue, ROW_NUMBER() OVER (PARTITION BY stock_id ORDER BY fiscal_year DESC) as rn
+                FROM income_statements 
+                WHERE period_type = 'Annual'
+            ) prev_annual ON c.stock_id = prev_annual.stock_id AND prev_annual.rn = 2
+        )
+        SELECT 
+            c.stock_id,
+            c.symbol,
+            c.ps_ratio_ttm as current_ps,
+            COALESCE(h.hist_mean, 0.0) as historical_mean,
+            COALESCE(m.hist_median, 0.0) as historical_median,
+            COALESCE(s.hist_stddev, 0.0) as historical_stddev,
+            COALESCE(h.hist_min, 0.0) as historical_min,
+            COALESCE(h.hist_max, 0.0) as historical_max,
+            COALESCE(h.data_points, 0) as data_points,
+            tg.current_ttm_revenue,
+            tg.ttm_growth_rate,
+            ag.current_annual_revenue,
+            ag.annual_growth_rate,
+            CASE 
+                WHEN s.hist_stddev > 0 THEN (c.ps_ratio_ttm - h.hist_mean) / s.hist_stddev
+                ELSE 0.0
+            END as z_score,
+            c.data_completeness_score as quality_score,
+            CASE 
+                WHEN h.hist_mean > 0 AND s.hist_stddev > 0 AND h.data_points >= 10 THEN
+                    -- Stock is undervalued if ALL THREE conditions are met:
+                    -- 1. Current P/S < (Historical Median - 1.0 × Std Dev)  -- Statistical undervaluation
+                    -- 2. Revenue Growth > 0% (TTM OR Annual)               -- Growth requirement
+                    -- 3. Quality Score >= 50                               -- Data quality filter
+                    c.ps_ratio_ttm < (m.hist_median - 1.0 * s.hist_stddev) AND
+                    (tg.ttm_growth_rate > 0 OR ag.annual_growth_rate > 0) AND
+                    c.data_completeness_score >= 50
+                ELSE false
+            END as undervalued_flag,
+            c.market_cap,
+            c.price,
+            c.data_completeness_score
+        FROM current_data c
+        LEFT JOIN historical_stats h ON c.stock_id = h.stock_id
+        LEFT JOIN variance_calc v ON c.stock_id = v.stock_id
+        LEFT JOIN median_data m ON c.stock_id = m.stock_id
+        LEFT JOIN stddev_calc s ON c.stock_id = s.stock_id
+        LEFT JOIN ttm_growth tg ON c.stock_id = tg.stock_id
+        LEFT JOIN annual_growth ag ON c.stock_id = ag.stock_id
+        WHERE c.market_cap > ?
+        ORDER BY 
+            undervalued_flag DESC,
+            c.ps_ratio_ttm ASC
+        LIMIT ?
+    ", placeholders);
+    
+    let mut query_builder = sqlx::query_as::<_, PsRevenueGrowthStock>(&query);
+    
+    // Bind stock tickers
+    for ticker in &stock_tickers {
+        query_builder = query_builder.bind(ticker);
+    }
+    
+    // Bind min market cap (used twice in the query)
+    query_builder = query_builder.bind(min_market_cap_value);
+    query_builder = query_builder.bind(min_market_cap_value);
+    query_builder = query_builder.bind(limit_value);
+    
+    match query_builder.fetch_all(&pool).await {
+        Ok(stocks) => {
+            // Filter to only return truly undervalued stocks
+            // Filter to only undervalued stocks
+            let undervalued_stocks: Vec<PsRevenueGrowthStock> = stocks
+                .into_iter()
+                .filter(|stock| stock.undervalued_flag)
+                .take(limit_value as usize)
+                .collect();
+            
+            Ok(undervalued_stocks)
+        }
+        Err(e) => {
+            eprintln!("P/S screening with revenue growth query error: {}", e);
             Err(format!("Database query failed: {}", e))
         }
     }

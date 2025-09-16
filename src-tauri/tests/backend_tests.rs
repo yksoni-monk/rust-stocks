@@ -263,6 +263,97 @@ async fn test_get_undervalued_stocks_by_ps() {
     test_db.cleanup().await.unwrap();
 }
 
+/// Test P/S screening with revenue growth - VALIDATES NEW ENHANCED ALGORITHM
+#[tokio::test]
+async fn test_get_ps_screening_with_revenue_growth() {
+    let test_db = SimpleTestDatabase::new().await.unwrap();
+    rust_stocks_tauri_lib::database::helpers::set_test_database_pool(test_db.pool().clone()).await;
+    
+    use rust_stocks_tauri_lib::commands::analysis::get_ps_screening_with_revenue_growth;
+    
+    // Test with a broader set of S&P 500 symbols to increase chances of finding results
+    let sp500_symbols = vec![
+        "AAPL".to_string(), "MSFT".to_string(), "GOOGL".to_string(), "AMZN".to_string(), "TSLA".to_string(),
+        "META".to_string(), "NVDA".to_string(), "BRK.B".to_string(), "UNH".to_string(), "JNJ".to_string(),
+        "JPM".to_string(), "V".to_string(), "PG".to_string(), "HD".to_string(), "MA".to_string(),
+        "DIS".to_string(), "PYPL".to_string(), "ADBE".to_string(), "CMCSA".to_string(), "NFLX".to_string(),
+        "WBA".to_string(), "CVS".to_string(), "PFE".to_string(), "ABT".to_string(), "TMO".to_string(),
+        "COST".to_string(), "DHR".to_string(), "VZ".to_string(), "ACN".to_string(), "NKE".to_string(),
+        "WMT".to_string(), "CRM".to_string(), "LIN".to_string(), "ABBV".to_string(), "TXN".to_string(),
+        "NEE".to_string(), "AMD".to_string(), "QCOM".to_string(), "PM".to_string(), "RTX".to_string(),
+        "HON".to_string(), "UNP".to_string(), "IBM".to_string(), "LOW".to_string(), "SPGI".to_string(),
+        "INTU".to_string(), "CAT".to_string(), "GS".to_string(), "AXP".to_string(), "BKNG".to_string(),
+        "SYK".to_string(), "AMGN".to_string(), "MDT".to_string(), "ISRG".to_string(), "GILD".to_string(),
+        "CVX".to_string(), "ADP".to_string(), "T".to_string(), "ELV".to_string(), "BLK".to_string(),
+        "MO".to_string(), "ZTS".to_string(), "SO".to_string(), "DUK".to_string(), "CI".to_string(),
+        "MMC".to_string(), "ITW".to_string(), "EOG".to_string(), "CL".to_string(), "EQIX".to_string(),
+        "ICE".to_string(), "SHW".to_string(), "APD".to_string(), "EMR".to_string(), "AON".to_string(),
+        "PSA".to_string(), "NOC".to_string(), "ECL".to_string(), "AEP".to_string(), "EXC".to_string(),
+        "SRE".to_string(), "XOM".to_string(), "PEG".to_string(), "ETN".to_string(), "WEC".to_string(),
+        "ES".to_string(), "EIX".to_string(), "AWK".to_string(), "ETR".to_string(), "FE".to_string(),
+        "PPL".to_string(), "AEE".to_string(), "LNT".to_string(), "ED".to_string(), "EXR".to_string(),
+        "CNP".to_string(), "DTE".to_string(), "WTRG".to_string(), "CMS".to_string(), "NI".to_string(),
+        "PNW".to_string(), "SR".to_string(), "IDA".to_string(), "AGR".to_string(), "AVA".to_string(),
+        "NFG".to_string(), "POR".to_string(), "UGI".to_string(), "LUV".to_string(), "ALK".to_string(),
+        "AAL".to_string(), "DAL".to_string(), "UAL".to_string(), "JBLU".to_string(), "SAVE".to_string(),
+        "HA".to_string(), "ALGT".to_string(), "SKYW".to_string(), "MESA".to_string()
+    ];
+    
+    let results = get_ps_screening_with_revenue_growth(sp500_symbols.clone(), Some(20), Some(500_000_000.0)).await.expect("P/S screening with revenue growth failed");
+    
+    println!("✅ P/S screening with revenue growth found {} stocks from {} S&P 500 symbols", results.len(), sp500_symbols.len());
+    
+    // Validate each result meets the enhanced criteria
+    for stock in &results {
+        // Basic data validation
+        assert!(!stock.symbol.is_empty(), "Stock symbol should not be empty");
+        assert!(stock.current_ps > 0.01, "Current P/S ratio should be > 0.01 for stock {}", stock.symbol);
+        assert!(stock.market_cap > 500_000_000.0, "Market cap should be > $500M for stock {}", stock.symbol);
+        assert!(stock.undervalued_flag, "Stock {} should be marked as undervalued", stock.symbol);
+        
+        // Historical statistics validation
+        assert!(stock.historical_mean > 0.0, "Historical mean should be > 0 for stock {}", stock.symbol);
+        assert!(stock.historical_median > 0.0, "Historical median should be > 0 for stock {}", stock.symbol);
+        assert!(stock.historical_stddev >= 0.0, "Historical stddev should be >= 0 for stock {}", stock.symbol);
+        assert!(stock.historical_min > 0.0, "Historical min should be > 0 for stock {}", stock.symbol);
+        assert!(stock.historical_max > 0.0, "Historical max should be > 0 for stock {}", stock.symbol);
+        assert!(stock.historical_min <= stock.historical_max, "Historical min should be <= max for stock {}", stock.symbol);
+        assert!(stock.data_points >= 10, "Should have at least 10 data points for stock {}", stock.symbol);
+        
+        // Revenue growth validation - at least one should be positive
+        let ttm_growth = stock.ttm_growth_rate.unwrap_or(0.0);
+        let annual_growth = stock.annual_growth_rate.unwrap_or(0.0);
+        assert!(ttm_growth > 0.0 || annual_growth > 0.0, 
+                "Stock {} should have positive revenue growth (TTM: {:.1}%, Annual: {:.1}%)", 
+                stock.symbol, ttm_growth, annual_growth);
+        
+        // Quality score validation
+        assert!(stock.quality_score >= 50, "Quality score should be >= 50 for stock {}", stock.symbol);
+        
+        // Z-score validation (should be negative for undervalued stocks)
+        assert!(stock.z_score < 0.0, "Z-score should be negative for undervalued stock {} (got {:.2})", stock.symbol, stock.z_score);
+        
+        // Data completeness validation
+        assert!(stock.data_completeness_score >= 50, "Data completeness score should be >= 50 for stock {}", stock.symbol);
+        
+        println!("   {}: P/S={:.2}, Z-score={:.2}, Revenue Growth: TTM={:.1}%/Annual={:.1}%, Quality={}", 
+                 stock.symbol, stock.current_ps, stock.z_score, ttm_growth, annual_growth, stock.quality_score);
+    }
+    
+    // Test edge cases
+    // Test with very high market cap filter
+    let high_cap_results = get_ps_screening_with_revenue_growth(sp500_symbols.clone(), Some(5), Some(100_000_000_000.0)).await.expect("High market cap filter failed");
+    println!("✅ High market cap filter (>$100B): {} results", high_cap_results.len());
+    
+    // Test with very low limit
+    let low_limit_results = get_ps_screening_with_revenue_growth(sp500_symbols.clone(), Some(1), Some(500_000_000.0)).await.expect("Low limit test failed");
+    assert!(low_limit_results.len() <= 1, "Should respect limit of 1");
+    println!("✅ Low limit test (limit=1): {} results", low_limit_results.len());
+    
+    rust_stocks_tauri_lib::database::helpers::clear_test_database_pool().await;
+    test_db.cleanup().await.unwrap();
+}
+
 /// Test value recommendations with stats
 #[tokio::test]
 async fn test_get_value_recommendations_with_stats() {
@@ -464,6 +555,55 @@ async fn test_concurrent_access_performance() {
     }
     
     println!("⚡ Concurrent access: {:?} for 5 concurrent requests", duration);
+    
+    rust_stocks_tauri_lib::database::helpers::clear_test_database_pool().await;
+    test_db.cleanup().await.unwrap();
+}
+
+/// Performance test for P/S screening with revenue growth
+#[tokio::test]
+async fn test_ps_screening_performance() {
+    let test_db = SimpleTestDatabase::new().await.unwrap();
+    rust_stocks_tauri_lib::database::helpers::set_test_database_pool(test_db.pool().clone()).await;
+    
+    use rust_stocks_tauri_lib::commands::analysis::get_ps_screening_with_revenue_growth;
+    
+    // Test with different symbol set sizes
+    let small_set = vec!["AAPL".to_string(), "MSFT".to_string(), "GOOGL".to_string(), "AMZN".to_string(), "TSLA".to_string()];
+    let medium_set = vec![
+        "AAPL".to_string(), "MSFT".to_string(), "GOOGL".to_string(), "AMZN".to_string(), "TSLA".to_string(),
+        "META".to_string(), "NVDA".to_string(), "BRK.B".to_string(), "UNH".to_string(), "JNJ".to_string(),
+        "JPM".to_string(), "V".to_string(), "PG".to_string(), "HD".to_string(), "MA".to_string(),
+        "DIS".to_string(), "PYPL".to_string(), "ADBE".to_string(), "CMCSA".to_string(), "NFLX".to_string(),
+        "WBA".to_string(), "CVS".to_string(), "PFE".to_string(), "ABT".to_string(), "TMO".to_string()
+    ];
+    
+    let test_cases = vec![(small_set, "Small"), (medium_set, "Medium")];
+    
+    for (symbols, description) in test_cases {
+        let start = Instant::now();
+        let result = get_ps_screening_with_revenue_growth(symbols.clone(), Some(10), Some(500_000_000.0)).await.expect("P/S screening performance test failed");
+        let duration = start.elapsed();
+        
+        // Performance expectations (complex algorithm with multiple CTEs)
+        let expected_max = Duration::from_millis(2000); // 2 seconds for complex query
+        
+        println!("⚡ P/S screening {} set ({} symbols): {:?} for {} results", 
+                 description, symbols.len(), duration, result.len());
+        
+        if duration > expected_max {
+            println!("⚠️  P/S screening slower than expected ({:?} > {:?})", duration, expected_max);
+        } else {
+            println!("✅ P/S screening performance within expected range");
+        }
+        
+        // Validate results are reasonable
+        assert!(result.len() <= 10, "Should respect limit");
+        for stock in &result {
+            assert!(stock.undervalued_flag, "All results should be undervalued");
+            assert!(stock.current_ps > 0.0, "P/S ratio should be positive");
+        }
+    }
     
     rust_stocks_tauri_lib::database::helpers::clear_test_database_pool().await;
     test_db.cleanup().await.unwrap();

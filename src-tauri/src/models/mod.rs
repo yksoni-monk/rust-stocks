@@ -398,3 +398,6 @@ pub struct ValuationExtremes {
 // GARP P/E screening models
 pub mod garp_pe;
 
+// Graham value screening models
+pub mod graham_value;
+

@@ -105,7 +105,19 @@ pub fn run() {
             initialization::check_database_schema,
             
             // GARP P/E screening commands
-            garp_pe::get_garp_pe_screening_results
+            garp_pe::get_garp_pe_screening_results,
+            
+            // Graham value screening commands
+            graham_screening::run_graham_screening,
+            graham_screening::get_graham_criteria_defaults,
+            graham_screening::get_graham_screening_presets,
+            graham_screening::get_graham_screening_preset,
+            graham_screening::save_graham_screening_preset,
+            graham_screening::delete_graham_screening_preset,
+            graham_screening::get_graham_screening_stats,
+            graham_screening::get_graham_stock_history,
+            graham_screening::get_latest_graham_results,
+            graham_screening::get_graham_sector_summary
         ])
         .setup(|_app| {
             Ok(())

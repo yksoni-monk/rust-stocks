@@ -9,6 +9,7 @@ use crate::models::{Stock, StockAnalysis, StockDetail, DailyPrice, DatabaseStats
 
 pub mod pe_statistics;
 pub mod recommendation_engine;
+pub mod graham_screener;
 
 pub use pe_statistics::*;
 pub use recommendation_engine::*;

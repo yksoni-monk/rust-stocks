@@ -175,6 +175,7 @@ export const recommendationsDataService = {
     );
 
     return {
+      success: result.success,
       stocks: result.success ? result.data : [],
       error: result.success ? null : result.error
     };
@@ -188,6 +189,7 @@ export const recommendationsDataService = {
     );
 
     return {
+      success: result.success,
       stocks: result.success ? result.data : [],
       error: result.success ? null : result.error
     };

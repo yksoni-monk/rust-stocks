@@ -1,12 +1,12 @@
 import { defineConfig, loadEnv } from 'vite'
-import react from '@vitejs/plugin-react'
+import solid from 'vite-plugin-solid'
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
   
   return {
-    plugins: [react()],
+    plugins: [solid()],
     server: {
       port: parseInt(env.VITE_PORT) || 5174
     }

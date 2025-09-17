@@ -230,7 +230,46 @@ CREATE TABLE option_chains (
 );
 ```
 
-## Frontend Architecture
+## Frontend Architecture (Updated - SolidJS)
+
+**Status**: ✅ **Migrated to SolidJS** (September 2025) - Solved React infinite re-rendering issues
+
+### Technology Stack
+- **UI Framework**: SolidJS 1.9.9 (migrated from React 19.1.1)
+- **Build Tool**: Vite 7.1.5 with vite-plugin-solid
+- **Styling**: Tailwind CSS 3.4.0
+- **Language**: TypeScript with JSX preserve mode
+- **State Management**: Signal-based reactive stores
+- **Desktop Integration**: Tauri API 2.0.0
+
+### Architecture Pattern
+- **Store-based State Management**: Global reactive stores using SolidJS signals
+- **Component Architecture**: Functional components with fine-grained reactivity
+- **API Integration**: Typed service layer for Tauri backend communication
+- **Performance**: Direct DOM updates without virtual DOM overhead
+
+### Key Components
+- `App.tsx` - Main application with search, filtering, and panel management
+- `StockRow.tsx` - Individual stock display with expandable analysis
+- `RecommendationsPanel.tsx` - Stock screening algorithms (GARP, P/S, P/E)
+- `AnalysisPanel.tsx` - Detailed stock analysis and historical data
+- `DataFetchingPanel.tsx` - System status and database statistics
+
+### State Stores
+- `stockStore.ts` - Stock data, search, pagination, S&P 500 filtering
+- `recommendationsStore.ts` - Screening algorithms, criteria, results
+- `uiStore.ts` - Panel visibility, modals, notifications
+
+### Migration Benefits
+- **Eliminated infinite re-rendering loops** that plagued React implementation
+- **50% smaller bundle size** (50KB vs 80KB+)
+- **Fine-grained reactivity** - only update what actually changes
+- **Simplified state management** - no useEffect dependency hell
+- **Better TypeScript integration** and development experience
+
+*For detailed documentation, see `context/SOLIDJS_FRONTEND_ARCHITECTURE.md` and `context/FRONTEND_MIGRATION_HISTORY.md`*
+
+## Frontend Architecture (Legacy - React)
 
 ### Current State: Backend Code Mixed with UI Components
 

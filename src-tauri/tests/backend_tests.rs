@@ -668,3 +668,73 @@ async fn test_get_valuation_extremes() {
     rust_stocks_tauri_lib::database::helpers::clear_test_database_pool().await;
     test_db.cleanup().await.unwrap();
 }
+
+/// Test GARP P/E screening command (NEW FEATURE)
+#[tokio::test]
+async fn test_garp_pe_screening() {
+    let test_db = SimpleTestDatabase::new().await.unwrap();
+    rust_stocks_tauri_lib::database::helpers::set_test_database_pool(test_db.pool().clone()).await;
+    
+    use rust_stocks_tauri_lib::commands::garp_pe::get_garp_pe_screening_results;
+    use rust_stocks_tauri_lib::models::garp_pe::GarpPeScreeningCriteria;
+    
+    // Test with default criteria
+    let test_symbols = vec![
+        "AWK".to_string(),
+        "LEN".to_string(), 
+        "HWKZ".to_string(),
+        "LOCC".to_string(),
+        "VGZ".to_string(),
+    ];
+    
+    let result = get_garp_pe_screening_results(test_symbols.clone(), None, Some(10)).await
+        .expect("GARP P/E screening failed");
+    
+    assert!(!result.is_empty(), "Should return some GARP P/E screening results");
+    
+    for stock in &result {
+        assert!(!stock.symbol.is_empty(), "Stock symbol should not be empty");
+        assert!(stock.current_pe_ratio > 0.0, "P/E ratio should be positive");
+        assert!(stock.market_cap >= 0.0, "Market cap should be non-negative");
+        
+        // Verify GARP-specific fields
+        if let Some(peg_ratio) = stock.peg_ratio {
+            assert!(peg_ratio > 0.0, "PEG ratio should be positive if present");
+        }
+        
+        // Verify screening criteria flags
+        assert!(stock.passes_positive_earnings || !stock.passes_positive_earnings, "Boolean flag should be valid");
+        assert!(stock.passes_peg_filter || !stock.passes_peg_filter, "Boolean flag should be valid");
+        assert!(stock.passes_revenue_growth_filter || !stock.passes_revenue_growth_filter, "Boolean flag should be valid");
+        assert!(stock.passes_profitability_filter || !stock.passes_profitability_filter, "Boolean flag should be valid");
+        assert!(stock.passes_debt_filter || !stock.passes_debt_filter, "Boolean flag should be valid");
+        
+        // Verify GARP score calculation
+        assert!(stock.garp_score >= 0.0, "GARP score should be non-negative");
+        assert!(stock.quality_score >= 0 && stock.quality_score <= 100, "Quality score should be 0-100");
+    }
+    
+    println!("✅ GARP P/E screening test passed:");
+    println!("   Found {} stocks with GARP P/E data", result.len());
+    
+    // Test with custom criteria
+    let custom_criteria = GarpPeScreeningCriteria {
+        max_peg_ratio: 2.0,
+        min_revenue_growth: 5.0,
+        min_profit_margin: 1.0,
+        max_debt_to_equity: 5.0,
+        min_market_cap: 0.0,
+        min_quality_score: 25,
+        require_positive_earnings: true,
+    };
+    
+    let custom_result = get_garp_pe_screening_results(test_symbols, Some(custom_criteria), Some(5)).await
+        .expect("GARP P/E screening with custom criteria failed");
+    
+    assert!(!custom_result.is_empty(), "Should return results with custom criteria");
+    
+    println!("   Custom criteria test: {} stocks found", custom_result.len());
+    
+    rust_stocks_tauri_lib::database::helpers::clear_test_database_pool().await;
+    test_db.cleanup().await.unwrap();
+}

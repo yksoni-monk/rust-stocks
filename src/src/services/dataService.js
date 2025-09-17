@@ -178,6 +178,19 @@ export const recommendationsDataService = {
       stocks: result.success ? result.data : [],
       error: result.success ? null : result.error
     };
+  },
+
+  // Load GARP P/E screening results
+  async loadGarpPeScreeningResults(stockTickers, criteria, limit = 20) {
+    const result = await apiCall(
+      () => recommendationsAPI.getGarpPeScreeningResults(stockTickers, criteria, limit),
+      'load GARP P/E screening results'
+    );
+
+    return {
+      stocks: result.success ? result.data : [],
+      error: result.success ? null : result.error
+    };
   }
 };
 

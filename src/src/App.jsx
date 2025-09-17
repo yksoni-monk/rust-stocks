@@ -351,6 +351,7 @@ function App() {
                 >
                   <option value="ps">P/S Ratio (Smart Algorithm) - Default</option>
                   <option value="pe">P/E Ratio (Historical)</option>
+                  <option value="garp_pe">GARP (P/E + PEG Based)</option>
                 </select>
               </div>
             </div>

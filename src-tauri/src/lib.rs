@@ -102,7 +102,10 @@ pub fn run() {
             
             // Initialization commands
             initialization::get_initialization_status,
-            initialization::check_database_schema
+            initialization::check_database_schema,
+            
+            // GARP P/E screening commands
+            garp_pe::get_garp_pe_screening_results
         ])
         .setup(|_app| {
             Ok(())

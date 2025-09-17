@@ -14,6 +14,17 @@ function RecommendationsPanel({ onClose, initialScreeningType = 'ps' }) {
   const [valuationExtremes, setValuationExtremes] = useState({});
   const [sp500Symbols, setSp500Symbols] = useState([]); // S&P 500 symbols for smart screening
   const [isFooterExpanded, setIsFooterExpanded] = useState(false);
+  
+  // GARP P/E screening criteria
+  const [garpPeCriteria, setGarpPeCriteria] = useState({
+    maxPegRatio: 1.0,
+    minRevenueGrowth: 15.0,
+    minProfitMargin: 5.0,
+    maxDebtToEquity: 2.0,
+    minMarketCap: 500_000_000,
+    minQualityScore: 50,
+    requirePositiveEarnings: true
+  });
 
   // Load S&P 500 symbols for smart screening first
   useEffect(() => {
@@ -32,7 +43,7 @@ function RecommendationsPanel({ onClose, initialScreeningType = 'ps' }) {
       return;
     }
     loadRecommendationsWithStats();
-  }, [limit, screeningType, psRatio, minMarketCap, sp500Symbols]);
+  }, [limit, screeningType, psRatio, minMarketCap, sp500Symbols, garpPeCriteria]);
 
   async function loadSp500Symbols() {
     try {
@@ -87,7 +98,6 @@ function RecommendationsPanel({ onClose, initialScreeningType = 'ps' }) {
           historical_stddev: stock.historical_stddev,
           historical_min: stock.historical_min,
           historical_max: stock.historical_max,
-          data_points: stock.data_points,
           current_ttm_revenue: stock.current_ttm_revenue,
           ttm_growth_rate: stock.ttm_growth_rate,
           current_annual_revenue: stock.current_annual_revenue,
@@ -95,6 +105,64 @@ function RecommendationsPanel({ onClose, initialScreeningType = 'ps' }) {
           z_score: stock.z_score,
           quality_score: stock.quality_score,
           is_undervalued: stock.undervalued_flag
+        }));
+        
+        setRecommendations(transformedRecommendations);
+        setStats({
+          total_sp500_stocks: 503,
+          stocks_with_pe_data: result.stocks.length,
+          value_stocks_found: result.stocks.length,
+          average_value_score: transformedRecommendations.reduce((sum, r) => sum + r.value_score, 0) / transformedRecommendations.length || 0,
+          average_risk_score: transformedRecommendations.reduce((sum, r) => sum + r.risk_score, 0) / transformedRecommendations.length || 0
+        });
+        
+        // Load valuation extremes for each stock
+        await loadValuationExtremesForStocks(transformedRecommendations);
+      } else if (screeningType === 'garp_pe') {
+        // GARP P/E screening
+        
+        const result = await recommendationsDataService.loadGarpPeScreeningResults(sp500Symbols, garpPeCriteria, limit);
+        
+        if (result.error) {
+          setError(result.error);
+          console.error('Error loading GARP P/E screening:', result.error);
+          return;
+        }
+        
+        // Transform GARP P/E screening data to match recommendations format
+        const transformedRecommendations = result.stocks.map((stock, index) => ({
+          rank: index + 1,
+          symbol: stock.symbol,
+          company_name: stock.symbol,
+          current_pe: stock.current_pe_ratio,
+          current_pe_date: null,
+          historical_min_pe: 0,
+          historical_max_pe: 0,
+          value_score: Math.max(0, Math.min(100, stock.garp_score * 10)), // Scale GARP score to 0-100
+          risk_score: Math.min(100, (stock.current_pe_ratio || 0) * 2), // Higher P/E = higher risk
+          data_points: stock.data_completeness_score || 0,
+          reasoning: `P/E: ${(stock.current_pe_ratio || 0).toFixed(2)} | PEG: ${(stock.peg_ratio || 0).toFixed(2)} | Revenue Growth: ${stock.ttm_growth_rate ? stock.ttm_growth_rate.toFixed(1) + '%' : stock.annual_growth_rate ? stock.annual_growth_rate.toFixed(1) + '%' : 'N/A'} | Profit Margin: ${stock.net_profit_margin ? stock.net_profit_margin.toFixed(1) + '%' : 'N/A'}`,
+          ps_ratio_ttm: null,
+          evs_ratio_ttm: null,
+          market_cap: stock.market_cap,
+          revenue_ttm: stock.current_ttm_revenue,
+          // GARP P/E specific fields
+          current_pe_ratio: stock.current_pe_ratio,
+          peg_ratio: stock.peg_ratio,
+          eps_growth_rate_ttm: stock.eps_growth_rate_ttm,
+          eps_growth_rate_annual: stock.eps_growth_rate_annual,
+          ttm_growth_rate: stock.ttm_growth_rate,
+          annual_growth_rate: stock.annual_growth_rate,
+          net_profit_margin: stock.net_profit_margin,
+          debt_to_equity_ratio: stock.debt_to_equity_ratio,
+          garp_score: stock.garp_score,
+          quality_score: stock.quality_score,
+          passes_garp_screening: stock.passes_garp_screening,
+          passes_positive_earnings: stock.passes_positive_earnings,
+          passes_peg_filter: stock.passes_peg_filter,
+          passes_revenue_growth_filter: stock.passes_revenue_growth_filter,
+          passes_profitability_filter: stock.passes_profitability_filter,
+          passes_debt_filter: stock.passes_debt_filter
         }));
         
         setRecommendations(transformedRecommendations);
@@ -221,6 +289,8 @@ function RecommendationsPanel({ onClose, initialScreeningType = 'ps' }) {
             <p className="text-blue-100 mt-1">
               {screeningType === 'ps' 
                 ? `P/S Screening with Revenue Growth: Statistical undervaluation + growth requirements (S&P 500 only, Market Cap > $${(minMarketCap / 1_000_000).toFixed(0)}M)` 
+                : screeningType === 'garp_pe'
+                ? `GARP P/E Screening: Growth at Reasonable Price using PEG ratios (S&P 500 only, PEG < ${garpPeCriteria.maxPegRatio}, Revenue Growth > ${garpPeCriteria.minRevenueGrowth}%)`
                 : 'P/E ratio-based value screening for S&P 500 stocks'
               }
             </p>
@@ -277,6 +347,7 @@ function RecommendationsPanel({ onClose, initialScreeningType = 'ps' }) {
                 >
                   <option value="pe">P/E Ratio (Historical)</option>
                   <option value="ps">P/S Ratio (TTM)</option>
+                  <option value="garp_pe">GARP (P/E + PEG Based)</option>
                 </select>
               </div>
 
@@ -299,6 +370,108 @@ function RecommendationsPanel({ onClose, initialScreeningType = 'ps' }) {
                     <option value={5_000_000_000}>$5B</option>
                     <option value={10_000_000_000}>$10B</option>
                   </select>
+                </div>
+              )}
+
+              {/* GARP P/E Criteria Controls */}
+              {screeningType === 'garp_pe' && (
+                <div className="garp-pe-controls space-y-4">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-sm font-medium text-gray-700">
+                        Max PEG Ratio:
+                      </label>
+                      <select
+                        value={garpPeCriteria.maxPegRatio}
+                        onChange={(e) => setGarpPeCriteria(prev => ({
+                          ...prev,
+                          maxPegRatio: Number(e.target.value)
+                        }))}
+                        className="border border-gray-300 rounded px-2 py-1 text-sm w-full"
+                      >
+                        <option value={0.5}>0.5</option>
+                        <option value={0.8}>0.8</option>
+                        <option value={1.0}>1.0</option>
+                        <option value={1.2}>1.2</option>
+                        <option value={1.5}>1.5</option>
+                        <option value={2.0}>2.0</option>
+                      </select>
+                    </div>
+                    
+                    <div>
+                      <label className="text-sm font-medium text-gray-700">
+                        Min Revenue Growth (%):
+                      </label>
+                      <select
+                        value={garpPeCriteria.minRevenueGrowth}
+                        onChange={(e) => setGarpPeCriteria(prev => ({
+                          ...prev,
+                          minRevenueGrowth: Number(e.target.value)
+                        }))}
+                        className="border border-gray-300 rounded px-2 py-1 text-sm w-full"
+                      >
+                        <option value={5}>5%</option>
+                        <option value={10}>10%</option>
+                        <option value={15}>15%</option>
+                        <option value={20}>20%</option>
+                        <option value={25}>25%</option>
+                      </select>
+                    </div>
+                    
+                    <div>
+                      <label className="text-sm font-medium text-gray-700">
+                        Min Profit Margin (%):
+                      </label>
+                      <select
+                        value={garpPeCriteria.minProfitMargin}
+                        onChange={(e) => setGarpPeCriteria(prev => ({
+                          ...prev,
+                          minProfitMargin: Number(e.target.value)
+                        }))}
+                        className="border border-gray-300 rounded px-2 py-1 text-sm w-full"
+                      >
+                        <option value={1}>1%</option>
+                        <option value={3}>3%</option>
+                        <option value={5}>5%</option>
+                        <option value={7}>7%</option>
+                        <option value={10}>10%</option>
+                      </select>
+                    </div>
+                    
+                    <div>
+                      <label className="text-sm font-medium text-gray-700">
+                        Max Debt-to-Equity:
+                      </label>
+                      <select
+                        value={garpPeCriteria.maxDebtToEquity}
+                        onChange={(e) => setGarpPeCriteria(prev => ({
+                          ...prev,
+                          maxDebtToEquity: Number(e.target.value)
+                        }))}
+                        className="border border-gray-300 rounded px-2 py-1 text-sm w-full"
+                      >
+                        <option value={1}>1.0</option>
+                        <option value={2}>2.0</option>
+                        <option value={3}>3.0</option>
+                        <option value={5}>5.0</option>
+                      </select>
+                    </div>
+                  </div>
+                  
+                  <div className="flex items-center gap-4">
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={garpPeCriteria.requirePositiveEarnings}
+                        onChange={(e) => setGarpPeCriteria(prev => ({
+                          ...prev,
+                          requirePositiveEarnings: e.target.checked
+                        }))}
+                        className="rounded"
+                      />
+                      <span className="text-sm text-gray-700">Require Positive Earnings (Net Income &gt; 0)</span>
+                    </label>
+                  </div>
                 </div>
               )}
 
@@ -399,6 +572,48 @@ function RecommendationsPanel({ onClose, initialScreeningType = 'ps' }) {
                             </div>
                           )}
                         </>
+                      ) : screeningType === 'garp_pe' ? (
+                        <>
+                          {/* Current P/E Ratio */}
+                          <div className="text-center">
+                            <div className="text-lg font-bold text-gray-900">
+                              {rec.current_pe_ratio ? rec.current_pe_ratio.toFixed(2) : 'N/A'}
+                            </div>
+                            <div className="text-xs text-gray-500">Current P/E</div>
+                          </div>
+
+                          {/* PEG Ratio */}
+                          <div className="text-center">
+                            <div className="text-sm font-bold text-gray-700">
+                              {rec.peg_ratio ? rec.peg_ratio.toFixed(2) : 'N/A'}
+                            </div>
+                            <div className="text-xs text-gray-500">PEG Ratio</div>
+                          </div>
+
+                          {/* Revenue Growth */}
+                          <div className="text-center">
+                            <div className="text-sm font-bold text-gray-700">
+                              {rec.ttm_growth_rate ? rec.ttm_growth_rate.toFixed(1) + '%' : rec.annual_growth_rate ? rec.annual_growth_rate.toFixed(1) + '%' : 'N/A'}
+                            </div>
+                            <div className="text-xs text-gray-500">Revenue Growth</div>
+                          </div>
+
+                          {/* Profit Margin */}
+                          <div className="text-center">
+                            <div className="text-sm font-bold text-gray-700">
+                              {rec.net_profit_margin ? rec.net_profit_margin.toFixed(1) + '%' : 'N/A'}
+                            </div>
+                            <div className="text-xs text-gray-500">Profit Margin</div>
+                          </div>
+
+                          {/* GARP Score */}
+                          <div className="text-center">
+                            <div className="text-sm font-bold text-gray-700">
+                              {rec.garp_score ? rec.garp_score.toFixed(2) : 'N/A'}
+                            </div>
+                            <div className="text-xs text-gray-500">GARP Score</div>
+                          </div>
+                        </>
                       ) : (
                         <>
                           {/* Current P/E */}
@@ -477,12 +692,23 @@ function RecommendationsPanel({ onClose, initialScreeningType = 'ps' }) {
               <div className="text-xs text-gray-600 space-y-1">
                 {screeningType === 'ps' ? (
                   <>
-                    <p><strong>P/S Screening with Revenue Growth:</strong> Statistical undervaluation + growth requirements (S&P 500 only, Market Cap > $${(minMarketCap / 1_000_000).toFixed(0)}M)</p>
+                    <p><strong>P/S Screening with Revenue Growth:</strong> Statistical undervaluation + growth requirements (S&P 500 only, Market Cap &gt; $${(minMarketCap / 1_000_000).toFixed(0)}M)</p>
                     <p><strong>Criteria:</strong> Current P/S &lt; (Historical Median - 1.0 × Std Dev) AND Revenue Growth &gt; 0% (TTM OR Annual) AND Quality Score ≥ 50</p>
                     <p><strong>Value Score:</strong> Higher is better (0-100). Based on how low the P/S ratio is relative to historical average.</p>
                     <p><strong>Risk Score:</strong> Lower is better (0-100). Higher P/S ratios indicate higher valuation risk.</p>
                     <p><strong>Z-Score:</strong> How many standard deviations below/above the historical P/S mean.</p>
                     <p><strong>Revenue Growth:</strong> TTM or Annual revenue growth rate (percentage).</p>
+                  </>
+                ) : screeningType === 'garp_pe' ? (
+                  <>
+                    <p><strong>GARP P/E Screening:</strong> Growth at Reasonable Price using PEG ratios (S&P 500 only)</p>
+                    <p><strong>Criteria:</strong> PEG &lt; {garpPeCriteria.maxPegRatio} AND Revenue Growth &gt; {garpPeCriteria.minRevenueGrowth}% AND Profit Margin &gt; {garpPeCriteria.minProfitMargin}% AND Debt-to-Equity &lt; {garpPeCriteria.maxDebtToEquity} AND Net Income &gt; 0</p>
+                    <p><strong>Value Score:</strong> Higher is better (0-100). Based on GARP score (Revenue Growth % / PEG Ratio).</p>
+                    <p><strong>Risk Score:</strong> Lower is better (0-100). Higher P/E ratios indicate higher valuation risk.</p>
+                    <p><strong>PEG Ratio:</strong> Price/Earnings to Growth ratio. Lower values indicate better value relative to growth.</p>
+                    <p><strong>GARP Score:</strong> Revenue Growth % divided by PEG Ratio. Higher values indicate better growth-to-value balance.</p>
+                    <p><strong>Revenue Growth:</strong> TTM or Annual revenue growth rate (percentage).</p>
+                    <p><strong>Profit Margin:</strong> Net profit margin (Net Income / Revenue).</p>
                   </>
                 ) : (
                   <>

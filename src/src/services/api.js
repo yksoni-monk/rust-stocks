@@ -76,6 +76,23 @@ export const recommendationsAPI = {
   // Get value recommendations with stats
   async getValueRecommendationsWithStats(limit) {
     return await invoke('get_value_recommendations_with_stats', { limit });
+  },
+
+  // Get GARP P/E screening results
+  async getGarpPeScreeningResults(stockTickers, criteria, limit) {
+    return await invoke('get_garp_pe_screening_results', { 
+      stockTickers, 
+      criteria: criteria || {
+        maxPegRatio: 1.0,
+        minRevenueGrowth: 15.0,
+        minProfitMargin: 5.0,
+        maxDebtToEquity: 2.0,
+        minMarketCap: 500_000_000,
+        minQualityScore: 50,
+        requirePositiveEarnings: true
+      },
+      limit: limit || 50
+    });
   }
 };
 

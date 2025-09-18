@@ -50,6 +50,14 @@ path = "src/bin/import-schwab-prices.rs"
 name = "import-edgar-data"
 path = "src/bin/import-edgar-data.rs"
 
+[[bin]]
+name = "populate-cik-mappings"
+path = "src/bin/populate-cik-mappings.rs"
+
+[[bin]]
+name = "concurrent-edgar-extraction"
+path = "src/bin/concurrent-edgar-extraction.rs"
+
 
 
 [lib]

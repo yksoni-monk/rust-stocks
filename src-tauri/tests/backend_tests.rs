@@ -1003,3 +1003,89 @@ async fn test_graham_calculations_accuracy() {
     rust_stocks_tauri_lib::database::helpers::clear_test_database_pool().await;
     test_db.cleanup().await.unwrap();
 }
+
+/// Test Graham screening with relaxed modern criteria
+#[tokio::test]
+async fn test_graham_screening_relaxed_criteria() {
+    let test_db = SimpleTestDatabase::new().await.unwrap();
+    rust_stocks_tauri_lib::database::helpers::set_test_database_pool(test_db.pool().clone()).await;
+    
+    use rust_stocks_tauri_lib::commands::graham_screening::run_graham_screening;
+    use rust_stocks_tauri_lib::models::graham_value::GrahamScreeningCriteria;
+    use std::time::Instant;
+    
+    // Test with relaxed modern criteria (matching frontend defaults)
+    let criteria = GrahamScreeningCriteria {
+        max_pe_ratio: 25.0,           // More relaxed for modern market
+        max_pb_ratio: 3.0,            // More relaxed for modern market  
+        max_pe_pb_product: 40.0,      // Adjusted for higher ratios
+        min_dividend_yield: 0.0,      // Allow non-dividend stocks
+        max_debt_to_equity: 2.0,      // More realistic debt tolerance
+        min_profit_margin: 5.0,
+        min_revenue_growth_1y: 0.0,
+        min_revenue_growth_3y: 0.0,
+        min_current_ratio: 1.2,       // Slightly more relaxed
+        min_interest_coverage: 2.5,
+        min_roe: 8.0,                 // Slightly more relaxed
+        require_positive_earnings: true,
+        require_dividend: false,      // Don't require dividends
+        min_market_cap: 100_000_000.0,
+        max_market_cap: None,
+        excluded_sectors: vec![],
+    };
+    
+    println!("🔍 Testing Graham screening with relaxed modern criteria:");
+    println!("   Max P/E: {}", criteria.max_pe_ratio);
+    println!("   Max P/B: {}", criteria.max_pb_ratio);
+    println!("   Max P/E × P/B: {}", criteria.max_pe_pb_product);
+    println!("   Min Dividend Yield: {}%", criteria.min_dividend_yield);
+    println!("   Max Debt/Equity: {}", criteria.max_debt_to_equity);
+    println!("   Require Dividend: {}", criteria.require_dividend);
+    
+    let start_time = Instant::now();
+    let result = run_graham_screening(criteria.clone()).await;
+    let duration = start_time.elapsed();
+    
+    match result {
+        Ok(stocks) => {
+            println!("✅ Graham screening (relaxed) completed in {:?}", duration);
+            println!("   Found {} value stocks meeting relaxed Graham criteria", stocks.len());
+            
+            // Should find some stocks with relaxed criteria
+            if stocks.len() > 0 {
+                println!("✅ Found {} qualifying stocks with relaxed criteria", stocks.len());
+                
+                // Show first few results
+                for (i, stock) in stocks.iter().take(5).enumerate() {
+                    println!("   {}. {} ({}) - Graham Score: {:.1}", 
+                             i + 1, 
+                             stock.company_name.as_ref().unwrap_or(&stock.result.symbol),
+                             stock.result.symbol,
+                             stock.result.graham_score.unwrap_or(0.0));
+                }
+                
+                // Validate results structure
+                for stock in &stocks {
+                    assert!(!stock.result.symbol.is_empty(), "Stock symbol should not be empty");
+                    assert!(stock.result.passes_all_filters, "Returned stocks should pass all filters");
+                    if let Some(pe) = stock.result.pe_ratio {
+                        assert!(pe <= criteria.max_pe_ratio, "P/E should be within criteria");
+                    }
+                    if let Some(pb) = stock.result.pb_ratio {
+                        assert!(pb <= criteria.max_pb_ratio, "P/B should be within criteria");
+                    }
+                }
+                
+                println!("✅ All {} stocks passed validation", stocks.len());
+            } else {
+                println!("⚠️ No stocks found even with relaxed criteria - market conditions may be very overvalued");
+            }
+        }
+        Err(e) => {
+            panic!("Graham screening failed: {}", e);
+        }
+    }
+    
+    rust_stocks_tauri_lib::database::helpers::clear_test_database_pool().await;
+    test_db.cleanup().await.unwrap();
+}

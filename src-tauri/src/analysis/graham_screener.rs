@@ -74,66 +74,79 @@ impl GrahamScreener {
     /// Load S&P 500 stocks with comprehensive financial data
     async fn load_stocks_with_financials(&self) -> Result<Vec<StockFinancialData>> {
         let query = r#"
-            SELECT DISTINCT
+            SELECT 
                 s.id as stock_id,
                 s.symbol,
-                s.company_name,
+                COALESCE(s.company_name, s.symbol) as company_name,
                 s.sector,
                 s.industry,
-                s.is_sp500,
                 
-                -- Current price data
-                sp.latest_price as current_price,
-                inc.shares_basic as shares_outstanding,
+                -- Current price from latest daily_prices
+                COALESCE(dp.close_price, 0.0) as current_price,
+                COALESCE(inc.shares_basic, s.shares_outstanding, 0.0) as shares_outstanding,
                 
-                -- Income statement data (TTM)
-                inc.revenue,
-                inc.net_income,
-                inc.operating_income,
-                COALESCE(inc.interest_expense_net, 0) as interest_expense,
+                -- Financial data from most recent FY statements
+                COALESCE(inc.revenue, 0.0) as revenue,
+                COALESCE(inc.net_income, 0.0) as net_income,
+                COALESCE(inc.operating_income, 0.0) as operating_income,
                 
-                -- Balance sheet data (TTM)
-                bal.total_assets,
-                bal.total_equity,
-                bal.long_term_debt as total_debt,
-                bal.total_current_assets as current_assets,
-                bal.total_current_liabilities as current_liabilities,
-                bal.cash_and_equivalents,
+                -- Balance sheet data
+                COALESCE(bal.total_debt, 0.0) as total_debt,
+                COALESCE(bal.total_equity, 0.0) as total_equity,
+                COALESCE(bal.total_assets, 0.0) as total_assets,
+                COALESCE(bal.cash_and_equivalents, 0.0) as cash_and_equivalents,
                 
                 -- Historical revenue for growth calculations
-                inc_1y.revenue as revenue_1y_ago,
-                inc_3y.revenue as revenue_3y_ago,
-                
-                -- Dividend data (estimate from yield and price)
-                sp.latest_price * COALESCE(dvr.ps_ratio_ttm, 0) * 0.01 as dividend_per_share
+                COALESCE(inc_1y.revenue, 0.0) as revenue_1y_ago,
+                COALESCE(inc_3y.revenue, 0.0) as revenue_3y_ago
                 
             FROM stocks s
             JOIN sp500_symbols sp500 ON s.symbol = sp500.symbol
+            
+            -- Latest price data
             LEFT JOIN (
-                SELECT stock_id, close_price as latest_price
+                SELECT stock_id, close_price
                 FROM daily_prices dp1
                 WHERE date = (SELECT MAX(date) FROM daily_prices dp2 WHERE dp2.stock_id = dp1.stock_id)
-            ) sp ON s.id = sp.stock_id
-            LEFT JOIN income_statements inc ON s.id = inc.stock_id 
-                AND inc.fiscal_period = 'FY' 
-                AND inc.fiscal_year = (SELECT MAX(fiscal_year) FROM income_statements WHERE stock_id = s.id AND fiscal_period = 'FY')
-            LEFT JOIN balance_sheets bal ON s.id = bal.stock_id 
-                AND bal.fiscal_period = 'FY' 
-                AND bal.fiscal_year = (SELECT MAX(fiscal_year) FROM balance_sheets WHERE stock_id = s.id AND fiscal_period = 'FY')
-            LEFT JOIN daily_valuation_ratios dvr ON s.id = dvr.stock_id
-                AND dvr.date = (SELECT MAX(date) FROM daily_valuation_ratios WHERE stock_id = s.id)
-                
-            -- Historical data for growth calculations
-            LEFT JOIN income_statements inc_1y ON s.id = inc_1y.stock_id 
-                AND inc_1y.fiscal_year = inc.fiscal_year - 1
-                AND inc_1y.fiscal_period = 'FY'
-            LEFT JOIN income_statements inc_3y ON s.id = inc_3y.stock_id 
-                AND inc_3y.fiscal_year = inc.fiscal_year - 3
-                AND inc_3y.fiscal_period = 'FY'
-                
+            ) dp ON s.id = dp.stock_id
+            
+            -- Latest FY financial data
+            LEFT JOIN (
+                SELECT stock_id, revenue, net_income, operating_income, shares_basic
+                FROM income_statements inc1
+                WHERE fiscal_period = 'FY' 
+                AND fiscal_year = (SELECT MAX(fiscal_year) FROM income_statements inc2 
+                                  WHERE inc2.stock_id = inc1.stock_id AND inc2.fiscal_period = 'FY')
+            ) inc ON s.id = inc.stock_id
+            
+            LEFT JOIN (
+                SELECT stock_id, total_debt, total_equity, total_assets, cash_and_equivalents
+                FROM balance_sheets bal1
+                WHERE fiscal_period = 'FY'
+                AND fiscal_year = (SELECT MAX(fiscal_year) FROM balance_sheets bal2 
+                                  WHERE bal2.stock_id = bal1.stock_id AND bal2.fiscal_period = 'FY')
+            ) bal ON s.id = bal.stock_id
+            
+            -- Historical revenue data
+            LEFT JOIN (
+                SELECT stock_id, revenue
+                FROM income_statements inc_1y
+                WHERE fiscal_period = 'FY'
+                AND fiscal_year = (SELECT MAX(fiscal_year) - 1 FROM income_statements inc_max 
+                                  WHERE inc_max.stock_id = inc_1y.stock_id AND inc_max.fiscal_period = 'FY')
+            ) inc_1y ON s.id = inc_1y.stock_id
+            
+            LEFT JOIN (
+                SELECT stock_id, revenue
+                FROM income_statements inc_3y
+                WHERE fiscal_period = 'FY'
+                AND fiscal_year = (SELECT MAX(fiscal_year) - 3 FROM income_statements inc_max 
+                                  WHERE inc_max.stock_id = inc_3y.stock_id AND inc_max.fiscal_period = 'FY')
+            ) inc_3y ON s.id = inc_3y.stock_id
+            
             WHERE s.status = 'active'
-                AND sp.latest_price IS NOT NULL
-                AND sp.latest_price > 0
+                AND dp.close_price > 0
+                AND inc.revenue > 0
             ORDER BY s.symbol
         "#;
 
@@ -154,18 +167,18 @@ impl GrahamScreener {
                 revenue: row.try_get("revenue").ok(),
                 net_income: row.try_get("net_income").ok(),
                 operating_income: row.try_get("operating_income").ok(),
-                interest_expense: row.try_get("interest_expense").ok(),
+                interest_expense: None, // Not available in current schema
                 
                 total_assets: row.try_get("total_assets").ok(),
                 total_equity: row.try_get("total_equity").ok(),
                 total_debt: row.try_get("total_debt").ok(),
-                current_assets: row.try_get("current_assets").ok(),
-                current_liabilities: row.try_get("current_liabilities").ok(),
+                current_assets: None, // Not available in current schema
+                current_liabilities: None, // Not available in current schema
                 cash_and_equivalents: row.try_get("cash_and_equivalents").ok(),
                 
                 revenue_1y_ago: row.try_get("revenue_1y_ago").ok(),
                 revenue_3y_ago: row.try_get("revenue_3y_ago").ok(),
-                dividend_per_share: row.try_get("dividend_per_share").ok(),
+                dividend_per_share: None, // Not available in current schema
             }
         }).collect();
 
@@ -403,13 +416,13 @@ impl GrahamScreener {
                     stock_id, symbol, screening_date,
                     pe_ratio, pb_ratio, pe_pb_product, dividend_yield, debt_to_equity,
                     profit_margin, revenue_growth_1y, revenue_growth_3y,
-                    current_ratio, interest_coverage_ratio, return_on_equity, return_on_assets,
+                    current_ratio, quick_ratio, interest_coverage_ratio, return_on_equity, return_on_assets,
                     passes_earnings_filter, passes_pe_filter, passes_pb_filter, passes_pe_pb_combined,
                     passes_dividend_filter, passes_debt_filter, passes_quality_filter, passes_growth_filter,
                     passes_all_filters, graham_score, value_rank, quality_score, safety_score,
                     current_price, market_cap, shares_outstanding, net_income, total_equity, total_debt, revenue,
                     reasoning, sector, industry
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#)
             .bind(result.stock_id)
             .bind(&result.symbol)
@@ -423,6 +436,7 @@ impl GrahamScreener {
             .bind(result.revenue_growth_1y)
             .bind(result.revenue_growth_3y)
             .bind(result.current_ratio)
+            .bind(result.quick_ratio)
             .bind(result.interest_coverage_ratio)
             .bind(result.return_on_equity)
             .bind(result.return_on_assets)

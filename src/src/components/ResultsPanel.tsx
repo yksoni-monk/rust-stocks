@@ -22,6 +22,7 @@ export default function ResultsPanel(props: ResultsPanelProps) {
   const getScreeningTitle = (type: ScreeningType) => {
     switch (type) {
       case 'garp_pe': return '🎯 GARP Analysis Results';
+      case 'graham_value': return '💎 Graham Value Results';
       case 'ps': return '📊 P/S Screening Results';
       case 'pe': return '📈 P/E Analysis Results';
       default: return '📋 Screening Results';
@@ -29,10 +30,13 @@ export default function ResultsPanel(props: ResultsPanelProps) {
   };
 
   const getScreeningSummary = (type: ScreeningType, count: number) => {
-    const criteria = recommendationsStore.garpCriteria();
+    const garpCriteria = recommendationsStore.garpCriteria();
+    const grahamCriteria = recommendationsStore.grahamCriteria();
     switch (type) {
       case 'garp_pe': 
-        return `Found ${count} stocks with PEG < ${criteria.maxPegRatio} and revenue growth > ${criteria.minRevenueGrowth}%`;
+        return `Found ${count} stocks with PEG < ${garpCriteria.maxPegRatio} and revenue growth > ${garpCriteria.minRevenueGrowth}%`;
+      case 'graham_value':
+        return `Found ${count} Graham value stocks with P/E < ${grahamCriteria.maxPeRatio}, P/B < ${grahamCriteria.maxPbRatio}, and strong fundamentals`;
       case 'ps': 
         return `Found ${count} undervalued stocks with low P/S ratios and revenue growth`;
       case 'pe': 
@@ -145,18 +149,48 @@ export default function ResultsPanel(props: ResultsPanelProps) {
                   </div>
                   <div class="text-sm text-gray-600">Pass All Criteria</div>
                 </div>
-                <div>
-                  <div class="text-2xl font-bold text-purple-600">
-                    {(recommendationsStore.recommendations().reduce((avg, r) => avg + (r.garp_score || 0), 0) / recommendationsStore.recommendations().length).toFixed(1)}
+                <Show when={recommendationsStore.screeningType() === 'graham_value'}>
+                  <div>
+                    <div class="text-2xl font-bold text-purple-600">
+                      {(recommendationsStore.recommendations().reduce((avg, r) => avg + (r.garp_score || 0), 0) / recommendationsStore.recommendations().length).toFixed(1)}
+                    </div>
+                    <div class="text-sm text-gray-600">Avg Graham Score</div>
                   </div>
-                  <div class="text-sm text-gray-600">Avg GARP Score</div>
-                </div>
-                <div>
-                  <div class="text-2xl font-bold text-orange-600">
-                    {Math.round(recommendationsStore.recommendations().reduce((avg, r) => avg + (r.quality_score || 0), 0) / recommendationsStore.recommendations().length)}
+                  <div>
+                    <div class="text-2xl font-bold text-orange-600">
+                      {(recommendationsStore.recommendations().reduce((avg, r) => avg + (r.current_pe_ratio || 0), 0) / recommendationsStore.recommendations().length).toFixed(1)}
+                    </div>
+                    <div class="text-sm text-gray-600">Avg P/E Ratio</div>
                   </div>
-                  <div class="text-sm text-gray-600">Avg Quality</div>
-                </div>
+                </Show>
+                <Show when={recommendationsStore.screeningType() === 'garp_pe'}>
+                  <div>
+                    <div class="text-2xl font-bold text-purple-600">
+                      {(recommendationsStore.recommendations().reduce((avg, r) => avg + (r.garp_score || 0), 0) / recommendationsStore.recommendations().length).toFixed(1)}
+                    </div>
+                    <div class="text-sm text-gray-600">Avg GARP Score</div>
+                  </div>
+                  <div>
+                    <div class="text-2xl font-bold text-orange-600">
+                      {Math.round(recommendationsStore.recommendations().reduce((avg, r) => avg + (r.quality_score || 0), 0) / recommendationsStore.recommendations().length)}
+                    </div>
+                    <div class="text-sm text-gray-600">Avg Quality</div>
+                  </div>
+                </Show>
+                <Show when={recommendationsStore.screeningType() === 'ps' || recommendationsStore.screeningType() === 'pe'}>
+                  <div>
+                    <div class="text-2xl font-bold text-purple-600">
+                      {(recommendationsStore.recommendations().reduce((avg, r) => avg + (r.current_pe_ratio || 0), 0) / recommendationsStore.recommendations().length).toFixed(1)}
+                    </div>
+                    <div class="text-sm text-gray-600">Avg P/E</div>
+                  </div>
+                  <div>
+                    <div class="text-2xl font-bold text-orange-600">
+                      {(recommendationsStore.recommendations().reduce((avg, r) => avg + (r.ps_ratio_ttm || 0), 0) / recommendationsStore.recommendations().length).toFixed(1)}
+                    </div>
+                    <div class="text-sm text-gray-600">Avg P/S</div>
+                  </div>
+                </Show>
               </div>
             </div>
 
@@ -245,6 +279,39 @@ function MetricsDisplay(props: MetricsDisplayProps) {
             {props.rec.garp_score?.toFixed(1) || 'N/A'}
           </div>
           <div class="text-xs text-gray-500">GARP</div>
+        </div>
+        <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[50px]">
+          <div class={`text-lg font-bold ${props.rec.passes_garp_screening ? 'text-green-600' : 'text-red-500'}`}>
+            {props.rec.passes_garp_screening ? '✓' : '✗'}
+          </div>
+          <div class="text-xs text-gray-500">Pass</div>
+        </div>
+      </Show>
+      
+      <Show when={props.screeningType === 'graham_value'}>
+        <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[60px]">
+          <div class="text-lg font-bold text-gray-900">
+            {props.rec.current_pe_ratio?.toFixed(1) || 'N/A'}
+          </div>
+          <div class="text-xs text-gray-500">P/E</div>
+        </div>
+        <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[60px]">
+          <div class="text-sm font-bold text-gray-700">
+            N/A
+          </div>
+          <div class="text-xs text-gray-500">P/B</div>
+        </div>
+        <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[60px]">
+          <div class="text-sm font-bold text-gray-700">
+            {props.rec.debt_to_equity_ratio?.toFixed(2) || 'N/A'}
+          </div>
+          <div class="text-xs text-gray-500">Debt/Eq</div>
+        </div>
+        <div class="text-center bg-green-50 rounded-lg p-2 min-w-[60px]">
+          <div class="text-sm font-bold text-green-600">
+            {props.rec.garp_score?.toFixed(1) || 'N/A'}
+          </div>
+          <div class="text-xs text-gray-500">Graham</div>
         </div>
         <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[50px]">
           <div class={`text-lg font-bold ${props.rec.passes_garp_screening ? 'text-green-600' : 'text-red-500'}`}>

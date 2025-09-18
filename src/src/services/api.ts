@@ -11,6 +11,7 @@ import type {
   DatabaseStats,
   InitializationStatus 
 } from '../utils/types';
+import type { GrahamCriteria, GrahamResult } from '../stores/recommendationsStore';
 
 /**
  * Centralized API service layer for all backend operations
@@ -105,6 +106,26 @@ export const recommendationsAPI = {
       },
       limit: limit || 50
     });
+  },
+
+  // Run Graham value screening
+  async runGrahamScreening(criteria: GrahamCriteria): Promise<GrahamResult[]> {
+    return await invoke('run_graham_screening', { criteria });
+  },
+
+  // Get Graham screening defaults
+  async getGrahamCriteriaDefaults(): Promise<GrahamCriteria> {
+    return await invoke('get_graham_criteria_defaults');
+  },
+
+  // Get Graham screening presets
+  async getGrahamScreeningPresets(): Promise<any[]> {
+    return await invoke('get_graham_screening_presets');
+  },
+
+  // Get latest Graham results (cached)
+  async getLatestGrahamResults(limit?: number): Promise<GrahamResult[]> {
+    return await invoke('get_latest_graham_results', { limit: limit || 50 });
   }
 };
 

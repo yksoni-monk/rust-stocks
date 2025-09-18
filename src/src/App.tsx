@@ -34,7 +34,9 @@ function App() {
 
         {/* Results Area - Shows when screening is run */}
         <Show when={uiStore.showRecommendations()}>
-          <ResultsPanel onClose={uiStore.closeAllPanels} />
+          <div data-section="recommendations">
+            <ResultsPanel onClose={uiStore.closeAllPanels} />
+          </div>
         </Show>
 
         {/* Stock Browser - Collapsible secondary tool */}

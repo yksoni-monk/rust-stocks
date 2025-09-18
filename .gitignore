@@ -41,3 +41,4 @@ dist-ssr
 *.sw?
 *.csv
 edgar_data/*
+schwab_tokens_full.json

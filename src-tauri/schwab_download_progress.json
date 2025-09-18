@@ -1,0 +1,33 @@
+{
+  "session_id": "d2e8ded5-903c-4742-a588-45ba8e897d91",
+  "start_time": "2025-09-18T04:23:44.323569Z",
+  "total_symbols": 10,
+  "completed_symbols": [
+    "AMD",
+    "GOOGL",
+    "NVDA",
+    "CRM",
+    "MSFT",
+    "TSLA",
+    "AMZN",
+    "META",
+    "AAPL",
+    "NFLX"
+  ],
+  "failed_symbols": {},
+  "current_symbol": "TSLA",
+  "settings": {
+    "start_date": "2019-01-01",
+    "end_date": "2024-12-31",
+    "batch_size": 100,
+    "max_retries": 3
+  },
+  "statistics": {
+    "total_api_calls": 10,
+    "successful_calls": 10,
+    "failed_calls": 0,
+    "total_price_records": 15110,
+    "average_bars_per_symbol": 1511.0,
+    "download_speed_symbols_per_minute": 31.05544638859926
+  }
+}

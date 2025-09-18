@@ -42,6 +42,10 @@ path = "src/bin/import_simfin.rs"
 name = "db_admin"
 path = "src/bin/db_admin.rs"
 
+[[bin]]
+name = "import-schwab-prices"
+path = "src/bin/import-schwab-prices.rs"
+
 
 
 [lib]
@@ -72,6 +76,7 @@ base64 = "0.22"
 async-trait = "0.1"
 indicatif = "0.17"
 clap = { version = "4.0", features = ["derive"] }
+uuid = { version = "1.0", features = ["v4"] }
 
 # Additional dependencies for testing and development
 [dev-dependencies]

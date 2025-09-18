@@ -64,6 +64,13 @@ enum Commands {
     Scan,
 }
 
+// SEC Company Tickers JSON structure
+#[derive(Debug, Deserialize)]
+struct SecCompanyTickers {
+    fields: Vec<String>,
+    data: Vec<Vec<serde_json::Value>>,
+}
+
 // EDGAR JSON structures
 #[derive(Debug, Deserialize)]
 struct EdgarCompanyFacts {
@@ -359,7 +366,7 @@ impl EdgarExtractor {
     }
     
     async fn build_cik_symbol_mapping(db_pool: &SqlitePool) -> Result<(HashMap<String, String>, HashMap<String, i64>)> {
-        info!("Building CIK-to-symbol mapping from database...");
+        info!("Building CIK-to-symbol mapping from SEC company tickers file...");
         
         // Load all stocks from database for symbol_stock_id mapping
         let stocks = sqlx::query_as::<_, (i64, String, String)>(
@@ -389,115 +396,54 @@ impl EdgarExtractor {
         
         let db_count = cik_symbol_map.len();
         
-        // Try fuzzy matching for additional S&P 500 coverage
-        let fuzzy_count = Self::add_fuzzy_cik_mappings_to_db(db_pool, &stocks).await?;
+        // Load CIK mappings from SEC company_tickers_exchange.json
+        let sec_count = Self::load_sec_company_tickers(&mut cik_symbol_map, &symbol_stock_id_map).await?;
         
-        // Reload mappings after fuzzy matching
-        let updated_mappings = sqlx::query_as::<_, (String, String)>(
-            "SELECT cik, symbol FROM cik_mappings"
-        )
-        .fetch_all(db_pool)
-        .await?;
-        
-        cik_symbol_map.clear();
-        for (cik, symbol) in updated_mappings {
-            cik_symbol_map.insert(cik, symbol);
-        }
-        
-        info!("Built CIK mapping: {} from DB + {} fuzzy = {} total mappings, {} S&P 500 stocks", 
-               db_count, fuzzy_count, cik_symbol_map.len(), stocks.len());
+        info!("Built CIK mapping: {} from DB + {} from SEC = {} total mappings, {} S&P 500 stocks", 
+               db_count, sec_count, cik_symbol_map.len(), stocks.len());
         
         Ok((cik_symbol_map, symbol_stock_id_map))
     }
     
-    async fn add_fuzzy_cik_mappings_to_db(
-        db_pool: &SqlitePool,
-        stocks: &[(i64, String, String)]
+    async fn load_sec_company_tickers(
+        cik_symbol_map: &mut HashMap<String, String>,
+        symbol_stock_id_map: &HashMap<String, i64>
     ) -> Result<usize> {
-        use fuzzy_matcher::FuzzyMatcher;
-        use fuzzy_matcher::skim::SkimMatcherV2;
+        let tickers_file_path = "/Users/yksoni/code/misc/rust-stocks/edgar_data/company_tickers_exchange.json";
         
-        let matcher = SkimMatcherV2::default();
-        let mut fuzzy_count = 0;
-        
-        // Build a map of company names to stock info for quick lookup
-        let mut name_to_stock = HashMap::new();
-        for (id, symbol, company_name) in stocks {
-            name_to_stock.insert(company_name.to_lowercase(), (*id, symbol.clone()));
+        if !Path::new(tickers_file_path).exists() {
+            warn!("SEC company tickers file not found at {}", tickers_file_path);
+            return Ok(0);
         }
         
-        // Get existing CIK mappings to avoid duplicates
-        let existing_ciks: HashSet<String> = sqlx::query_as::<_, (String,)>(
-            "SELECT cik FROM cik_mappings"
-        )
-        .fetch_all(db_pool)
-        .await?
-        .into_iter()
-        .map(|(cik,)| cik)
-        .collect();
+        // Read and parse the SEC company tickers JSON
+        let content = fs::read_to_string(tickers_file_path)?;
+        let sec_tickers: SecCompanyTickers = serde_json::from_str(&content)?;
         
-        // Sample a subset of EDGAR files for fuzzy matching
-        let edgar_path = "/Users/yksoni/code/misc/rust-stocks/edgar_data/companyfacts";
-        let entries = std::fs::read_dir(edgar_path)?;
-        let mut sample_count = 0;
-        const MAX_SAMPLES: usize = 1000; // Process first 1000 files for fuzzy matching
+        let mut added_count = 0;
         
-        for entry in entries {
-            if sample_count >= MAX_SAMPLES {
-                break;
-            }
-            
-            let entry = entry?;
-            let filename = entry.file_name();
-            let filename_str = filename.to_string_lossy();
-            
-            if filename_str.starts_with("CIK") && filename_str.ends_with(".json") {
-                if let Some(cik) = Self::extract_cik_from_filename(&filename_str) {
-                    // Skip if we already have this CIK mapped
-                    if existing_ciks.contains(&cik) {
-                        continue;
-                    }
-                    
-                    // Try to read the entity name from the EDGAR file
-                    if let Ok(entity_name) = Self::extract_entity_name_from_file(&entry.path()).await {
-                        // Try fuzzy matching with our stock names
-                        let entity_lower = entity_name.to_lowercase();
-                        let mut best_match = None;
-                        let mut best_score = 0;
+        // Process each company entry
+        for entry in &sec_tickers.data {
+            if entry.len() >= 3 {
+                // Extract CIK, name, and ticker from the data array
+                if let (Some(cik_val), Some(ticker_val)) = (entry.get(0), entry.get(2)) {
+                    if let (Some(cik_num), Some(ticker_str)) = (cik_val.as_i64(), ticker_val.as_str()) {
+                        let cik = cik_num.to_string();
+                        let ticker = ticker_str.to_string();
                         
-                        for (company_name, (stock_id, symbol)) in &name_to_stock {
-                            if let Some(score) = matcher.fuzzy_match(company_name, &entity_lower) {
-                                if score > best_score && score > 80 { // High confidence threshold
-                                    best_score = score;
-                                    best_match = Some((stock_id, symbol, score));
-                                }
-                            }
-                        }
-                        
-                        if let Some((stock_id, symbol, score)) = best_match {
-                            // Insert into database
-                            sqlx::query(
-                                "INSERT INTO cik_mappings (cik, stock_id, symbol, entity_name, mapping_source, confidence_score) 
-                                 VALUES (?, ?, ?, ?, 'fuzzy', ?)"
-                            )
-                            .bind(&cik)
-                            .bind(stock_id)
-                            .bind(symbol)
-                            .bind(&entity_name)
-                            .bind(score as f64 / 100.0)
-                            .execute(db_pool)
-                            .await?;
-                            
-                            fuzzy_count += 1;
+                        // Only add if we don't already have this CIK and the ticker exists in our S&P 500 stocks
+                        if !cik_symbol_map.contains_key(&cik) && symbol_stock_id_map.contains_key(&ticker) {
+                            cik_symbol_map.insert(cik, ticker);
+                            added_count += 1;
                         }
                     }
                 }
-                sample_count += 1;
             }
         }
         
-        Ok(fuzzy_count)
+        Ok(added_count)
     }
+    
     
     async fn extract_financial_statements(
         &self, 

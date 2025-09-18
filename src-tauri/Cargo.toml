@@ -89,6 +89,7 @@ async-trait = "0.1"
 indicatif = "0.17"
 clap = { version = "4.0", features = ["derive"] }
 uuid = { version = "1.0", features = ["v4"] }
+rusqlite = { version = "0.32", features = ["chrono"] }
 
 # Additional dependencies for testing and development
 [dev-dependencies]

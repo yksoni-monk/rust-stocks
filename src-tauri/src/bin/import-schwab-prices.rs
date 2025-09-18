@@ -5,11 +5,12 @@
 /// progress tracking, and resume capability.
 
 use anyhow::{Result, anyhow};
-use chrono::{NaiveDate, DateTime, Utc, Datelike};
+use chrono::{NaiveDate, DateTime, Utc, Local};
 use clap::{Parser, Subcommand};
 use rust_stocks_tauri_lib::api::schwab_client::SchwabClient;
 use rust_stocks_tauri_lib::api::StockDataProvider;
 use rust_stocks_tauri_lib::models::Config;
+use rust_stocks_tauri_lib::tools::date_range_calculator::{DateRangeCalculator, UpdatePlan};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::collections::{HashMap, HashSet};
@@ -30,9 +31,9 @@ struct Cli {
     #[arg(long, default_value = "2015-01-01")]
     start_date: String,
 
-    /// End date for price data (YYYY-MM-DD)
-    #[arg(long, default_value = "2024-12-31")]
-    end_date: String,
+    /// End date for price data (YYYY-MM-DD, defaults to current date)
+    #[arg(long)]
+    end_date: Option<String>,
     
     /// Resume previous incomplete download
     #[arg(long)]
@@ -121,6 +122,8 @@ struct BulkDownloader {
     progress_file: PathBuf,
     rate_limiter: Arc<Semaphore>,
     start_time: Instant,
+    date_calculator: DateRangeCalculator,
+    incremental_mode: bool,
 }
 
 impl BulkDownloader {
@@ -128,6 +131,7 @@ impl BulkDownloader {
         config: &Config,
         progress_file: PathBuf,
         settings: DownloadSettings,
+        incremental_mode: bool,
     ) -> Result<Self> {
         let schwab_client = SchwabClient::new(config)?;
         
@@ -164,6 +168,8 @@ impl BulkDownloader {
             progress_file,
             rate_limiter,
             start_time: Instant::now(),
+            date_calculator: DateRangeCalculator::new(),
+            incremental_mode,
         })
     }
     
@@ -273,26 +279,107 @@ impl BulkDownloader {
     async fn download_symbol_data(&self, symbol: &str) -> Result<usize> {
         let start_date = NaiveDate::parse_from_str(&self.progress.settings.start_date, "%Y-%m-%d")?;
         let end_date = NaiveDate::parse_from_str(&self.progress.settings.end_date, "%Y-%m-%d")?;
-        
+
+        // Get stock_id from database
+        let stock_id = self.get_stock_id(symbol).await?;
+
+        // If incremental mode, calculate what data is actually needed
+        if self.incremental_mode {
+            return self.download_incremental_data(symbol, stock_id, start_date, end_date).await;
+        } else {
+            return self.download_full_range(symbol, stock_id, start_date, end_date).await;
+        }
+    }
+
+    async fn download_incremental_data(&self, symbol: &str, stock_id: i64, default_start: NaiveDate, end_date: NaiveDate) -> Result<usize> {
+        // Convert SQLite connection for date calculator
+        let database_url = std::env::var("DATABASE_URL")
+            .unwrap_or_else(|_| "sqlite:./db/stocks.db".to_string());
+        let sqlite_path = database_url.strip_prefix("sqlite:").unwrap_or(&database_url);
+        let conn = rusqlite::Connection::open(sqlite_path)?;
+
+        // Calculate update plan using date range calculator
+        let update_plan = self.date_calculator.calculate_update_plan(
+            &conn, symbol, stock_id, default_start, end_date
+        )?;
+
+        if update_plan.missing_ranges.is_empty() {
+            info!("📊 {} - No missing data, skipping (coverage: {:.1}%)",
+                  symbol, update_plan.coverage_percentage);
+            return Ok(0);
+        }
+
+        info!("📊 {} - Found {} missing ranges, coverage: {:.1}%",
+              symbol, update_plan.missing_ranges.len(), update_plan.coverage_percentage);
+
+        let mut total_bars = 0;
+
+        // Download each missing range
+        for range in &update_plan.missing_ranges {
+            debug!("📅 {} - Downloading range: {} to {}",
+                   symbol, range.start_date, range.end_date);
+
+            let bars = self.download_date_range(symbol, stock_id, range.start_date, range.end_date).await?;
+            total_bars += bars;
+        }
+
+        // Update company metadata with new coverage info
+        self.update_company_metadata(stock_id, symbol).await?;
+
+        Ok(total_bars)
+    }
+
+    async fn download_full_range(&self, symbol: &str, stock_id: i64, start_date: NaiveDate, end_date: NaiveDate) -> Result<usize> {
+        info!("📊 {} - Full range download: {} to {}", symbol, start_date, end_date);
+        self.download_date_range(symbol, stock_id, start_date, end_date).await
+    }
+
+    async fn download_date_range(&self, symbol: &str, stock_id: i64, start_date: NaiveDate, end_date: NaiveDate) -> Result<usize> {
         // Get rate limiter permit
         let _permit = self.rate_limiter.acquire().await?;
-        
+
         // Fetch price data from Schwab API
         let price_bars = self.schwab_client
             .get_price_history(symbol, start_date, end_date)
             .await?;
-        
+
         if price_bars.is_empty() {
-            return Err(anyhow!("No price data returned for {}", symbol));
+            return Err(anyhow!("No price data returned for {} in range {} to {}", symbol, start_date, end_date));
         }
-        
-        // Get stock_id from database
-        let stock_id = self.get_stock_id(symbol).await?;
-        
+
         // Insert price data into database
         self.insert_price_data(stock_id, &price_bars).await?;
-        
+
         Ok(price_bars.len())
+    }
+
+    async fn update_company_metadata(&self, stock_id: i64, _symbol: &str) -> Result<()> {
+        // Update the company metadata with latest data coverage
+        sqlx::query(
+            r#"
+            UPDATE company_metadata
+            SET
+                earliest_data_date = (
+                    SELECT MIN(date) FROM daily_prices WHERE stock_id = ?
+                ),
+                latest_data_date = (
+                    SELECT MAX(date) FROM daily_prices WHERE stock_id = ?
+                ),
+                total_trading_days = (
+                    SELECT COUNT(*) FROM daily_prices WHERE stock_id = ?
+                ),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE stock_id = ?
+            "#
+        )
+        .bind(stock_id)
+        .bind(stock_id)
+        .bind(stock_id)
+        .bind(stock_id)
+        .execute(&self.db_pool)
+        .await?;
+
+        Ok(())
     }
     
     
@@ -422,18 +509,26 @@ async fn main() -> Result<()> {
     // Load configuration
     let config = Config::from_env()?;
     
+    // Use current date as default end date
+    let end_date = cli.end_date.unwrap_or_else(|| {
+        Local::now().naive_local().date().format("%Y-%m-%d").to_string()
+    });
+
     let settings = DownloadSettings {
         start_date: cli.start_date.clone(),
-        end_date: cli.end_date.clone(),
+        end_date,
         batch_size: cli.batch_size,
         max_retries: cli.max_retries,
     };
+
+    // Determine if we should use incremental mode (default to true for better performance)
+    let incremental_mode = !cli.command.as_ref().map_or(false, |cmd| matches!(cmd, Commands::Download));
     
     let progress_file = PathBuf::from(cli.progress_file);
     
     // Handle test mode
     if let Some(test_symbol) = cli.test_symbol {
-        return test_single_symbol(&config, &test_symbol, &settings).await;
+        return test_single_symbol(&config, &test_symbol, &settings, incremental_mode).await;
     }
     
     // Handle validation only mode
@@ -442,7 +537,7 @@ async fn main() -> Result<()> {
     }
     
     // Create bulk downloader
-    let mut downloader = BulkDownloader::new(&config, progress_file.clone(), settings).await?;
+    let mut downloader = BulkDownloader::new(&config, progress_file.clone(), settings, incremental_mode).await?;
     
     // Execute download
     match cli.command {
@@ -469,35 +564,26 @@ async fn test_single_symbol(
     config: &Config,
     symbol: &str,
     settings: &DownloadSettings,
+    incremental_mode: bool,
 ) -> Result<()> {
-    println!("🧪 Testing single symbol: {}", symbol);
+    println!("🧪 Testing single symbol: {} (incremental: {})", symbol, incremental_mode);
+
+    // Create a test downloader to use the same logic as the bulk downloader
+    let progress_file = PathBuf::from("test_progress.json");
+    let mut downloader = BulkDownloader::new(config, progress_file.clone(), settings.clone(), incremental_mode).await?;
+
+    // Test the download for this symbol
+    let bars_count = downloader.download_symbol_data(symbol).await?;
     
-    let schwab_client = SchwabClient::new(config)?;
-    
-    let start_date = NaiveDate::parse_from_str(&settings.start_date, "%Y-%m-%d")?;
-    let end_date = NaiveDate::parse_from_str(&settings.end_date, "%Y-%m-%d")?;
-    
-    let price_bars = schwab_client
-        .get_price_history(symbol, start_date, end_date)
-        .await?;
-    
-    println!("✅ Successfully retrieved {} price bars for {}", price_bars.len(), symbol);
-    
-    if !price_bars.is_empty() {
-        let first = &price_bars[0];
-        let last = &price_bars[price_bars.len() - 1];
-        
-        println!("📊 First bar: Date: {}, OHLCV: {:.2}/{:.2}/{:.2}/{:.2}/{}", 
-                 chrono::DateTime::from_timestamp_millis(first.datetime)
-                     .map(|dt| dt.format("%Y-%m-%d").to_string())
-                     .unwrap_or_else(|| "Unknown".to_string()),
-                 first.open, first.high, first.low, first.close, first.volume);
-        
-        println!("📊 Last bar:  Date: {}, OHLCV: {:.2}/{:.2}/{:.2}/{:.2}/{}", 
-                 chrono::DateTime::from_timestamp_millis(last.datetime)
-                     .map(|dt| dt.format("%Y-%m-%d").to_string())
-                     .unwrap_or_else(|| "Unknown".to_string()),
-                 last.open, last.high, last.low, last.close, last.volume);
+    if bars_count > 0 {
+        println!("✅ Downloaded {} new price bars for {}", bars_count, symbol);
+    } else {
+        println!("📊 {} - No new data needed (already up to date)", symbol);
+    }
+
+    // Clean up test progress file
+    if progress_file.exists() {
+        let _ = std::fs::remove_file(progress_file);
     }
     
     Ok(())

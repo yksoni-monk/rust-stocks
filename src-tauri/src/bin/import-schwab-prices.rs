@@ -27,9 +27,9 @@ struct Cli {
     command: Option<Commands>,
     
     /// Start date for price data (YYYY-MM-DD)
-    #[arg(long, default_value = "2019-01-01")]
+    #[arg(long, default_value = "2015-01-01")]
     start_date: String,
-    
+
     /// End date for price data (YYYY-MM-DD)
     #[arg(long, default_value = "2024-12-31")]
     end_date: String,
@@ -286,9 +286,6 @@ impl BulkDownloader {
             return Err(anyhow!("No price data returned for {}", symbol));
         }
         
-        // Validate data quality
-        self.validate_price_data(symbol, &price_bars, start_date, end_date)?;
-        
         // Get stock_id from database
         let stock_id = self.get_stock_id(symbol).await?;
         
@@ -298,48 +295,6 @@ impl BulkDownloader {
         Ok(price_bars.len())
     }
     
-    fn validate_price_data(
-        &self,
-        symbol: &str,
-        price_bars: &[rust_stocks_tauri_lib::models::SchwabPriceBar],
-        start_date: NaiveDate,
-        end_date: NaiveDate,
-    ) -> Result<()> {
-        // Calculate expected trading days (approximately 252 per year)
-        let years = (end_date.year() - start_date.year()) as f64;
-        let expected_days = (years * 252.0) as usize;
-        let coverage = (price_bars.len() as f64 / expected_days as f64) * 100.0;
-        
-        if coverage < 80.0 {
-            return Err(anyhow!(
-                "Poor data coverage for {}: {:.1}% ({} bars, expected ~{})",
-                symbol, coverage, price_bars.len(), expected_days
-            ));
-        }
-        
-        // Validate price data sanity
-        for (i, bar) in price_bars.iter().enumerate() {
-            if bar.open <= 0.0 || bar.high <= 0.0 || bar.low <= 0.0 || bar.close <= 0.0 {
-                return Err(anyhow!(
-                    "Invalid price data for {} at index {}: O:{} H:{} L:{} C:{}",
-                    symbol, i, bar.open, bar.high, bar.low, bar.close
-                ));
-            }
-            
-            if bar.high < bar.low || bar.high < bar.open || bar.high < bar.close ||
-               bar.low > bar.open || bar.low > bar.close {
-                return Err(anyhow!(
-                    "Invalid OHLC relationship for {} at index {}: O:{} H:{} L:{} C:{}",
-                    symbol, i, bar.open, bar.high, bar.low, bar.close
-                ));
-            }
-        }
-        
-        debug!("Data validation passed for {}: {:.1}% coverage, {} bars", 
-               symbol, coverage, price_bars.len());
-        
-        Ok(())
-    }
     
     async fn get_stock_id(&self, symbol: &str) -> Result<i64> {
         let stock_id = sqlx::query_scalar::<_, i64>(

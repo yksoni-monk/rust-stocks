@@ -46,6 +46,10 @@ path = "src/bin/db_admin.rs"
 name = "import-schwab-prices"
 path = "src/bin/import-schwab-prices.rs"
 
+[[bin]]
+name = "import-edgar-data"
+path = "src/bin/import-edgar-data.rs"
+
 
 
 [lib]

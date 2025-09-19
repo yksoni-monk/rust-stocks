@@ -579,18 +579,13 @@ impl DataRefreshOrchestrator {
     async fn calculate_pe_ratios_internal(&self) -> Result<i64> {
         println!("📊 Calculating P/E ratios (parallel processing)...");
 
-        // Phase 1: Calculate EPS (if missing) - parallelized
-        println!("🧮 PHASE 1: EPS Calculation (parallel)");
-        let eps_count = self.calculate_eps_parallel().await?;
-        println!("✅ Phase 1 Complete: {} EPS values calculated", eps_count);
+        // Single phase: Calculate P/E ratios directly from income_statements - parallelized
+        println!("📊 PHASE 1: P/E Ratio Calculation (parallel)");
+        let pe_count = self.calculate_eps_parallel().await?; // This now calculates P/E ratios directly
+        println!("✅ Phase 1 Complete: {} P/E ratios calculated", pe_count);
 
-        // Phase 2: Calculate P/E ratios - parallelized by stock
-        println!("📊 PHASE 2: P/E Ratio Calculation (parallel)");
-        let pe_count = self.calculate_pe_ratios_parallel().await?;
-        println!("✅ Phase 2 Complete: {} P/E ratios calculated", pe_count);
-
-        // Phase 3: Refresh cache table
-        println!("🔄 PHASE 3: Refresh cache table");
+        // Phase 2: Refresh cache table
+        println!("🔄 PHASE 2: Refresh cache table");
         let _ = sqlx::query("DROP TABLE IF EXISTS sp500_pe_cache").execute(&self.pool).await;
 
         let create_cache = "
@@ -601,11 +596,11 @@ impl DataRefreshOrchestrator {
                 dp.close_price as current_price,
                 dvr.pe_ratio,
                 dvr.market_cap,
-                dvr.shares_outstanding,
+                dvr.price,
                 dp.date as price_date
             FROM stocks s
             JOIN daily_prices dp ON s.id = dp.stock_id
-            JOIN daily_valuation_ratios dvr ON s.id = dvr.stock_id
+            JOIN daily_valuation_ratios dvr ON s.id = dvr.stock_id AND dvr.date = dp.date
             WHERE s.status = 'active'
             AND dp.date = (SELECT MAX(date) FROM daily_prices WHERE stock_id = s.id)
             AND dvr.pe_ratio IS NOT NULL
@@ -613,28 +608,27 @@ impl DataRefreshOrchestrator {
         ";
 
         match sqlx::query(create_cache).execute(&self.pool).await {
-            Ok(_) => println!("✅ Phase 3 Complete: Cache table refreshed"),
-            Err(e) => println!("⚠️ Phase 3 Warning: Cache refresh failed: {}", e),
+            Ok(_) => println!("✅ Phase 2 Complete: Cache table refreshed"),
+            Err(e) => println!("⚠️ Phase 2 Warning: Cache refresh failed: {}", e),
         }
 
-        let total_processed = eps_count + pe_count;
-        println!("✅ P/E calculation completed - {} total records processed", total_processed);
-        Ok(total_processed as i64)
+        println!("✅ P/E calculation completed - {} total records processed", pe_count);
+        Ok(pe_count as i64)
     }
 
-    /// Parallel EPS calculation by stock
+    /// Parallel EPS calculation by stock using income_statements table
     async fn calculate_eps_parallel(&self) -> Result<usize> {
         println!("🧮 Parallel EPS calculation starting...");
 
-        // Get stocks that need EPS calculation
+        // Get stocks that need EPS calculation in income_statements
         let stocks_query = r#"
-            SELECT DISTINCT qf.stock_id, s.symbol
-            FROM quarterly_financials qf
-            JOIN stocks s ON s.id = qf.stock_id
-            WHERE qf.net_income IS NOT NULL
-            AND qf.shares_diluted IS NOT NULL
-            AND qf.shares_diluted > 0
-            AND qf.eps IS NULL
+            SELECT DISTINCT i.stock_id, s.symbol
+            FROM income_statements i
+            JOIN stocks s ON s.id = i.stock_id
+            WHERE i.net_income IS NOT NULL
+            AND i.shares_diluted IS NOT NULL
+            AND i.shares_diluted > 0
+            AND i.period_type = 'TTM'
             ORDER BY s.symbol
         "#;
 
@@ -647,7 +641,7 @@ impl DataRefreshOrchestrator {
             return Ok(0);
         }
 
-        println!("📊 Found {} stocks needing EPS calculation", stocks.len());
+        println!("📊 Found {} stocks for EPS calculation", stocks.len());
 
         // Parallel processing with semaphore
         let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(30)); // Max 30 concurrent
@@ -660,122 +654,35 @@ impl DataRefreshOrchestrator {
             let task = tokio::spawn(async move {
                 let _permit = permit.acquire().await.unwrap();
 
-                // Calculate EPS for this stock
-                let eps_query = r#"
-                    UPDATE quarterly_financials
-                    SET eps = net_income / shares_diluted
-                    WHERE stock_id = ?
-                    AND net_income IS NOT NULL
-                    AND shares_diluted IS NOT NULL
-                    AND shares_diluted > 0
-                    AND eps IS NULL
-                "#;
-
-                match sqlx::query(eps_query)
-                    .bind(stock_id)
-                    .execute(&pool)
-                    .await
-                {
-                    Ok(result) => {
-                        let rows_updated = result.rows_affected();
-                        if rows_updated > 0 {
-                            println!("✅ {} - {} EPS values calculated", symbol, rows_updated);
-                        }
-                        Ok((symbol, rows_updated))
-                    }
-                    Err(e) => {
-                        println!("⚠️ {} - EPS calculation failed: {}", symbol, e);
-                        Err(anyhow!("EPS failed for {}: {}", symbol, e))
-                    }
-                }
-            });
-            tasks.push(task);
-        }
-
-        // Wait for all tasks to complete
-        println!("🚀 Processing {} stocks concurrently (max 30 parallel)...", tasks.len());
-
-        let mut total_eps_calculated = 0;
-        let mut processed_stocks = 0;
-
-        for task in tasks {
-            match task.await {
-                Ok(Ok((_symbol, eps_count))) => {
-                    total_eps_calculated += eps_count as usize;
-                    processed_stocks += 1;
-                }
-                Ok(Err(e)) => {
-                    println!("⚠️ EPS task failed: {}", e);
-                }
-                Err(e) => {
-                    println!("⚠️ EPS task panicked: {}", e);
-                }
-            }
-        }
-
-        println!("✅ EPS calculation completed - {} stocks, {} EPS values",
-                processed_stocks, total_eps_calculated);
-        Ok(total_eps_calculated)
-    }
-
-    /// Parallel P/E ratio calculation by stock
-    async fn calculate_pe_ratios_parallel(&self) -> Result<usize> {
-        println!("📊 Parallel P/E ratio calculation starting...");
-
-        // Get stocks that have both price data and EPS data for P/E calculation
-        let stocks_query = r#"
-            SELECT DISTINCT dp.stock_id, s.symbol
-            FROM daily_prices dp
-            JOIN stocks s ON s.id = dp.stock_id
-            JOIN quarterly_financials qf ON qf.stock_id = dp.stock_id
-            WHERE dp.close_price IS NOT NULL
-            AND dp.close_price > 0
-            AND qf.eps IS NOT NULL
-            AND qf.eps != 0
-            AND s.status = 'active'
-            ORDER BY s.symbol
-        "#;
-
-        let stocks = sqlx::query_as::<_, (i32, String)>(stocks_query)
-            .fetch_all(&self.pool)
-            .await?;
-
-        if stocks.is_empty() {
-            println!("📊 No stocks available for P/E calculation");
-            return Ok(0);
-        }
-
-        println!("📊 Found {} stocks for P/E calculation", stocks.len());
-
-        // Parallel processing with semaphore
-        let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(25)); // Max 25 concurrent
-        let mut tasks = Vec::new();
-
-        for (stock_id, symbol) in stocks {
-            let permit = semaphore.clone();
-            let pool = self.pool.clone();
-
-            let task = tokio::spawn(async move {
-                let _permit = permit.acquire().await.unwrap();
-
-                // Calculate P/E ratios for this stock using batch processing
+                // Calculate and store P/E ratios directly (this replaces separate EPS calculation)
                 let pe_calculation = r#"
                     INSERT OR REPLACE INTO daily_valuation_ratios
-                    (stock_id, date, pe_ratio, market_cap, shares_outstanding, created_at)
+                    (stock_id, date, pe_ratio, market_cap, price)
                     SELECT
                         dp.stock_id,
                         dp.date,
-                        CASE WHEN qf.eps > 0 THEN dp.close_price / qf.eps ELSE NULL END as pe_ratio,
-                        dp.close_price * COALESCE(dp.volume, 0) as market_cap,
-                        COALESCE(dp.volume, 0) as shares_outstanding,
-                        datetime('now') as created_at
+                        CASE
+                            WHEN i.shares_diluted > 0 AND i.net_income > 0
+                            THEN dp.close_price / (i.net_income / i.shares_diluted)
+                            ELSE NULL
+                        END as pe_ratio,
+                        CASE
+                            WHEN i.shares_diluted > 0
+                            THEN dp.close_price * i.shares_diluted
+                            ELSE NULL
+                        END as market_cap,
+                        dp.close_price as price
                     FROM daily_prices dp
                     JOIN (
-                        SELECT stock_id, eps, fiscal_year, fiscal_period,
-                               ROW_NUMBER() OVER (PARTITION BY stock_id ORDER BY fiscal_year DESC, fiscal_period DESC) as rn
-                        FROM quarterly_financials
-                        WHERE stock_id = ? AND eps IS NOT NULL AND eps != 0
-                    ) qf ON qf.stock_id = dp.stock_id AND qf.rn = 1
+                        SELECT stock_id, net_income, shares_diluted, fiscal_year, report_date,
+                               ROW_NUMBER() OVER (PARTITION BY stock_id ORDER BY report_date DESC) as rn
+                        FROM income_statements
+                        WHERE stock_id = ?
+                        AND period_type = 'TTM'
+                        AND net_income IS NOT NULL
+                        AND shares_diluted IS NOT NULL
+                        AND shares_diluted > 0
+                    ) i ON i.stock_id = dp.stock_id AND i.rn = 1
                     WHERE dp.stock_id = ?
                     AND dp.close_price IS NOT NULL
                     AND dp.close_price > 0
@@ -804,15 +711,15 @@ impl DataRefreshOrchestrator {
         }
 
         // Wait for all tasks to complete
-        println!("🚀 Processing {} stocks concurrently (max 25 parallel)...", tasks.len());
+        println!("🚀 Processing {} stocks concurrently (max 30 parallel)...", tasks.len());
 
-        let mut total_pe_calculated = 0;
+        let mut total_ratios_calculated = 0;
         let mut processed_stocks = 0;
 
         for task in tasks {
             match task.await {
-                Ok(Ok((_symbol, pe_count))) => {
-                    total_pe_calculated += pe_count as usize;
+                Ok(Ok((_symbol, ratio_count))) => {
+                    total_ratios_calculated += ratio_count as usize;
                     processed_stocks += 1;
                 }
                 Ok(Err(e)) => {
@@ -825,9 +732,10 @@ impl DataRefreshOrchestrator {
         }
 
         println!("✅ P/E ratio calculation completed - {} stocks, {} P/E ratios",
-                processed_stocks, total_pe_calculated);
-        Ok(total_pe_calculated)
+                processed_stocks, total_ratios_calculated);
+        Ok(total_ratios_calculated)
     }
+
 
     /// Calculate P/S and EV/S ratios (internal helper)
     async fn calculate_ps_evs_ratios_internal(&self) -> Result<i64> {

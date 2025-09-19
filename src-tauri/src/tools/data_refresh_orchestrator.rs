@@ -1,5 +1,5 @@
 use anyhow::{Result, anyhow};
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{SqlitePool, Row};
 use std::collections::HashMap;
@@ -10,12 +10,11 @@ use uuid::Uuid;
 
 use crate::tools::data_freshness_checker::{DataFreshnessChecker, SystemFreshnessReport};
 use crate::tools::ratio_calculator;
-use crate::tools::simfin_importer::{calculate_and_store_eps, calculate_and_store_pe_ratios};
 use crate::tools::date_range_calculator::DateRangeCalculator;
 use crate::tools::edgar_extractor::EdgarDataExtractor;
 use crate::api::schwab_client::SchwabClient;
 use crate::api::StockDataProvider;
-use crate::models::{Config, SchwabPriceBar};
+use crate::models::Config;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, clap::ValueEnum)]
 pub enum RefreshMode {
@@ -286,7 +285,7 @@ impl DataRefreshOrchestrator {
 
         // Load configuration and create Schwab client
         let config = Config::from_env()?;
-        let schwab_client = SchwabClient::new(&config)?;
+        let _schwab_client = SchwabClient::new(&config)?;
 
         // Get today's date for end date
         let end_date = chrono::Local::now().naive_local().date();
@@ -432,9 +431,9 @@ impl DataRefreshOrchestrator {
         Ok(total_records as i64)
     }
 
-    /// Refresh all EDGAR financial data (income, balance, cash flow)
+    /// Refresh all EDGAR financial data (income, balance, cash flow) - PARALLEL VERSION
     async fn refresh_financials_internal(&self, _session_id: &str) -> Result<i64> {
-        println!("📈 Refreshing EDGAR financial data...");
+        println!("📈 Refreshing EDGAR financial data (parallel processing)...");
 
         // Get S&P 500 CIKs for processing
         let ciks_query = r#"
@@ -451,46 +450,77 @@ impl DataRefreshOrchestrator {
 
         println!("📊 Found {} S&P 500 companies for EDGAR extraction", cik_data.len());
 
+        // Parallel processing with semaphore
+        let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(20)); // Max 20 concurrent
+        let edgar_data_path = std::env::var("EDGAR_DATA_PATH")
+            .unwrap_or_else(|_| "edgar_data".to_string());
+
+        let mut tasks = Vec::new();
+        let total_companies = cik_data.len();
+
+        for (cik_str, stock_id, symbol, company_name) in cik_data {
+            let permit = semaphore.clone();
+            let pool = self.pool.clone();
+            let edgar_path = edgar_data_path.clone();
+
+            let task = tokio::spawn(async move {
+                let _permit = permit.acquire().await.unwrap();
+
+                // Parse CIK string to i32
+                let cik = match cik_str.parse::<i32>() {
+                    Ok(c) => c,
+                    Err(e) => return Err(anyhow!("Invalid CIK format '{}': {}", cik_str, e)),
+                };
+
+                // Create extractor instance for this task
+                let extractor = EdgarDataExtractor::new(&edgar_path, pool);
+
+                // Extract and store financial data
+                match extractor.extract_company_data(cik).await {
+                    Ok(financial_data) => {
+                        match extractor.store_financial_data(stock_id, &financial_data).await {
+                            Ok(records_stored) => {
+                                if records_stored > 0 {
+                                    println!("✅ {} ({}) - {} financial records", symbol, company_name, records_stored);
+                                }
+                                Ok((symbol, records_stored))
+                            }
+                            Err(e) => {
+                                println!("⚠️ {} - Failed to store: {}", symbol, e);
+                                Err(anyhow!("Store failed for {}: {}", symbol, e))
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        println!("⚠️ {} - EDGAR extraction failed: {}", symbol, e);
+                        Err(anyhow!("Extract failed for {}: {}", symbol, e))
+                    }
+                }
+            });
+            tasks.push(task);
+        }
+
+        // Wait for all tasks to complete
+        println!("🚀 Processing {} companies concurrently (max 20 parallel)...", tasks.len());
+
         let mut total_records = 0;
         let mut processed_companies = 0;
 
-        let total_companies = cik_data.len();
-        for (cik_str, stock_id, symbol, company_name) in cik_data {
-            println!("🔄 Processing {} ({}) - CIK: {}", symbol, company_name, cik_str);
-
-            // Parse CIK string to i32 for EdgarDataExtractor
-            let cik = cik_str.parse::<i32>()
-                .map_err(|e| anyhow!("Invalid CIK format '{}': {}", cik_str, e))?;
-
-            // Use the existing EdgarDataExtractor
-            match self.edgar_extractor.extract_company_data(cik).await {
-                Ok(financial_data) => {
-                    // Store the financial data in the database
-                    match self.edgar_extractor.store_financial_data(stock_id, &financial_data).await {
-                        Ok(records_stored) => {
-                            total_records += records_stored as usize;
-                            processed_companies += 1;
-
-                            if records_stored > 0 {
-                                println!("✅ {} - {} financial records stored", symbol, records_stored);
-                            } else {
-                                println!("📊 {} - No new financial data", symbol);
-                            }
-                        }
-                        Err(e) => {
-                            println!("⚠️ {} - Failed to store financial data: {}", symbol, e);
-                        }
-                    }
+        for (i, task) in tasks.into_iter().enumerate() {
+            match task.await {
+                Ok(Ok((_symbol, records))) => {
+                    total_records += records as i64;
+                    processed_companies += 1;
+                }
+                Ok(Err(e)) => {
+                    println!("⚠️ Task failed: {}", e);
                 }
                 Err(e) => {
-                    println!("⚠️ {} - EDGAR extraction failed: {}", symbol, e);
+                    println!("⚠️ Task {} panicked: {}", i, e);
                 }
             }
 
-            // Rate limiting - small delay between companies
-            sleep(StdDuration::from_millis(100)).await;
-
-            // Show progress every 50 companies
+            // Progress update every 50 companies
             if processed_companies % 50 == 0 {
                 println!("📊 Progress: {}/{} companies processed, {} total records",
                          processed_companies, total_companies, total_records);
@@ -499,7 +529,7 @@ impl DataRefreshOrchestrator {
 
         println!("✅ S&P 500 EDGAR financial data refresh completed - {} companies, {} records",
                 processed_companies, total_records);
-        Ok(total_records as i64)
+        Ok(total_records)
     }
 
     /// Calculate all ratios and metrics for all algorithms
@@ -545,34 +575,19 @@ impl DataRefreshOrchestrator {
         Ok(total_records)
     }
 
-    /// Calculate P/E ratios (internal helper)
+    /// Calculate P/E ratios (internal helper) - PARALLEL VERSION
     async fn calculate_pe_ratios_internal(&self) -> Result<i64> {
-        println!("📊 Calculating P/E ratios...");
+        println!("📊 Calculating P/E ratios (parallel processing)...");
 
-        // Phase 1: Calculate EPS (if missing)
-        println!("🧮 PHASE 1: EPS Calculation");
-        let eps_count = match calculate_and_store_eps(&self.pool).await {
-            Ok(count) => {
-                println!("✅ Phase 1 Complete: {} EPS values calculated", count);
-                count
-            }
-            Err(e) => {
-                println!("⚠️ Phase 1 Warning: {} (maybe EPS already exists)", e);
-                0
-            }
-        };
+        // Phase 1: Calculate EPS (if missing) - parallelized
+        println!("🧮 PHASE 1: EPS Calculation (parallel)");
+        let eps_count = self.calculate_eps_parallel().await?;
+        println!("✅ Phase 1 Complete: {} EPS values calculated", eps_count);
 
-        // Phase 2: Calculate P/E ratios
-        println!("📊 PHASE 2: P/E Ratio Calculation");
-        let pe_count = match calculate_and_store_pe_ratios(&self.pool).await {
-            Ok(count) => {
-                println!("✅ Phase 2 Complete: {} P/E ratios calculated", count);
-                count
-            }
-            Err(e) => {
-                return Err(anyhow!("P/E ratio calculation failed: {}", e));
-            }
-        };
+        // Phase 2: Calculate P/E ratios - parallelized by stock
+        println!("📊 PHASE 2: P/E Ratio Calculation (parallel)");
+        let pe_count = self.calculate_pe_ratios_parallel().await?;
+        println!("✅ Phase 2 Complete: {} P/E ratios calculated", pe_count);
 
         // Phase 3: Refresh cache table
         println!("🔄 PHASE 3: Refresh cache table");
@@ -605,6 +620,213 @@ impl DataRefreshOrchestrator {
         let total_processed = eps_count + pe_count;
         println!("✅ P/E calculation completed - {} total records processed", total_processed);
         Ok(total_processed as i64)
+    }
+
+    /// Parallel EPS calculation by stock
+    async fn calculate_eps_parallel(&self) -> Result<usize> {
+        println!("🧮 Parallel EPS calculation starting...");
+
+        // Get stocks that need EPS calculation
+        let stocks_query = r#"
+            SELECT DISTINCT qf.stock_id, s.symbol
+            FROM quarterly_financials qf
+            JOIN stocks s ON s.id = qf.stock_id
+            WHERE qf.net_income IS NOT NULL
+            AND qf.shares_diluted IS NOT NULL
+            AND qf.shares_diluted > 0
+            AND qf.eps IS NULL
+            ORDER BY s.symbol
+        "#;
+
+        let stocks = sqlx::query_as::<_, (i32, String)>(stocks_query)
+            .fetch_all(&self.pool)
+            .await?;
+
+        if stocks.is_empty() {
+            println!("📊 No stocks need EPS calculation");
+            return Ok(0);
+        }
+
+        println!("📊 Found {} stocks needing EPS calculation", stocks.len());
+
+        // Parallel processing with semaphore
+        let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(30)); // Max 30 concurrent
+        let mut tasks = Vec::new();
+
+        for (stock_id, symbol) in stocks {
+            let permit = semaphore.clone();
+            let pool = self.pool.clone();
+
+            let task = tokio::spawn(async move {
+                let _permit = permit.acquire().await.unwrap();
+
+                // Calculate EPS for this stock
+                let eps_query = r#"
+                    UPDATE quarterly_financials
+                    SET eps = net_income / shares_diluted
+                    WHERE stock_id = ?
+                    AND net_income IS NOT NULL
+                    AND shares_diluted IS NOT NULL
+                    AND shares_diluted > 0
+                    AND eps IS NULL
+                "#;
+
+                match sqlx::query(eps_query)
+                    .bind(stock_id)
+                    .execute(&pool)
+                    .await
+                {
+                    Ok(result) => {
+                        let rows_updated = result.rows_affected();
+                        if rows_updated > 0 {
+                            println!("✅ {} - {} EPS values calculated", symbol, rows_updated);
+                        }
+                        Ok((symbol, rows_updated))
+                    }
+                    Err(e) => {
+                        println!("⚠️ {} - EPS calculation failed: {}", symbol, e);
+                        Err(anyhow!("EPS failed for {}: {}", symbol, e))
+                    }
+                }
+            });
+            tasks.push(task);
+        }
+
+        // Wait for all tasks to complete
+        println!("🚀 Processing {} stocks concurrently (max 30 parallel)...", tasks.len());
+
+        let mut total_eps_calculated = 0;
+        let mut processed_stocks = 0;
+
+        for task in tasks {
+            match task.await {
+                Ok(Ok((_symbol, eps_count))) => {
+                    total_eps_calculated += eps_count as usize;
+                    processed_stocks += 1;
+                }
+                Ok(Err(e)) => {
+                    println!("⚠️ EPS task failed: {}", e);
+                }
+                Err(e) => {
+                    println!("⚠️ EPS task panicked: {}", e);
+                }
+            }
+        }
+
+        println!("✅ EPS calculation completed - {} stocks, {} EPS values",
+                processed_stocks, total_eps_calculated);
+        Ok(total_eps_calculated)
+    }
+
+    /// Parallel P/E ratio calculation by stock
+    async fn calculate_pe_ratios_parallel(&self) -> Result<usize> {
+        println!("📊 Parallel P/E ratio calculation starting...");
+
+        // Get stocks that have both price data and EPS data for P/E calculation
+        let stocks_query = r#"
+            SELECT DISTINCT dp.stock_id, s.symbol
+            FROM daily_prices dp
+            JOIN stocks s ON s.id = dp.stock_id
+            JOIN quarterly_financials qf ON qf.stock_id = dp.stock_id
+            WHERE dp.close_price IS NOT NULL
+            AND dp.close_price > 0
+            AND qf.eps IS NOT NULL
+            AND qf.eps != 0
+            AND s.status = 'active'
+            ORDER BY s.symbol
+        "#;
+
+        let stocks = sqlx::query_as::<_, (i32, String)>(stocks_query)
+            .fetch_all(&self.pool)
+            .await?;
+
+        if stocks.is_empty() {
+            println!("📊 No stocks available for P/E calculation");
+            return Ok(0);
+        }
+
+        println!("📊 Found {} stocks for P/E calculation", stocks.len());
+
+        // Parallel processing with semaphore
+        let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(25)); // Max 25 concurrent
+        let mut tasks = Vec::new();
+
+        for (stock_id, symbol) in stocks {
+            let permit = semaphore.clone();
+            let pool = self.pool.clone();
+
+            let task = tokio::spawn(async move {
+                let _permit = permit.acquire().await.unwrap();
+
+                // Calculate P/E ratios for this stock using batch processing
+                let pe_calculation = r#"
+                    INSERT OR REPLACE INTO daily_valuation_ratios
+                    (stock_id, date, pe_ratio, market_cap, shares_outstanding, created_at)
+                    SELECT
+                        dp.stock_id,
+                        dp.date,
+                        CASE WHEN qf.eps > 0 THEN dp.close_price / qf.eps ELSE NULL END as pe_ratio,
+                        dp.close_price * COALESCE(dp.volume, 0) as market_cap,
+                        COALESCE(dp.volume, 0) as shares_outstanding,
+                        datetime('now') as created_at
+                    FROM daily_prices dp
+                    JOIN (
+                        SELECT stock_id, eps, fiscal_year, fiscal_period,
+                               ROW_NUMBER() OVER (PARTITION BY stock_id ORDER BY fiscal_year DESC, fiscal_period DESC) as rn
+                        FROM quarterly_financials
+                        WHERE stock_id = ? AND eps IS NOT NULL AND eps != 0
+                    ) qf ON qf.stock_id = dp.stock_id AND qf.rn = 1
+                    WHERE dp.stock_id = ?
+                    AND dp.close_price IS NOT NULL
+                    AND dp.close_price > 0
+                "#;
+
+                match sqlx::query(pe_calculation)
+                    .bind(stock_id)
+                    .bind(stock_id)
+                    .execute(&pool)
+                    .await
+                {
+                    Ok(result) => {
+                        let rows_updated = result.rows_affected();
+                        if rows_updated > 0 {
+                            println!("✅ {} - {} P/E ratios calculated", symbol, rows_updated);
+                        }
+                        Ok((symbol, rows_updated))
+                    }
+                    Err(e) => {
+                        println!("⚠️ {} - P/E calculation failed: {}", symbol, e);
+                        Err(anyhow!("P/E failed for {}: {}", symbol, e))
+                    }
+                }
+            });
+            tasks.push(task);
+        }
+
+        // Wait for all tasks to complete
+        println!("🚀 Processing {} stocks concurrently (max 25 parallel)...", tasks.len());
+
+        let mut total_pe_calculated = 0;
+        let mut processed_stocks = 0;
+
+        for task in tasks {
+            match task.await {
+                Ok(Ok((_symbol, pe_count))) => {
+                    total_pe_calculated += pe_count as usize;
+                    processed_stocks += 1;
+                }
+                Ok(Err(e)) => {
+                    println!("⚠️ P/E task failed: {}", e);
+                }
+                Err(e) => {
+                    println!("⚠️ P/E task panicked: {}", e);
+                }
+            }
+        }
+
+        println!("✅ P/E ratio calculation completed - {} stocks, {} P/E ratios",
+                processed_stocks, total_pe_calculated);
+        Ok(total_pe_calculated)
     }
 
     /// Calculate P/S and EV/S ratios (internal helper)

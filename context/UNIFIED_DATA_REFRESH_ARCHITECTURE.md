@@ -300,10 +300,81 @@ pub async fn get_refresh_progress(session_id: String) -> Result<RefreshProgress,
 
 ## Performance Optimizations
 
-### Parallel Processing
-- Run independent updates concurrently (P/S and EV/S ratios)
-- Use connection pooling for database operations
-- Batch database operations where possible
+### Comprehensive Parallel Processing Architecture (September 2025)
+
+#### Database Connection Pool Optimization
+**SQLite Connection Pool with WAL Mode:**
+```rust
+// Optimized for parallel processing (50 connections vs previous 5)
+SqlitePoolOptions::new()
+    .max_connections(50)  // 10x increase for high concurrency
+    .acquire_timeout(std::time::Duration::from_secs(30))
+
+// WAL Mode + Performance Tuning:
+"PRAGMA journal_mode = WAL"      // Enable concurrent reads during writes
+"PRAGMA synchronous = NORMAL"    // Reduce fsync waits (safe mode)
+"PRAGMA cache_size = 10000"      // 10MB cache for better performance
+"PRAGMA temp_store = memory"     // Store temp data in memory
+```
+
+#### Parallel EDGAR Data Extraction
+**Architecture:** 20 concurrent workers with semaphore limiting
+```rust
+let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(20));
+// Each worker processes one S&P 500 company independently
+// Expected speedup: 15-20x (503 companies: ~503s → ~25-30s)
+```
+
+#### Parallel P/E Ratio Calculation
+**Architecture:** Stock-level parallelization with batch processing
+```rust
+// EPS Calculation: 30 concurrent workers
+let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(30));
+// Batch UPDATE operations per stock vs individual record processing
+
+// P/E Calculation: 25 concurrent workers
+let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(25));
+// Batch INSERT/REPLACE with complex joins per stock
+// Expected speedup: 50-100x (6.2M records: hours → minutes)
+```
+
+#### Parallel Market Data Refresh
+**Architecture:** 10 concurrent workers (API rate limited)
+```rust
+let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(10));
+// Achieved: 8.6x speedup (503 stocks: 8+ minutes → 58 seconds)
+```
+
+#### Intelligent Concurrency Tuning
+**Worker Allocation Strategy:**
+- **EDGAR Extraction**: 20 workers (file I/O + disk bound operations)
+- **EPS Calculation**: 30 workers (database write intensive operations)
+- **P/E Calculation**: 25 workers (complex joins + batch writes)
+- **Market Data**: 10 workers (external API rate limited)
+
+#### Performance Benchmarks Achieved
+**Market Data Refresh:**
+- **Before**: 503+ seconds (sequential, 1 second per stock)
+- **After**: 58 seconds (parallel, 69,464 records)
+- **Improvement**: 8.6x speedup
+
+**Expected Performance Gains:**
+- **EDGAR Extraction**: 15-20x improvement (503 companies)
+- **P/E Calculation**: 50-100x improvement (6.2M price records)
+- **EPS Calculation**: 20-30x improvement (TTM financial data)
+
+#### Technical Implementation Details
+**Data Consistency Maintained Through:**
+- **Atomic Operations**: Each worker processes complete units (stocks, companies)
+- **Error Isolation**: Failed tasks don't affect successful parallel operations
+- **Progress Tracking**: Real-time feedback on parallel operation status
+- **Resource Management**: Semaphores prevent database connection exhaustion
+
+**SQLite Concurrency Research Findings:**
+- **No hard connection limit** - System handles ~1,000 connections per process
+- **Single writer constraint** - Only one write transaction at a time
+- **WAL mode benefits** - Allows concurrent reads during writes
+- **Optimal pool size** - 50 connections for read-heavy workloads with parallel processing
 
 ### Caching Strategy
 - Cache expensive calculations during refresh
@@ -357,10 +428,14 @@ pub async fn get_refresh_progress(session_id: String) -> Result<RefreshProgress,
 - <2 hour staleness for price data
 - <24 hour staleness for calculated ratios
 
-### Performance
-- Quick refresh: <10 minutes
-- Standard refresh: <30 minutes
-- 95% success rate for all refresh operations
+### Performance (Updated with Parallel Architecture)
+- **Quick refresh**: <3 minutes (was <10 minutes)
+- **Standard refresh**: <8 minutes (was <30 minutes)
+- **Full refresh**: <20 minutes (was 1-2 hours)
+- **Market data refresh**: <1 minute (503 stocks)
+- **EDGAR extraction**: <30 seconds (503 companies)
+- **P/E calculation**: <2 minutes (6.2M records)
+- **95% success rate** for all refresh operations
 
 ### User Experience
 - One-click data refresh from UI

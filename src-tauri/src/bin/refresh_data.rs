@@ -51,12 +51,33 @@ async fn main() -> Result<()> {
         tracing_subscriber::fmt::init();
     }
 
-    // Auto-detect database path
+    // Auto-detect database path with WAL mode optimization
     let database_path = "db/stocks.db";
     let database_url = format!("sqlite:{}?mode=rwc", database_path);
+
+    // Optimized connection pool for parallel processing
     let pool = SqlitePoolOptions::new()
-        .max_connections(5)
+        .max_connections(50) // Increased for parallel processing
+        .acquire_timeout(std::time::Duration::from_secs(30))
         .connect(&database_url)
+        .await?;
+
+    // Enable WAL mode for better concurrency
+    sqlx::query("PRAGMA journal_mode = WAL")
+        .execute(&pool)
+        .await?;
+
+    // Optimize SQLite settings for performance
+    sqlx::query("PRAGMA synchronous = NORMAL")
+        .execute(&pool)
+        .await?;
+
+    sqlx::query("PRAGMA cache_size = 10000")
+        .execute(&pool)
+        .await?;
+
+    sqlx::query("PRAGMA temp_store = memory")
+        .execute(&pool)
         .await?;
 
     println!("🔄 Stock Data Refresh");

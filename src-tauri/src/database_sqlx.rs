@@ -23,8 +23,27 @@ impl DatabaseManagerSqlx {
         println!("Connecting to database: {}", connection_string);
         
         let pool = SqlitePoolOptions::new()
-            .max_connections(5)
+            .max_connections(50) // Increased for parallel processing
+            .acquire_timeout(std::time::Duration::from_secs(30))
             .connect_with(SqliteConnectOptions::new().filename(database_url).create_if_missing(true))
+            .await?;
+
+        // Enable WAL mode for better concurrency
+        sqlx::query("PRAGMA journal_mode = WAL")
+            .execute(&pool)
+            .await?;
+
+        // Optimize SQLite settings for performance
+        sqlx::query("PRAGMA synchronous = NORMAL")
+            .execute(&pool)
+            .await?;
+
+        sqlx::query("PRAGMA cache_size = 10000")
+            .execute(&pool)
+            .await?;
+
+        sqlx::query("PRAGMA temp_store = memory")
+            .execute(&pool)
             .await?;
         
         println!("Connected successfully, creating schema...");

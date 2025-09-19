@@ -8,18 +8,33 @@ use crate::models::graham_value::{
 };
 use crate::analysis::graham_screener::GrahamScreener;
 use crate::database::helpers::get_database_connection;
+use crate::tools::data_freshness_checker::DataFreshnessChecker;
 
 /// Run Graham value screening with specified criteria
 #[tauri::command]
 pub async fn run_graham_screening(
     criteria: GrahamScreeningCriteria,
 ) -> Result<Vec<GrahamScreeningResultWithDetails>, String> {
-    println!("🔍 Starting Graham screening with criteria: max P/E {}, max P/B {}", 
+    println!("🔍 Starting Graham screening with criteria: max P/E {}, max P/B {}",
              criteria.max_pe_ratio, criteria.max_pb_ratio);
 
     let pool = get_database_connection().await
         .map_err(|e| format!("Database connection failed: {}", e))?;
-    
+
+    // Check data freshness before proceeding
+    let freshness_checker = DataFreshnessChecker::new(pool.clone());
+    let freshness_report = freshness_checker.check_system_freshness().await
+        .map_err(|e| format!("Failed to check data freshness: {}", e))?;
+
+    // Check if Graham screening can proceed
+    if !freshness_report.screening_readiness.graham_screening {
+        let blocking_issues = freshness_report.screening_readiness.blocking_issues.join("; ");
+        return Err(format!(
+            "Graham value screening cannot proceed due to stale data. Issues: {}. Please refresh data using: cargo run --bin refresh_data --mode standard",
+            blocking_issues
+        ));
+    }
+
     let screener = GrahamScreener::new(pool);
     
     screener

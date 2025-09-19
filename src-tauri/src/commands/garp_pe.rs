@@ -1,18 +1,33 @@
 use crate::models::garp_pe::{GarpPeScreeningResult, GarpPeScreeningCriteria};
 use crate::database::helpers::get_database_connection;
+use crate::tools::data_freshness_checker::DataFreshnessChecker;
 
 #[tauri::command]
 pub async fn get_garp_pe_screening_results(
-    stock_tickers: Vec<String>, 
+    stock_tickers: Vec<String>,
     criteria: Option<GarpPeScreeningCriteria>,
     limit: Option<i32>
 ) -> Result<Vec<GarpPeScreeningResult>, String> {
     let pool = get_database_connection().await?;
     let criteria = criteria.unwrap_or_default();
     let limit_value = limit.unwrap_or(50);
-    
+
     if stock_tickers.is_empty() {
         return Ok(vec![]);
+    }
+
+    // Check data freshness before proceeding
+    let freshness_checker = DataFreshnessChecker::new(pool.clone());
+    let freshness_report = freshness_checker.check_system_freshness().await
+        .map_err(|e| format!("Failed to check data freshness: {}", e))?;
+
+    // Check if GARP screening can proceed
+    if !freshness_report.screening_readiness.garp_screening {
+        let blocking_issues = freshness_report.screening_readiness.blocking_issues.join("; ");
+        return Err(format!(
+            "GARP P/E screening cannot proceed due to stale data. Issues: {}. Please refresh data using: cargo run --bin refresh_data --mode quick",
+            blocking_issues
+        ));
     }
     
     // Create placeholders for the IN clause

@@ -863,6 +863,232 @@ npm test -- --testNamePattern="GARP.*PE"
 - **Error Handling**: Graceful degradation for missing data
 - **Quality Scoring**: Data completeness assessment
 
+## Future Improvements & Missing Features
+
+### 🚨 **Critical Missing Features**
+
+#### **1. Fair Value Calculation & Overvalued Detection**
+**Current Status**: ⚠️ **Partial Implementation**
+- **What We Have**: PEG ratio calculation and screening (PEG < 1.0)
+- **What's Missing**: 
+  - Absolute fair value price calculation
+  - Overvalued stock detection (PEG > 2.0)
+  - Percentage over/undervaluation display
+  - Fair value vs current price comparison
+
+**Required Implementation**:
+```sql
+-- Add to peg_ratio_analysis view:
+CASE 
+    WHEN peg_ratio > 0 AND eps_growth_rate_ttm > 0 THEN 
+        eps_growth_rate_ttm * 1.0  -- Fair P/E (assuming PEG = 1.0 is fair)
+    ELSE NULL 
+END as fair_pe_ratio,
+
+CASE 
+    WHEN fair_pe_ratio > 0 AND current_eps_ttm > 0 THEN 
+        fair_pe_ratio * current_eps_ttm  -- Fair Price
+    ELSE NULL 
+END as fair_price,
+
+CASE 
+    WHEN fair_price > 0 AND current_price > 0 THEN 
+        (current_price - fair_price) / fair_price * 100  -- % Over/Under valued
+    ELSE NULL 
+END as valuation_premium_percent
+```
+
+#### **2. Enhanced Screening Criteria**
+**Current Status**: ⚠️ **Basic Implementation**
+- **What We Have**: Binary pass/fail screening
+- **What's Missing**:
+  - Graduated scoring system (0-100 scale)
+  - Sector-relative PEG adjustments
+  - Market cap-relative PEG thresholds
+  - Historical PEG percentile ranking
+
+#### **3. Risk Assessment & Quality Metrics**
+**Current Status**: ⚠️ **Basic Implementation**
+- **What We Have**: Simple quality score (0-100)
+- **What's Missing**:
+  - PEG volatility risk assessment
+  - Earnings quality scoring
+  - Growth sustainability analysis
+  - Sector-specific risk adjustments
+
+### 🔧 **Architecture Improvements**
+
+#### **1. Enhanced Data Models**
+```rust
+pub struct GarpPeScreeningResult {
+    // ... existing fields ...
+    
+    // NEW: Fair value fields
+    pub fair_pe_ratio: Option<f64>,
+    pub fair_price: Option<f64>,
+    pub valuation_premium_percent: Option<f64>,
+    pub valuation_status: Option<String>, // "Overvalued", "Undervalued", "Fair Value"
+    
+    // NEW: Enhanced screening
+    pub is_overvalued: bool,
+    pub is_undervalued: bool,
+    pub is_fair_value: bool,
+    
+    // NEW: Risk metrics
+    pub peg_volatility_risk: Option<f64>,
+    pub earnings_quality_score: Option<f64>,
+    pub growth_sustainability_score: Option<f64>,
+    
+    // NEW: Sector-relative metrics
+    pub sector_relative_peg: Option<f64>,
+    pub sector_percentile_rank: Option<f64>,
+}
+```
+
+#### **2. Enhanced Screening Criteria**
+```rust
+pub struct GarpPeScreeningCriteria {
+    // ... existing fields ...
+    
+    // NEW: Fair value thresholds
+    pub fair_peg_threshold: f64,        // Default: 1.0
+    pub overvalued_peg_threshold: f64,   // Default: 2.0
+    pub max_valuation_premium: f64,      // Default: 20% (reject if >20% overvalued)
+    
+    // NEW: Risk management
+    pub max_peg_volatility: f64,         // Default: 0.5
+    pub min_earnings_quality: f64,        // Default: 70
+    pub min_growth_sustainability: f64,   // Default: 60
+    
+    // NEW: Sector adjustments
+    pub enable_sector_adjustments: bool,  // Default: true
+    pub sector_percentile_threshold: f64, // Default: 25th percentile
+}
+```
+
+#### **3. New Tauri Commands**
+```rust
+// Enhanced GARP screening with fair value
+#[tauri::command]
+pub async fn get_garp_pe_screening_results_enhanced(
+    stock_tickers: Vec<String>,
+    criteria: Option<GarpPeScreeningCriteria>,
+    include_overvalued: bool,  // NEW: Include overvalued stocks
+    limit: Option<i32>
+) -> Result<Vec<GarpPeScreeningResult>, String>
+
+// Fair value calculation for individual stocks
+#[tauri::command]
+pub async fn calculate_fair_value(
+    symbol: String,
+    method: String  // "peg", "dcf", "graham", "consensus"
+) -> Result<FairValueResult, String>
+
+// Overvalued stock screening
+#[tauri::command]
+pub async fn get_overvalued_stocks(
+    stock_tickers: Vec<String>,
+    criteria: Option<OvervaluedScreeningCriteria>
+) -> Result<Vec<OvervaluedStock>, String>
+```
+
+### 📊 **Frontend Enhancements**
+
+#### **1. Valuation Dashboard**
+```jsx
+// Enhanced GARP results display
+<div className="valuation-dashboard">
+    <div className="valuation-summary">
+        <div className="valuation-status">
+            {stock.valuation_status}: {stock.valuation_premium_percent?.toFixed(1)}%
+        </div>
+        <div className="fair-value-info">
+            Fair Price: ${stock.fair_price?.toFixed(2)}
+            Current Price: ${stock.current_price?.toFixed(2)}
+        </div>
+    </div>
+    
+    <div className="risk-metrics">
+        <div className="risk-score">
+            PEG Volatility Risk: {stock.peg_volatility_risk?.toFixed(1)}
+        </div>
+        <div className="quality-score">
+            Earnings Quality: {stock.earnings_quality_score?.toFixed(0)}/100
+        </div>
+    </div>
+</div>
+```
+
+#### **2. Enhanced Filtering Options**
+```jsx
+// New filtering options
+<div className="enhanced-filters">
+    <div className="valuation-filters">
+        <label>Include Overvalued Stocks:</label>
+        <input type="checkbox" checked={includeOvervalued} />
+        
+        <label>Max Valuation Premium:</label>
+        <select value={maxValuationPremium}>
+            <option value={10}>10%</option>
+            <option value={20}>20%</option>
+            <option value={50}>50%</option>
+        </select>
+    </div>
+    
+    <div className="risk-filters">
+        <label>Max PEG Volatility:</label>
+        <select value={maxPegVolatility}>
+            <option value={0.3}>0.3</option>
+            <option value={0.5}>0.5</option>
+            <option value={1.0}>1.0</option>
+        </select>
+    </div>
+</div>
+```
+
+### 🎯 **Implementation Priority**
+
+#### **Phase 1: Fair Value Calculation (High Priority)**
+- Add fair value price calculation to database views
+- Update Rust models to include fair value fields
+- Enhance frontend to display valuation percentages
+- **Timeline**: 1-2 weeks
+
+#### **Phase 2: Overvalued Detection (High Priority)**
+- Implement overvalued stock screening
+- Add overvalued stock display in frontend
+- Create risk management dashboard
+- **Timeline**: 1-2 weeks
+
+#### **Phase 3: Enhanced Risk Metrics (Medium Priority)**
+- Implement PEG volatility risk assessment
+- Add earnings quality scoring
+- Create sector-relative adjustments
+- **Timeline**: 2-3 weeks
+
+#### **Phase 4: Advanced Features (Low Priority)**
+- DCF-based fair value calculation
+- Consensus fair value from multiple methods
+- Historical fair value tracking
+- **Timeline**: 3-4 weeks
+
+### 📈 **Expected Benefits**
+
+#### **1. Complete Valuation Picture**
+- Users see both undervalued AND overvalued stocks
+- Precise percentage over/undervaluation
+- Fair value vs current price comparison
+
+#### **2. Risk Management**
+- Identify overvalued stocks to avoid or short
+- PEG volatility risk assessment
+- Earnings quality scoring
+
+#### **3. Enhanced Decision Making**
+- Portfolio balance between undervalued and fairly valued stocks
+- Confidence scoring for valuation accuracy
+- Sector-relative valuation adjustments
+
 ---
 
 **This P/E-based GARP implementation plan provides a comprehensive roadmap for implementing the enhanced GARP screening system using PEG ratios and earnings growth for superior investment decision-making.**

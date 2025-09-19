@@ -117,7 +117,16 @@ pub fn run() {
             graham_screening::get_graham_screening_stats,
             graham_screening::get_graham_stock_history,
             graham_screening::get_latest_graham_results,
-            graham_screening::get_graham_sector_summary
+            graham_screening::get_graham_sector_summary,
+
+            // Data refresh commands
+            data_refresh::get_data_freshness_status,
+            data_refresh::check_screening_readiness,
+            data_refresh::start_data_refresh,
+            data_refresh::get_refresh_progress,
+            data_refresh::get_last_refresh_result,
+            data_refresh::cancel_refresh_operation,
+            data_refresh::get_refresh_duration_estimates
         ])
         .setup(|_app| {
             Ok(())

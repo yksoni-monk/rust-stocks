@@ -8,12 +8,20 @@ use uuid::Uuid;
 
 use crate::tools::data_freshness_checker::{DataFreshnessChecker, FreshnessStatus, SystemFreshnessReport};
 use crate::tools::date_range_calculator::DateRangeCalculator;
+use crate::tools::edgar_extractor::EdgarDataExtractor;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, clap::ValueEnum)]
 pub enum RefreshMode {
-    Quick,    // Prices + ratios only (5-15 min)
-    Standard, // + Recent financials (15-30 min)
-    Full,     // + Historical data (1-2 hours)
+    /// Update stock prices + P/E ratios (~40min, unblocks GARP screening)
+    Prices,
+    /// Prices + P/S ratios (~50min, unblocks all screening)
+    Ratios,
+    /// Prices + ratios + historical financials (~2hrs)
+    Financials,
+    /// Prices + ratios + EDGAR cash flow data (~60min, for O'Shaughnessy screening)
+    CashFlow,
+    /// Prices + ratios + complete EDGAR data (~90min, for Piotroski screening)
+    FullEdgar,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -246,6 +254,8 @@ impl DataRefreshOrchestrator {
             "ps_evs_ratios" => self.refresh_ps_evs_ratios(session_id).await?,
             "financial_statements" => self.refresh_financial_statements(session_id).await?,
             "company_metadata" => self.refresh_company_metadata(session_id).await?,
+            "edgar_cash_flow" => self.refresh_edgar_cash_flow(session_id).await?,
+            "edgar_full_extraction" => self.refresh_edgar_full_extraction(session_id).await?,
             _ => return Err(anyhow!("Unknown data source: {}", step.data_source)),
         };
 
@@ -352,6 +362,96 @@ impl DataRefreshOrchestrator {
         Ok(result.rows_affected() as i64)
     }
 
+    /// Refresh EDGAR cash flow data for S&P 500 stocks
+    async fn refresh_edgar_cash_flow(&self, _session_id: &str) -> Result<i64> {
+        println!("💰 Extracting EDGAR cash flow data...");
+
+        let edgar_extractor = EdgarDataExtractor::new("edgar_data", self.pool.clone());
+        let mut total_records = 0;
+
+        // Get S&P 500 CIKs
+        let ciks = self.get_sp500_ciks().await?;
+        println!("🔍 Processing {} S&P 500 companies for cash flow data", ciks.len());
+
+        for (i, (stock_id, cik)) in ciks.iter().enumerate() {
+            if i % 50 == 0 {
+                println!("📊 Progress: {}/{} companies processed", i, ciks.len());
+            }
+
+            match edgar_extractor.extract_company_data(*cik).await {
+                Ok(financial_data) => {
+                    if !financial_data.cash_flow_data.is_empty() {
+                        match edgar_extractor.store_financial_data(*stock_id, &financial_data).await {
+                            Ok(records) => total_records += records,
+                            Err(e) => eprintln!("⚠️ Failed to store data for CIK {}: {}", cik, e),
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("⚠️ Failed to extract EDGAR data for CIK {}: {}", cik, e);
+                }
+            }
+        }
+
+        println!("✅ EDGAR cash flow extraction complete: {} records processed", total_records);
+        Ok(total_records as i64)
+    }
+
+    /// Refresh complete EDGAR financial data for S&P 500 stocks
+    async fn refresh_edgar_full_extraction(&self, _session_id: &str) -> Result<i64> {
+        println!("📚 Extracting complete EDGAR financial data...");
+
+        let edgar_extractor = EdgarDataExtractor::new("edgar_data", self.pool.clone());
+        let mut total_records = 0;
+
+        // Get S&P 500 CIKs
+        let ciks = self.get_sp500_ciks().await?;
+        println!("🔍 Processing {} S&P 500 companies for complete EDGAR data", ciks.len());
+
+        for (i, (stock_id, cik)) in ciks.iter().enumerate() {
+            if i % 25 == 0 {
+                println!("📊 Progress: {}/{} companies processed", i, ciks.len());
+            }
+
+            match edgar_extractor.extract_company_data(*cik).await {
+                Ok(financial_data) => {
+                    match edgar_extractor.store_financial_data(*stock_id, &financial_data).await {
+                        Ok(records) => total_records += records,
+                        Err(e) => eprintln!("⚠️ Failed to store data for CIK {}: {}", cik, e),
+                    }
+                }
+                Err(e) => {
+                    eprintln!("⚠️ Failed to extract EDGAR data for CIK {}: {}", cik, e);
+                }
+            }
+        }
+
+        println!("✅ Complete EDGAR extraction complete: {} records processed", total_records);
+        Ok(total_records as i64)
+    }
+
+    /// Get S&P 500 CIKs for EDGAR extraction
+    async fn get_sp500_ciks(&self) -> Result<Vec<(i32, i32)>> {
+        let query = r#"
+            SELECT s.id, c.cik
+            FROM stocks s
+            JOIN cik_mappings_sp500 c ON s.symbol = c.symbol
+            WHERE s.is_sp500 = 1 AND c.cik IS NOT NULL
+            ORDER BY s.symbol
+        "#;
+
+        let rows = sqlx::query(query).fetch_all(&self.pool).await?;
+
+        let mut ciks = Vec::new();
+        for row in rows {
+            let stock_id: i32 = row.get("id");
+            let cik: i32 = row.get("cik");
+            ciks.push((stock_id, cik));
+        }
+
+        Ok(ciks)
+    }
+
     /// Parse record counts from command output
     fn parse_records_from_output(&self, output: &str, record_type: &str) -> i64 {
         // Simple parsing - look for patterns like "123 price bars" or "456 records"
@@ -375,8 +475,8 @@ impl DataRefreshOrchestrator {
     fn define_refresh_steps() -> HashMap<RefreshMode, Vec<RefreshStep>> {
         let mut steps = HashMap::new();
 
-        // Quick mode: Just prices and critical ratios
-        steps.insert(RefreshMode::Quick, vec![
+        // Prices mode: Just prices and critical ratios
+        steps.insert(RefreshMode::Prices, vec![
             RefreshStep {
                 name: "Update daily prices".to_string(),
                 data_source: "daily_prices".to_string(),
@@ -403,9 +503,9 @@ impl DataRefreshOrchestrator {
             },
         ]);
 
-        // Standard mode: Add P/S and EV/S ratios
-        let mut standard_steps = steps[&RefreshMode::Quick].clone();
-        standard_steps.push(RefreshStep {
+        // Ratios mode: Add P/S and EV/S ratios
+        let mut ratios_steps = steps[&RefreshMode::Prices].clone();
+        ratios_steps.push(RefreshStep {
             name: "Calculate P/S and EV/S ratios".to_string(),
             data_source: "ps_evs_ratios".to_string(),
             estimated_duration_minutes: 8,
@@ -413,11 +513,11 @@ impl DataRefreshOrchestrator {
             dependencies: vec!["daily_prices".to_string()],
             priority: 4,
         });
-        steps.insert(RefreshMode::Standard, standard_steps);
+        steps.insert(RefreshMode::Ratios, ratios_steps);
 
-        // Full mode: Add financial statements
-        let mut full_steps = steps[&RefreshMode::Standard].clone();
-        full_steps.push(RefreshStep {
+        // Financials mode: Add financial statements
+        let mut financials_steps = steps[&RefreshMode::Ratios].clone();
+        financials_steps.push(RefreshStep {
             name: "Update financial statements".to_string(),
             data_source: "financial_statements".to_string(),
             estimated_duration_minutes: 45,
@@ -425,7 +525,31 @@ impl DataRefreshOrchestrator {
             dependencies: vec![],
             priority: 5,
         });
-        steps.insert(RefreshMode::Full, full_steps);
+        steps.insert(RefreshMode::Financials, financials_steps);
+
+        // CashFlow mode: Add EDGAR cash flow extraction
+        let mut cash_flow_steps = steps[&RefreshMode::Ratios].clone();
+        cash_flow_steps.push(RefreshStep {
+            name: "Extract EDGAR cash flow data".to_string(),
+            data_source: "edgar_cash_flow".to_string(),
+            estimated_duration_minutes: 15,
+            command: "edgar-cash-flow-extraction".to_string(),
+            dependencies: vec!["daily_prices".to_string()],
+            priority: 5,
+        });
+        steps.insert(RefreshMode::CashFlow, cash_flow_steps);
+
+        // FullEdgar mode: Add complete EDGAR data extraction
+        let mut full_edgar_steps = steps[&RefreshMode::Ratios].clone();
+        full_edgar_steps.push(RefreshStep {
+            name: "Complete EDGAR data extraction".to_string(),
+            data_source: "edgar_full_extraction".to_string(),
+            estimated_duration_minutes: 30,
+            command: "edgar-full-extraction".to_string(),
+            dependencies: vec!["daily_prices".to_string()],
+            priority: 5,
+        });
+        steps.insert(RefreshMode::FullEdgar, full_edgar_steps);
 
         steps
     }

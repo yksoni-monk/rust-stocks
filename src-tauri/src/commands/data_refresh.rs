@@ -69,9 +69,11 @@ pub async fn start_data_refresh(request: RefreshRequestDto) -> Result<String, St
         .map_err(|e| format!("Failed to initialize refresh orchestrator: {}", e))?;
 
     let refresh_mode = match request.mode.as_str() {
-        "quick" => RefreshMode::Quick,
-        "standard" => RefreshMode::Standard,
-        "full" => RefreshMode::Full,
+        "prices" => RefreshMode::Prices,
+        "ratios" => RefreshMode::Ratios,
+        "financials" => RefreshMode::Financials,
+        "cash-flow" => RefreshMode::CashFlow,
+        "full-edgar" => RefreshMode::FullEdgar,
         _ => return Err(format!("Invalid refresh mode: {}", request.mode)),
     };
 

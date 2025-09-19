@@ -28,8 +28,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     
     // Phase 2: Calculate P/E ratios
-    println!("\n📊 PHASE 2: P/E Ratio Calculation");  
+    println!("\n📊 PHASE 2: P/E Ratio Calculation");
     let start = Instant::now();
+    println!("🔄 Processing P/E calculations for S&P 500 stocks...");
     match calculate_and_store_pe_ratios(&pool).await {
         Ok(count) => {
             println!("✅ Phase 2 Complete: {} P/E ratios calculated in {:?}", count, start.elapsed());

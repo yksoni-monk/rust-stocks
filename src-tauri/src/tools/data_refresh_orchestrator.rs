@@ -307,81 +307,123 @@ impl DataRefreshOrchestrator {
 
         println!("📊 Found {} S&P 500 stocks to update", stocks.len());
 
-        let mut total_records = 0;
-        let mut updated_symbols = 0;
-
         let total_stocks = stocks.len();
-        for (stock_id, symbol) in stocks {
-            // Get the latest date for this symbol to determine where to start
-            let latest_date_query = "SELECT MAX(date) as latest FROM daily_prices WHERE stock_id = ?";
-            let latest_result = sqlx::query(latest_date_query)
-                .bind(stock_id)
-                .fetch_optional(&self.pool)
-                .await?;
 
-            let start_update_date = if let Some(row) = latest_result {
-                if let Ok(latest_str) = row.try_get::<String, _>("latest") {
-                    if let Ok(latest_date) = chrono::NaiveDate::parse_from_str(&latest_str, "%Y-%m-%d") {
-                        latest_date.succ_opt().unwrap_or(end_date)
+        // Process stocks concurrently with semaphore limiting
+        let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(10)); // Max 10 concurrent
+        let mut tasks = Vec::new();
+
+        for (stock_id, symbol) in stocks {
+            let permit = semaphore.clone();
+            let pool = self.pool.clone();
+            let config = config.clone();
+
+            let task = tokio::spawn(async move {
+                let _permit = permit.acquire().await.unwrap();
+
+                // Create client inside task since SchwabClient doesn't implement Clone
+                let client = match SchwabClient::new(&config) {
+                    Ok(c) => c,
+                    Err(e) => return Err(anyhow!("Failed to create client for {}: {}", symbol, e)),
+                };
+
+                // Get the latest date for this symbol to determine where to start
+                let latest_date_query = "SELECT MAX(date) as latest FROM daily_prices WHERE stock_id = ?";
+                let latest_result = sqlx::query(latest_date_query)
+                    .bind(stock_id)
+                    .fetch_optional(&pool)
+                    .await;
+
+                let start_update_date = if let Ok(Some(row)) = latest_result {
+                    if let Ok(latest_str) = row.try_get::<String, _>("latest") {
+                        if let Ok(latest_date) = chrono::NaiveDate::parse_from_str(&latest_str, "%Y-%m-%d") {
+                            latest_date.succ_opt().unwrap_or(end_date)
+                        } else {
+                            chrono::NaiveDate::from_ymd_opt(2015, 1, 1).unwrap()
+                        }
                     } else {
                         chrono::NaiveDate::from_ymd_opt(2015, 1, 1).unwrap()
                     }
                 } else {
                     chrono::NaiveDate::from_ymd_opt(2015, 1, 1).unwrap()
+                };
+
+                // Skip if already up to date
+                if start_update_date > end_date {
+                    return Ok((symbol, 0));
                 }
-            } else {
-                chrono::NaiveDate::from_ymd_opt(2015, 1, 1).unwrap()
-            };
 
-            // Skip if already up to date
-            if start_update_date > end_date {
-                continue;
-            }
+                // Fetch price data
+                match client.get_price_history(&symbol, start_update_date, end_date).await {
+                    Ok(candles) => {
+                        if !candles.is_empty() {
+                            let mut records_inserted = 0;
+                            // Insert the candles into database
+                            for candle in &candles {
+                                let insert_query = r#"
+                                    INSERT OR REPLACE INTO daily_prices
+                                    (stock_id, date, open_price, high_price, low_price, close_price, volume, created_at)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                                "#;
 
-            // Simple approach: get data for the missing range
-            match schwab_client.get_price_history(&symbol, start_update_date, end_date).await {
-                Ok(candles) => {
-                    if !candles.is_empty() {
-                        // Insert the candles into database
-                        for candle in &candles {
-                            let insert_query = r#"
-                                INSERT OR REPLACE INTO daily_prices
-                                (stock_id, date, open, high, low, close, volume, created_at)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
-                            "#;
+                                // Convert Unix timestamp to date string
+                                let datetime = DateTime::from_timestamp(candle.datetime / 1000, 0)
+                                    .unwrap_or_else(|| Utc::now());
+                                let date_str = datetime.format("%Y-%m-%d").to_string();
 
-                            // Convert Unix timestamp to date string
-                            let datetime = DateTime::from_timestamp(candle.datetime / 1000, 0)
-                                .unwrap_or_else(|| Utc::now());
-                            let date_str = datetime.format("%Y-%m-%d").to_string();
-
-                            let _ = sqlx::query(insert_query)
-                                .bind(stock_id)
-                                .bind(date_str)
-                                .bind(candle.open)
-                                .bind(candle.high)
-                                .bind(candle.low)
-                                .bind(candle.close)
-                                .bind(candle.volume)
-                                .execute(&self.pool)
-                                .await;
+                                if let Ok(_) = sqlx::query(insert_query)
+                                    .bind(stock_id)
+                                    .bind(date_str)
+                                    .bind(candle.open)
+                                    .bind(candle.high)
+                                    .bind(candle.low)
+                                    .bind(candle.close)
+                                    .bind(candle.volume)
+                                    .execute(&pool)
+                                    .await {
+                                    records_inserted += 1;
+                                }
+                            }
+                            Ok((symbol, records_inserted))
+                        } else {
+                            Ok((symbol, 0))
                         }
-                        total_records += candles.len();
-                        println!("✅ {} - {} new price records", symbol, candles.len());
                     }
+                    Err(e) => {
+                        Err(anyhow!("Failed to fetch {}: {}", symbol, e))
+                    }
+                }
+            });
+
+            tasks.push(task);
+        }
+
+        // Wait for all tasks to complete
+        println!("🚀 Processing {} stocks concurrently (max 10 parallel)...", tasks.len());
+
+        let mut total_records = 0;
+        let mut updated_symbols = 0;
+
+        for (i, task) in tasks.into_iter().enumerate() {
+            match task.await {
+                Ok(Ok((symbol, records))) => {
+                    total_records += records;
                     updated_symbols += 1;
+                    if records > 0 {
+                        println!("✅ {} - {} new price records", symbol, records);
+                    }
+                }
+                Ok(Err(e)) => {
+                    println!("⚠️ Task failed: {}", e);
                 }
                 Err(e) => {
-                    println!("⚠️ {} - Failed to fetch prices: {}", symbol, e);
+                    println!("⚠️ Task {} panicked: {}", i, e);
                 }
             }
 
-            // Rate limiting - sleep briefly between API calls
-            sleep(StdDuration::from_millis(200)).await;
-
-            // Show progress every 50 symbols
+            // Progress update every 50 stocks
             if updated_symbols % 50 == 0 {
-                println!("📊 Progress: {}/{} symbols processed, {} total records",
+                println!("📊 Progress: {}/{} stocks processed, {} total records",
                          updated_symbols, total_stocks, total_records);
             }
         }
@@ -541,7 +583,7 @@ impl DataRefreshOrchestrator {
             SELECT
                 s.symbol,
                 s.company_name,
-                dp.close as current_price,
+                dp.close_price as current_price,
                 dvr.pe_ratio,
                 dvr.market_cap,
                 dvr.shares_outstanding,
@@ -549,7 +591,7 @@ impl DataRefreshOrchestrator {
             FROM stocks s
             JOIN daily_prices dp ON s.id = dp.stock_id
             JOIN daily_valuation_ratios dvr ON s.id = dvr.stock_id
-            WHERE s.active = 1
+            WHERE s.status = 'active'
             AND dp.date = (SELECT MAX(date) FROM daily_prices WHERE stock_id = s.id)
             AND dvr.pe_ratio IS NOT NULL
             ORDER BY s.symbol

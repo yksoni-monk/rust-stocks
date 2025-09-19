@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
 use serde_json::Value;
 use sqlx::SqlitePool;
-use chrono::{NaiveDate, Utc};
+use chrono::NaiveDate;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]

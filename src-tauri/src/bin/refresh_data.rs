@@ -4,11 +4,10 @@
 /// have current, complete data before analysis. Supports incremental updates,
 /// progress tracking, and different refresh modes for various use cases.
 
-use anyhow::{Result, anyhow};
-use clap::{Parser, ValueEnum};
+use anyhow::Result;
+use clap::Parser;
 use sqlx::sqlite::SqlitePoolOptions;
-use std::collections::HashMap;
-use chrono::{Local, Utc};
+use chrono::Local;
 
 use rust_stocks_tauri_lib::tools::{
     data_refresh_orchestrator::{
@@ -21,10 +20,10 @@ use rust_stocks_tauri_lib::tools::{
 #[command(
     name = "refresh_data",
     about = "🔄 Stock data refresh system",
-    long_about = "Updates stock prices, ratios, and financials. Run without options to check status."
+    long_about = "Updates market data (Schwab), financial data (EDGAR), and calculated ratios. Run without options to check status."
 )]
 struct Cli {
-    /// What to refresh: prices, ratios, or everything
+    /// What to refresh: market, financials, or ratios
     #[arg(value_enum)]
     mode: Option<RefreshMode>,
 
@@ -170,7 +169,7 @@ async fn show_data_status(pool: &sqlx::SqlitePool, cli: &Cli) -> Result<()> {
             println!("   └─ {} (Est: {})", rec.reason, rec.estimated_duration);
         }
         println!();
-        println!("💡 Quick fix: cargo run --bin refresh_data prices");
+        println!("💡 Quick fix: cargo run --bin refresh_data market");
         println!("💡 Full fix:  cargo run --bin refresh_data ratios");
     } else {
         println!("✅ All data sources are current. No refresh needed.");
@@ -181,11 +180,11 @@ async fn show_data_status(pool: &sqlx::SqlitePool, cli: &Cli) -> Result<()> {
 
 /// Show what would be refreshed without executing
 async fn show_refresh_plan(pool: &sqlx::SqlitePool, cli: &Cli) -> Result<()> {
-    let mode = cli.mode.clone().unwrap_or(RefreshMode::Prices);
+    let mode = cli.mode.clone().unwrap_or(RefreshMode::Market);
     println!("🔍 Preview: What would be refreshed with {:?} mode\n", mode);
 
     let freshness_checker = DataFreshnessChecker::new(pool.clone());
-    let orchestrator = DataRefreshOrchestrator::new(pool.clone()).await?;
+    let _orchestrator = DataRefreshOrchestrator::new(pool.clone()).await?;
 
     let report = freshness_checker.check_system_freshness().await?;
 
@@ -233,7 +232,7 @@ async fn show_refresh_plan(pool: &sqlx::SqlitePool, cli: &Cli) -> Result<()> {
 }
 
 /// Execute the data refresh
-async fn execute_data_refresh(pool: &sqlx::SqlitePool, cli: &Cli, mode: RefreshMode) -> Result<()> {
+async fn execute_data_refresh(pool: &sqlx::SqlitePool, _cli: &Cli, mode: RefreshMode) -> Result<()> {
     println!("🚀 Starting data refresh in {:?} mode...\n", mode);
 
     let orchestrator = DataRefreshOrchestrator::new(pool.clone()).await?;
@@ -289,7 +288,7 @@ fn get_available_steps(mode: &RefreshMode) -> Vec<(String, i32)> {
     ];
 
     match mode {
-        RefreshMode::Ratios | RefreshMode::Financials | RefreshMode::CashFlow | RefreshMode::FullEdgar => {
+        RefreshMode::Ratios | RefreshMode::Financials => {
             steps.push(("ps_evs_ratios".to_string(), 8));
         }
         _ => {}

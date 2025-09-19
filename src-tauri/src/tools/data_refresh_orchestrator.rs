@@ -1,5 +1,5 @@
 use anyhow::{Result, anyhow};
-use chrono::{DateTime, Duration, Utc, Local};
+use chrono::{DateTime, Local, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{SqlitePool, Row};
 use std::collections::HashMap;
@@ -8,22 +8,23 @@ use tokio::time::sleep;
 use std::time::Duration as StdDuration;
 use uuid::Uuid;
 
-use crate::tools::data_freshness_checker::{DataFreshnessChecker, FreshnessStatus, SystemFreshnessReport};
+use crate::tools::data_freshness_checker::{DataFreshnessChecker, SystemFreshnessReport};
+use crate::tools::ratio_calculator;
+use crate::tools::simfin_importer::{calculate_and_store_eps, calculate_and_store_pe_ratios};
 use crate::tools::date_range_calculator::DateRangeCalculator;
 use crate::tools::edgar_extractor::EdgarDataExtractor;
+use crate::api::schwab_client::SchwabClient;
+use crate::api::StockDataProvider;
+use crate::models::{Config, SchwabPriceBar};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, clap::ValueEnum)]
 pub enum RefreshMode {
-    /// Update stock prices only (~17min, price data current)
-    Prices,
-    /// Prices + all ratios: P/E, P/S, EV/S (~50min, unblocks all screening)
-    Ratios,
-    /// Prices + ratios + historical financials (~2hrs)
+    /// Market data from Schwab: prices, shares, market cap (~15min)
+    Market,
+    /// All EDGAR financial data: income, balance, cash flow (~90min)
     Financials,
-    /// Prices + ratios + EDGAR cash flow data (~60min, for O'Shaughnessy screening)
-    CashFlow,
-    /// Prices + ratios + complete EDGAR data (~90min, for Piotroski screening)
-    FullEdgar,
+    /// All calculated ratios: P/E, P/S, Piotroski, O'Shaughnessy (~10min, requires Market + Financials)
+    Ratios,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,6 +77,7 @@ pub struct RefreshProgress {
 pub struct DataRefreshOrchestrator {
     pool: SqlitePool,
     freshness_checker: DataFreshnessChecker,
+    #[allow(dead_code)]
     date_calculator: DateRangeCalculator,
     refresh_steps: HashMap<RefreshMode, Vec<RefreshStep>>,
 }
@@ -97,7 +99,7 @@ impl DataRefreshOrchestrator {
     /// Execute a data refresh operation based on the request
     pub async fn execute_refresh(&self, request: RefreshRequest) -> Result<RefreshResult> {
         let session_id = request.session_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
-        let start_time = Utc::now();
+        let _start_time = Utc::now();
 
         println!("🚀 Starting data refresh session: {}", session_id);
         println!("🎯 Mode: {:?} | Initiated by: {}", request.mode, request.initiated_by);
@@ -251,13 +253,9 @@ impl DataRefreshOrchestrator {
         self.record_refresh_start(&step.data_source).await?;
 
         let records_processed = match step.data_source.as_str() {
-            "daily_prices" => self.refresh_daily_prices(session_id).await?,
-            "pe_ratios" => self.refresh_pe_ratios(session_id).await?,
-            "ps_evs_ratios" => self.refresh_ps_evs_ratios(session_id).await?,
-            "financial_statements" => self.refresh_financial_statements(session_id).await?,
-            "company_metadata" => self.refresh_company_metadata(session_id).await?,
-            "edgar_cash_flow" => self.refresh_edgar_cash_flow(session_id).await?,
-            "edgar_full_extraction" => self.refresh_edgar_full_extraction(session_id).await?,
+            "market_data" => self.refresh_market_internal(session_id).await?,
+            "edgar_financials" => self.refresh_financials_internal(session_id).await?,
+            "calculated_ratios" => self.refresh_ratios_internal(session_id).await?,
             _ => return Err(anyhow!("Unknown data source: {}", step.data_source)),
         };
 
@@ -270,9 +268,277 @@ impl DataRefreshOrchestrator {
         Ok(records_processed)
     }
 
-    /// Refresh daily price data using incremental updates
-    async fn refresh_daily_prices(&self, _session_id: &str) -> Result<i64> {
-        println!("📈 Refreshing daily price data...");
+    // ========================================
+    // CLEAN INTERNAL FUNCTIONS (No external cargo calls)
+    // ========================================
+
+    /// Refresh market data from Schwab (prices, shares, market cap)
+    async fn refresh_market_internal(&self, _session_id: &str) -> Result<i64> {
+        println!("💰 Refreshing market data from Schwab...");
+
+        // Load configuration and create Schwab client
+        let config = Config::from_env()?;
+        let schwab_client = SchwabClient::new(&config)?;
+
+        // Get today's date for end date
+        let end_date = chrono::Local::now().naive_local().date();
+
+        println!("📅 Importing market data up to {}", end_date);
+
+        // Get only S&P 500 stocks that need price updates
+        let stocks_query = r#"
+            SELECT s.id, s.symbol
+            FROM stocks s
+            INNER JOIN sp500_symbols sp ON s.symbol = sp.symbol
+            WHERE s.status = 'active'
+            ORDER BY s.symbol
+        "#;
+        let stocks = sqlx::query_as::<_, (i64, String)>(stocks_query)
+            .fetch_all(&self.pool)
+            .await?;
+
+        println!("📊 Found {} S&P 500 stocks to update", stocks.len());
+
+        let mut total_records = 0;
+        let mut updated_symbols = 0;
+
+        let total_stocks = stocks.len();
+        for (stock_id, symbol) in stocks {
+            // Get the latest date for this symbol to determine where to start
+            let latest_date_query = "SELECT MAX(date) as latest FROM daily_prices WHERE stock_id = ?";
+            let latest_result = sqlx::query(latest_date_query)
+                .bind(stock_id)
+                .fetch_optional(&self.pool)
+                .await?;
+
+            let start_update_date = if let Some(row) = latest_result {
+                if let Ok(latest_str) = row.try_get::<String, _>("latest") {
+                    if let Ok(latest_date) = chrono::NaiveDate::parse_from_str(&latest_str, "%Y-%m-%d") {
+                        latest_date.succ_opt().unwrap_or(end_date)
+                    } else {
+                        chrono::NaiveDate::from_ymd_opt(2015, 1, 1).unwrap()
+                    }
+                } else {
+                    chrono::NaiveDate::from_ymd_opt(2015, 1, 1).unwrap()
+                }
+            } else {
+                chrono::NaiveDate::from_ymd_opt(2015, 1, 1).unwrap()
+            };
+
+            // Skip if already up to date
+            if start_update_date > end_date {
+                continue;
+            }
+
+            // Simple approach: get data for the missing range
+            match schwab_client.get_price_history(&symbol, start_update_date, end_date).await {
+                Ok(candles) => {
+                    if !candles.is_empty() {
+                        // Insert the candles into database
+                        for candle in &candles {
+                            let insert_query = r#"
+                                INSERT OR REPLACE INTO daily_prices
+                                (stock_id, date, open, high, low, close, volume, created_at)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                            "#;
+
+                            // Convert Unix timestamp to date string
+                            let datetime = DateTime::from_timestamp(candle.datetime / 1000, 0)
+                                .unwrap_or_else(|| Utc::now());
+                            let date_str = datetime.format("%Y-%m-%d").to_string();
+
+                            let _ = sqlx::query(insert_query)
+                                .bind(stock_id)
+                                .bind(date_str)
+                                .bind(candle.open)
+                                .bind(candle.high)
+                                .bind(candle.low)
+                                .bind(candle.close)
+                                .bind(candle.volume)
+                                .execute(&self.pool)
+                                .await;
+                        }
+                        total_records += candles.len();
+                        println!("✅ {} - {} new price records", symbol, candles.len());
+                    }
+                    updated_symbols += 1;
+                }
+                Err(e) => {
+                    println!("⚠️ {} - Failed to fetch prices: {}", symbol, e);
+                }
+            }
+
+            // Rate limiting - sleep briefly between API calls
+            sleep(StdDuration::from_millis(200)).await;
+
+            // Show progress every 50 symbols
+            if updated_symbols % 50 == 0 {
+                println!("📊 Progress: {}/{} symbols processed, {} total records",
+                         updated_symbols, total_stocks, total_records);
+            }
+        }
+
+        println!("✅ S&P 500 market data refresh completed - {} symbols, {} records", updated_symbols, total_records);
+        Ok(total_records as i64)
+    }
+
+    /// Refresh all EDGAR financial data (income, balance, cash flow)
+    async fn refresh_financials_internal(&self, _session_id: &str) -> Result<i64> {
+        println!("📈 Refreshing EDGAR financial data...");
+
+        // TODO: Move concurrent-edgar-extraction logic here
+        // For now, use external call until we refactor
+        let mut child = Command::new("cargo")
+            .args(&["run", "--bin", "concurrent-edgar-extraction", "--", "--workers", "10"])
+            .spawn()?;
+
+        let mut elapsed = 0;
+        while let Ok(None) = child.try_wait() {
+            sleep(StdDuration::from_secs(60)).await; // Check every minute for EDGAR
+            elapsed += 60;
+            println!("⏱️  EDGAR extraction running... {} seconds elapsed", elapsed);
+        }
+
+        let output = child.wait().await?;
+        if !output.success() {
+            return Err(anyhow!("EDGAR financial data refresh failed"));
+        }
+
+        // Count total financial records
+        let result = sqlx::query("SELECT COUNT(*) as count FROM income_statements WHERE period_type = 'TTM'")
+            .fetch_one(&self.pool)
+            .await?;
+        let ttm_records: i64 = result.get("count");
+
+        println!("✅ EDGAR financial data refresh completed - {} TTM records", ttm_records);
+        Ok(ttm_records)
+    }
+
+    /// Calculate all ratios and metrics for all algorithms
+    async fn refresh_ratios_internal(&self, _session_id: &str) -> Result<i64> {
+        println!("📁 Calculating all ratios and metrics...");
+
+        // Check prerequisites
+        println!("🔍 Checking prerequisites: market data + financial data");
+
+        // Verify market data is current
+        let market_check = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM daily_prices WHERE date >= date('now', '-7 days')"
+        ).fetch_one(&self.pool).await?;
+
+        if market_check == 0 {
+            return Err(anyhow!("Market data required but not current. Run 'market' refresh first."));
+        }
+
+        // Verify financial data exists
+        let financial_check = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM income_statements WHERE period_type = 'TTM'"
+        ).fetch_one(&self.pool).await?;
+
+        if financial_check == 0 {
+            return Err(anyhow!("Financial data required but missing. Run 'financials' refresh first."));
+        }
+
+        println!("✅ Prerequisites satisfied - calculating ratios...");
+
+        // TODO: Implement comprehensive ratio calculation here
+        // For now, use existing ratio calculation calls
+        let mut total_records = 0;
+
+        // Calculate P/E ratios
+        let pe_records = self.calculate_pe_ratios_internal().await?;
+        total_records += pe_records;
+
+        // Calculate P/S and EV/S ratios
+        let ps_records = self.calculate_ps_evs_ratios_internal().await?;
+        total_records += ps_records;
+
+        println!("✅ All ratio calculations completed - {} total records", total_records);
+        Ok(total_records)
+    }
+
+    /// Calculate P/E ratios (internal helper)
+    async fn calculate_pe_ratios_internal(&self) -> Result<i64> {
+        println!("📊 Calculating P/E ratios...");
+
+        // Phase 1: Calculate EPS (if missing)
+        println!("🧮 PHASE 1: EPS Calculation");
+        let eps_count = match calculate_and_store_eps(&self.pool).await {
+            Ok(count) => {
+                println!("✅ Phase 1 Complete: {} EPS values calculated", count);
+                count
+            }
+            Err(e) => {
+                println!("⚠️ Phase 1 Warning: {} (maybe EPS already exists)", e);
+                0
+            }
+        };
+
+        // Phase 2: Calculate P/E ratios
+        println!("📊 PHASE 2: P/E Ratio Calculation");
+        let pe_count = match calculate_and_store_pe_ratios(&self.pool).await {
+            Ok(count) => {
+                println!("✅ Phase 2 Complete: {} P/E ratios calculated", count);
+                count
+            }
+            Err(e) => {
+                return Err(anyhow!("P/E ratio calculation failed: {}", e));
+            }
+        };
+
+        // Phase 3: Refresh cache table
+        println!("🔄 PHASE 3: Refresh cache table");
+        let _ = sqlx::query("DROP TABLE IF EXISTS sp500_pe_cache").execute(&self.pool).await;
+
+        let create_cache = "
+            CREATE TABLE sp500_pe_cache AS
+            SELECT
+                s.symbol,
+                s.company_name,
+                dp.close as current_price,
+                dvr.pe_ratio,
+                dvr.market_cap,
+                dvr.shares_outstanding,
+                dp.date as price_date
+            FROM stocks s
+            JOIN daily_prices dp ON s.id = dp.stock_id
+            JOIN daily_valuation_ratios dvr ON s.id = dvr.stock_id
+            WHERE s.active = 1
+            AND dp.date = (SELECT MAX(date) FROM daily_prices WHERE stock_id = s.id)
+            AND dvr.pe_ratio IS NOT NULL
+            ORDER BY s.symbol
+        ";
+
+        match sqlx::query(create_cache).execute(&self.pool).await {
+            Ok(_) => println!("✅ Phase 3 Complete: Cache table refreshed"),
+            Err(e) => println!("⚠️ Phase 3 Warning: Cache refresh failed: {}", e),
+        }
+
+        let total_processed = eps_count + pe_count;
+        println!("✅ P/E calculation completed - {} total records processed", total_processed);
+        Ok(total_processed as i64)
+    }
+
+    /// Calculate P/S and EV/S ratios (internal helper)
+    async fn calculate_ps_evs_ratios_internal(&self) -> Result<i64> {
+        println!("📊 Calculating P/S and EV/S ratios...");
+
+        // Use internal ratio calculator directly
+        let stats = ratio_calculator::calculate_ps_and_evs_ratios(&self.pool).await?;
+
+        let total_ratios = stats.ps_ratios_calculated + stats.evs_ratios_calculated;
+        println!("✅ P/S and EV/S ratios calculated - {} stocks processed, {} ratios calculated",
+                 stats.stocks_processed, total_ratios);
+        Ok(total_ratios as i64)
+    }
+
+    // ========================================
+    // OLD FUNCTIONS (TO BE REMOVED)
+    // ========================================
+
+    #[allow(dead_code)]
+    /// OLD: Refresh daily price data using incremental updates
+    async fn _old_refresh_daily_prices(&self, _session_id: &str) -> Result<i64> {
 
         // Start the command but don't wait for completion
         let mut child = Command::new("cargo")
@@ -499,85 +765,46 @@ impl DataRefreshOrchestrator {
         0 // Default if parsing fails
     }
 
-    /// Define refresh steps for each mode
+    /// Define refresh steps for each mode (Clean 3-option architecture)
     fn define_refresh_steps() -> HashMap<RefreshMode, Vec<RefreshStep>> {
         let mut steps = HashMap::new();
 
-        // Prices mode: Just stock prices
-        steps.insert(RefreshMode::Prices, vec![
+        // Market mode: Schwab market data (independent)
+        steps.insert(RefreshMode::Market, vec![
             RefreshStep {
-                name: "Update daily prices".to_string(),
-                data_source: "daily_prices".to_string(),
+                name: "Update market data".to_string(),
+                data_source: "market_data".to_string(),
                 estimated_duration_minutes: 15,
-                command: "import-schwab-prices".to_string(),
+                command: "internal".to_string(), // Internal function call
                 dependencies: vec![],
                 priority: 1,
             },
+        ]);
+
+        // Financials mode: All EDGAR data (independent)
+        steps.insert(RefreshMode::Financials, vec![
             RefreshStep {
-                name: "Update company metadata".to_string(),
-                data_source: "company_metadata".to_string(),
-                estimated_duration_minutes: 2,
-                command: "update-company-metadata".to_string(),
-                dependencies: vec!["daily_prices".to_string()],
-                priority: 2,
+                name: "Extract EDGAR financial data".to_string(),
+                data_source: "edgar_financials".to_string(),
+                estimated_duration_minutes: 90,
+                command: "internal".to_string(), // Internal function call
+                dependencies: vec![],
+                priority: 1,
             },
         ]);
 
-        // Ratios mode: Prices + all ratios (P/E, P/S, EV/S)
-        let mut ratios_steps = steps[&RefreshMode::Prices].clone();
-        ratios_steps.push(RefreshStep {
-            name: "Calculate P/E ratios".to_string(),
-            data_source: "pe_ratios".to_string(),
-            estimated_duration_minutes: 25,
-            command: "run_pe_calculation".to_string(),
-            dependencies: vec!["daily_prices".to_string()],
-            priority: 3,
-        });
-        ratios_steps.push(RefreshStep {
-            name: "Calculate P/S and EV/S ratios".to_string(),
-            data_source: "ps_evs_ratios".to_string(),
-            estimated_duration_minutes: 8,
-            command: "calculate-ratios".to_string(),
-            dependencies: vec!["daily_prices".to_string()],
-            priority: 4,
-        });
-        steps.insert(RefreshMode::Ratios, ratios_steps);
+        // Ratios mode: All calculated ratios (depends on Market + Financials)
+        steps.insert(RefreshMode::Ratios, vec![
+            RefreshStep {
+                name: "Calculate all ratios and metrics".to_string(),
+                data_source: "calculated_ratios".to_string(),
+                estimated_duration_minutes: 10,
+                command: "internal".to_string(), // Internal function call
+                dependencies: vec!["market_data".to_string(), "edgar_financials".to_string()],
+                priority: 1,
+            },
+        ]);
 
-        // Financials mode: Add financial statements
-        let mut financials_steps = steps[&RefreshMode::Ratios].clone();
-        financials_steps.push(RefreshStep {
-            name: "Update financial statements".to_string(),
-            data_source: "financial_statements".to_string(),
-            estimated_duration_minutes: 45,
-            command: "concurrent-edgar-extraction".to_string(),
-            dependencies: vec![],
-            priority: 5,
-        });
-        steps.insert(RefreshMode::Financials, financials_steps);
-
-        // CashFlow mode: Add EDGAR cash flow extraction
-        let mut cash_flow_steps = steps[&RefreshMode::Ratios].clone();
-        cash_flow_steps.push(RefreshStep {
-            name: "Extract EDGAR cash flow data".to_string(),
-            data_source: "edgar_cash_flow".to_string(),
-            estimated_duration_minutes: 15,
-            command: "edgar-cash-flow-extraction".to_string(),
-            dependencies: vec!["daily_prices".to_string()],
-            priority: 5,
-        });
-        steps.insert(RefreshMode::CashFlow, cash_flow_steps);
-
-        // FullEdgar mode: Add complete EDGAR data extraction
-        let mut full_edgar_steps = steps[&RefreshMode::Ratios].clone();
-        full_edgar_steps.push(RefreshStep {
-            name: "Complete EDGAR data extraction".to_string(),
-            data_source: "edgar_full_extraction".to_string(),
-            estimated_duration_minutes: 30,
-            command: "edgar-full-extraction".to_string(),
-            dependencies: vec!["daily_prices".to_string()],
-            priority: 5,
-        });
-        steps.insert(RefreshMode::FullEdgar, full_edgar_steps);
 
         steps
     }
@@ -678,7 +905,7 @@ impl DataRefreshOrchestrator {
     }
 
     /// Record the completion of a data source refresh
-    async fn record_refresh_complete(&self, data_source: &str, records_updated: i64, duration_seconds: i32) -> Result<()> {
+    async fn record_refresh_complete(&self, data_source: &str, records_updated: i64, _duration_seconds: i32) -> Result<()> {
         println!("📝 Recording completion for {}: {} records", data_source, records_updated);
         self.update_refresh_status(data_source, true, Some(records_updated), None).await?;
         Ok(())

@@ -69,11 +69,9 @@ pub async fn start_data_refresh(request: RefreshRequestDto) -> Result<String, St
         .map_err(|e| format!("Failed to initialize refresh orchestrator: {}", e))?;
 
     let refresh_mode = match request.mode.as_str() {
-        "prices" => RefreshMode::Prices,
-        "ratios" => RefreshMode::Ratios,
+        "market" => RefreshMode::Market,
         "financials" => RefreshMode::Financials,
-        "cash-flow" => RefreshMode::CashFlow,
-        "full-edgar" => RefreshMode::FullEdgar,
+        "ratios" => RefreshMode::Ratios,
         _ => return Err(format!("Invalid refresh mode: {}", request.mode)),
     };
 
@@ -180,7 +178,7 @@ pub async fn get_last_refresh_result() -> Result<Option<RefreshResult>, String> 
         let start_time = row.get::<String, _>("start_time");
         let end_time = row.try_get::<String, _>("end_time").ok();
 
-        let duration_seconds = if let Some(end_time) = &end_time {
+        let duration_seconds = if let Some(_end_time) = &end_time {
             // Calculate duration in seconds (simplified)
             Some(60) // Placeholder
         } else {

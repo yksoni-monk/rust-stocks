@@ -132,13 +132,8 @@ impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
         dotenvy::dotenv().ok(); // Load .env file if it exists
         
-        // Debug: Print all environment variables
+        // Debug: Print non-sensitive environment status
         println!("DEBUG: Current working directory: {:?}", std::env::current_dir());
-        println!("DEBUG: SCHWAB_API_KEY: {:?}", std::env::var("SCHWAB_API_KEY"));
-        println!("DEBUG: SCHWAB_APP_SECRET: {:?}", std::env::var("SCHWAB_APP_SECRET"));
-        println!("DEBUG: SCHWAB_CALLBACK_URL: {:?}", std::env::var("SCHWAB_CALLBACK_URL"));
-        println!("DEBUG: SCHWAB_TOKEN_PATH: {:?}", std::env::var("SCHWAB_TOKEN_PATH"));
-        println!("DEBUG: ALPHA_VANTAGE_API_KEY: {:?}", std::env::var("ALPHA_VANTAGE_API_KEY"));
         println!("DEBUG: DATABASE_PATH: {:?}", std::env::var("DATABASE_PATH"));
         
         let schwab_token_path = std::env::var("SCHWAB_TOKEN_PATH")

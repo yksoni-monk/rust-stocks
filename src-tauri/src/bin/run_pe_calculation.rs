@@ -57,8 +57,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     sqlx::query(create_cache).execute(&pool).await?;
     
     // Create indexes
-    sqlx::query("CREATE INDEX idx_sp500_pe_cache_id ON sp500_pe_cache(id)").execute(&pool).await?;
-    sqlx::query("CREATE INDEX idx_sp500_pe_cache_symbol ON sp500_pe_cache(symbol)").execute(&pool).await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_sp500_pe_cache_id ON sp500_pe_cache(id)").execute(&pool).await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_sp500_pe_cache_symbol ON sp500_pe_cache(symbol)").execute(&pool).await?;
     
     // Check results
     let row = sqlx::query("SELECT COUNT(*) as count FROM sp500_pe_cache")

@@ -11,7 +11,7 @@
 
 ## PROJECT STRUCTURE (Standard Tauri)
 ```
-/Users/yksoni/code/misc/rust-stocks/     ← YOU ARE HERE (ROOT)
+/Users/yksoni/code/misc/rust-stocks/     ← PROJECT_ROOT (Environment Variable)
 ├── src/                                 ← SOLIDJS FRONTEND (TypeScript/SolidJS)
 │   ├── src/
 │   │   ├── App.tsx, main.tsx           ← SolidJS entry points
@@ -27,8 +27,16 @@
 │       ├── stocks.db                   ← 2.5GB PRODUCTION DATABASE
 │       ├── migrations/                 ← Database migrations
 │       └── backups/                    ← Database backups
+├── edgar_data/                         ← EDGAR SEC DATA
+│   └── companyfacts/                   ← EDGAR company JSON files (CIK*.json)
 └── context/                            ← Project documentation
 ```
+
+## PROJECT PATHS (Critical for File Access)
+- **PROJECT_ROOT**: `/Users/yksoni/code/misc/rust-stocks` (in .env file)
+- **RUST_BASE**: `$PROJECT_ROOT/src-tauri`
+- **DATABASE**: `$PROJECT_ROOT/src-tauri/db/stocks.db`
+- **EDGAR_DATA**: `$PROJECT_ROOT/edgar_data/companyfacts/` (CIK*.json files)
 
 ## 📚 BROADER PROJECT CONTEXT
 **For detailed project architecture, design decisions, and comprehensive documentation:**

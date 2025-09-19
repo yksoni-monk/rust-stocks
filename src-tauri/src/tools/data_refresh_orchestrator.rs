@@ -79,19 +79,27 @@ pub struct DataRefreshOrchestrator {
     freshness_checker: DataFreshnessChecker,
     #[allow(dead_code)]
     date_calculator: DateRangeCalculator,
+    edgar_extractor: EdgarDataExtractor,
     refresh_steps: HashMap<RefreshMode, Vec<RefreshStep>>,
 }
 
 impl DataRefreshOrchestrator {
     pub async fn new(pool: SqlitePool) -> Result<Self> {
+        // Load .env file first to ensure environment variables are available
+        dotenvy::dotenv().ok();
+
         let freshness_checker = DataFreshnessChecker::new(pool.clone());
         let date_calculator = DateRangeCalculator::new();
+        let edgar_data_path = std::env::var("EDGAR_DATA_PATH")
+            .unwrap_or_else(|_| "edgar_data".to_string());
+        let edgar_extractor = EdgarDataExtractor::new(&edgar_data_path, pool.clone());
         let refresh_steps = Self::define_refresh_steps();
 
         Ok(Self {
             pool,
             freshness_checker,
             date_calculator,
+            edgar_extractor,
             refresh_steps,
         })
     }
@@ -386,32 +394,70 @@ impl DataRefreshOrchestrator {
     async fn refresh_financials_internal(&self, _session_id: &str) -> Result<i64> {
         println!("📈 Refreshing EDGAR financial data...");
 
-        // TODO: Move concurrent-edgar-extraction logic here
-        // For now, use external call until we refactor
-        let mut child = Command::new("cargo")
-            .args(&["run", "--bin", "concurrent-edgar-extraction", "--", "--workers", "10"])
-            .spawn()?;
+        // Get S&P 500 CIKs for processing
+        let ciks_query = r#"
+            SELECT cm.cik, cm.stock_id, s.symbol, s.company_name
+            FROM cik_mappings_sp500 cm
+            INNER JOIN stocks s ON s.symbol = cm.symbol
+            WHERE s.status = 'active'
+            ORDER BY s.symbol
+        "#;
 
-        let mut elapsed = 0;
-        while let Ok(None) = child.try_wait() {
-            sleep(StdDuration::from_secs(60)).await; // Check every minute for EDGAR
-            elapsed += 60;
-            println!("⏱️  EDGAR extraction running... {} seconds elapsed", elapsed);
-        }
-
-        let output = child.wait().await?;
-        if !output.success() {
-            return Err(anyhow!("EDGAR financial data refresh failed"));
-        }
-
-        // Count total financial records
-        let result = sqlx::query("SELECT COUNT(*) as count FROM income_statements WHERE period_type = 'TTM'")
-            .fetch_one(&self.pool)
+        let cik_data = sqlx::query_as::<_, (String, i32, String, String)>(ciks_query)
+            .fetch_all(&self.pool)
             .await?;
-        let ttm_records: i64 = result.get("count");
 
-        println!("✅ EDGAR financial data refresh completed - {} TTM records", ttm_records);
-        Ok(ttm_records)
+        println!("📊 Found {} S&P 500 companies for EDGAR extraction", cik_data.len());
+
+        let mut total_records = 0;
+        let mut processed_companies = 0;
+
+        let total_companies = cik_data.len();
+        for (cik_str, stock_id, symbol, company_name) in cik_data {
+            println!("🔄 Processing {} ({}) - CIK: {}", symbol, company_name, cik_str);
+
+            // Parse CIK string to i32 for EdgarDataExtractor
+            let cik = cik_str.parse::<i32>()
+                .map_err(|e| anyhow!("Invalid CIK format '{}': {}", cik_str, e))?;
+
+            // Use the existing EdgarDataExtractor
+            match self.edgar_extractor.extract_company_data(cik).await {
+                Ok(financial_data) => {
+                    // Store the financial data in the database
+                    match self.edgar_extractor.store_financial_data(stock_id, &financial_data).await {
+                        Ok(records_stored) => {
+                            total_records += records_stored as usize;
+                            processed_companies += 1;
+
+                            if records_stored > 0 {
+                                println!("✅ {} - {} financial records stored", symbol, records_stored);
+                            } else {
+                                println!("📊 {} - No new financial data", symbol);
+                            }
+                        }
+                        Err(e) => {
+                            println!("⚠️ {} - Failed to store financial data: {}", symbol, e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("⚠️ {} - EDGAR extraction failed: {}", symbol, e);
+                }
+            }
+
+            // Rate limiting - small delay between companies
+            sleep(StdDuration::from_millis(100)).await;
+
+            // Show progress every 50 companies
+            if processed_companies % 50 == 0 {
+                println!("📊 Progress: {}/{} companies processed, {} total records",
+                         processed_companies, total_companies, total_records);
+            }
+        }
+
+        println!("✅ S&P 500 EDGAR financial data refresh completed - {} companies, {} records",
+                processed_companies, total_records);
+        Ok(total_records as i64)
     }
 
     /// Calculate all ratios and metrics for all algorithms

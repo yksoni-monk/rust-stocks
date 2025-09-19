@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::{SqlitePool, Row};
 use std::collections::HashMap;
 use tokio::process::Command;
+use tokio::time::sleep;
+use std::time::Duration as StdDuration;
 use uuid::Uuid;
 
 use crate::tools::data_freshness_checker::{DataFreshnessChecker, FreshnessStatus, SystemFreshnessReport};
@@ -12,9 +14,9 @@ use crate::tools::edgar_extractor::EdgarDataExtractor;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, clap::ValueEnum)]
 pub enum RefreshMode {
-    /// Update stock prices + P/E ratios (~40min, unblocks GARP screening)
+    /// Update stock prices only (~17min, price data current)
     Prices,
-    /// Prices + P/S ratios (~50min, unblocks all screening)
+    /// Prices + all ratios: P/E, P/S, EV/S (~50min, unblocks all screening)
     Ratios,
     /// Prices + ratios + historical financials (~2hrs)
     Financials,
@@ -272,42 +274,68 @@ impl DataRefreshOrchestrator {
     async fn refresh_daily_prices(&self, _session_id: &str) -> Result<i64> {
         println!("📈 Refreshing daily price data...");
 
-        // Execute the import-schwab-prices command with incremental mode
-        let output = Command::new("cargo")
+        // Start the command but don't wait for completion
+        let mut child = Command::new("cargo")
             .args(&["run", "--bin", "import-schwab-prices"])
-            .output()
-            .await?;
+            .spawn()?;
 
-        if !output.status.success() {
-            let error = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow!("Price refresh failed: {}", error));
+        // Show periodic progress while running
+        let mut elapsed = 0;
+        while let Ok(None) = child.try_wait() {
+            sleep(StdDuration::from_secs(30)).await;
+            elapsed += 30;
+            println!("⏱️  Price refresh running... {} seconds elapsed", elapsed);
         }
 
-        // Parse the output to get the number of records processed
-        let output_str = String::from_utf8_lossy(&output.stdout);
-        let records = self.parse_records_from_output(&output_str, "price bars");
+        // Wait for final completion
+        let output = child.wait().await?;
 
-        Ok(records)
+        if !output.success() {
+            return Err(anyhow!("Price refresh failed"));
+        }
+
+        // Check how many records were actually updated by querying the database
+        let result = sqlx::query("SELECT COUNT(*) as count FROM daily_prices WHERE date >= date('now', '-30 days')")
+            .fetch_one(&self.pool)
+            .await?;
+        let recent_records: i64 = result.get("count");
+
+        println!("✅ Price refresh completed - {} recent records", recent_records);
+        Ok(recent_records)
     }
 
     /// Refresh P/E ratios
     async fn refresh_pe_ratios(&self, _session_id: &str) -> Result<i64> {
         println!("📊 Refreshing P/E ratios...");
 
-        let output = Command::new("cargo")
+        // Start the command but don't wait for completion
+        let mut child = Command::new("cargo")
             .args(&["run", "--bin", "run_pe_calculation"])
-            .output()
-            .await?;
+            .spawn()?;
 
-        if !output.status.success() {
-            let error = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow!("P/E ratio refresh failed: {}", error));
+        // Show periodic progress while running
+        let mut elapsed = 0;
+        while let Ok(None) = child.try_wait() {
+            sleep(StdDuration::from_secs(30)).await;
+            elapsed += 30;
+            println!("⏱️  P/E calculation running... {} seconds elapsed", elapsed);
         }
 
-        let output_str = String::from_utf8_lossy(&output.stdout);
-        let records = self.parse_records_from_output(&output_str, "P/E ratios");
+        // Wait for final completion
+        let output = child.wait().await?;
 
-        Ok(records)
+        if !output.success() {
+            return Err(anyhow!("P/E ratio refresh failed"));
+        }
+
+        // Check how many P/E records were updated
+        let result = sqlx::query("SELECT COUNT(*) as count FROM daily_valuation_ratios WHERE pe_ratio_ttm IS NOT NULL AND date >= date('now', '-30 days')")
+            .fetch_one(&self.pool)
+            .await?;
+        let pe_records: i64 = result.get("count");
+
+        println!("✅ P/E ratio refresh completed - {} records", pe_records);
+        Ok(pe_records)
     }
 
     /// Refresh P/S and EV/S ratios
@@ -475,7 +503,7 @@ impl DataRefreshOrchestrator {
     fn define_refresh_steps() -> HashMap<RefreshMode, Vec<RefreshStep>> {
         let mut steps = HashMap::new();
 
-        // Prices mode: Just prices and critical ratios
+        // Prices mode: Just stock prices
         steps.insert(RefreshMode::Prices, vec![
             RefreshStep {
                 name: "Update daily prices".to_string(),
@@ -486,25 +514,25 @@ impl DataRefreshOrchestrator {
                 priority: 1,
             },
             RefreshStep {
-                name: "Calculate P/E ratios".to_string(),
-                data_source: "pe_ratios".to_string(),
-                estimated_duration_minutes: 25,
-                command: "run_pe_calculation".to_string(),
-                dependencies: vec!["daily_prices".to_string()],
-                priority: 2,
-            },
-            RefreshStep {
                 name: "Update company metadata".to_string(),
                 data_source: "company_metadata".to_string(),
                 estimated_duration_minutes: 2,
                 command: "update-company-metadata".to_string(),
                 dependencies: vec!["daily_prices".to_string()],
-                priority: 3,
+                priority: 2,
             },
         ]);
 
-        // Ratios mode: Add P/S and EV/S ratios
+        // Ratios mode: Prices + all ratios (P/E, P/S, EV/S)
         let mut ratios_steps = steps[&RefreshMode::Prices].clone();
+        ratios_steps.push(RefreshStep {
+            name: "Calculate P/E ratios".to_string(),
+            data_source: "pe_ratios".to_string(),
+            estimated_duration_minutes: 25,
+            command: "run_pe_calculation".to_string(),
+            dependencies: vec!["daily_prices".to_string()],
+            priority: 3,
+        });
         ratios_steps.push(RefreshStep {
             name: "Calculate P/S and EV/S ratios".to_string(),
             data_source: "ps_evs_ratios".to_string(),
@@ -651,6 +679,8 @@ impl DataRefreshOrchestrator {
 
     /// Record the completion of a data source refresh
     async fn record_refresh_complete(&self, data_source: &str, records_updated: i64, duration_seconds: i32) -> Result<()> {
+        println!("📝 Recording completion for {}: {} records", data_source, records_updated);
+        self.update_refresh_status(data_source, true, Some(records_updated), None).await?;
         Ok(())
     }
 

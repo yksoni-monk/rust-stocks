@@ -1,15 +1,20 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { 
-  Stock, 
-  PriceData, 
-  ValuationRatios, 
-  DateRange, 
-  GarpCriteria, 
+import type {
+  Stock,
+  PriceData,
+  ValuationRatios,
+  DateRange,
+  GarpCriteria,
   GarpScreeningResult,
   RecommendationStats,
   ValueRecommendation,
   DatabaseStats,
-  InitializationStatus 
+  InitializationStatus,
+  SystemFreshnessReport,
+  RefreshProgress,
+  RefreshRequestDto,
+  RefreshResult,
+  RefreshDurationEstimates
 } from '../utils/types';
 import type { GrahamCriteria, GrahamResult } from '../stores/recommendationsStore';
 
@@ -152,6 +157,44 @@ export const recommendationsAPI = {
 };
 
 // Note: Enhanced Data API removed - these commands don't exist in the backend
+
+// Data Refresh API
+export const dataRefreshAPI = {
+  // Get current data freshness status
+  async getDataFreshnessStatus(): Promise<SystemFreshnessReport> {
+    return await invoke('get_data_freshness_status');
+  },
+
+  // Check if specific screening features are ready
+  async checkScreeningReadiness(feature: string): Promise<boolean> {
+    return await invoke('check_screening_readiness', { feature });
+  },
+
+  // Start data refresh operation
+  async startDataRefresh(request: RefreshRequestDto): Promise<string> {
+    return await invoke('start_data_refresh', { request });
+  },
+
+  // Get refresh progress
+  async getRefreshProgress(sessionId: string): Promise<RefreshProgress | null> {
+    return await invoke('get_refresh_progress', { sessionId });
+  },
+
+  // Get last refresh result
+  async getLastRefreshResult(): Promise<RefreshResult | null> {
+    return await invoke('get_last_refresh_result');
+  },
+
+  // Cancel refresh operation
+  async cancelRefreshOperation(sessionId: string): Promise<boolean> {
+    return await invoke('cancel_refresh_operation', { sessionId });
+  },
+
+  // Get refresh duration estimates
+  async getRefreshDurationEstimates(): Promise<RefreshDurationEstimates> {
+    return await invoke('get_refresh_duration_estimates');
+  }
+};
 
 // System API
 export const systemAPI = {

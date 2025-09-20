@@ -2,9 +2,13 @@ import { createSignal } from 'solid-js';
 
 // UI store for managing application UI state
 export function createUiStore() {
+  // Navigation state
+  const [activeTab, setActiveTab] = createSignal<'screening' | 'data-management'>('screening');
+
   // Panel visibility
   const [showRecommendations, setShowRecommendations] = createSignal(false);
   const [showDataFetching, setShowDataFetching] = createSignal(false);
+  const [showDataManagement, setShowDataManagement] = createSignal(false);
   
   // Modal state
   const [activeModal, setActiveModal] = createSignal<string | null>(null);
@@ -25,18 +29,35 @@ export function createUiStore() {
   const openRecommendations = () => {
     setShowRecommendations(true);
     setShowDataFetching(false);
+    setShowDataManagement(false);
   };
 
   // Show data fetching panel
   const openDataFetching = () => {
     setShowDataFetching(true);
     setShowRecommendations(false);
+    setShowDataManagement(false);
+  };
+
+  // Show data management panel
+  const openDataManagement = () => {
+    setShowDataManagement(true);
+    setShowRecommendations(false);
+    setShowDataFetching(false);
+    setActiveTab('data-management');
+  };
+
+  // Navigate to screening tab
+  const openScreening = () => {
+    setActiveTab('screening');
+    setShowDataManagement(false);
   };
 
   // Close all panels
   const closeAllPanels = () => {
     setShowRecommendations(false);
     setShowDataFetching(false);
+    setShowDataManagement(false);
   };
 
   // Modal management
@@ -85,37 +106,46 @@ export function createUiStore() {
   };
 
   return {
+    // Navigation state
+    activeTab,
+
     // Panel state
     showRecommendations,
     showDataFetching,
-    
+    showDataManagement,
+
     // Modal state
     activeModal,
-    
+
     // Global state
     globalLoading,
     globalError,
     toasts,
-    
+
+    // Navigation actions
+    openScreening,
+    openDataManagement,
+
     // Panel actions
     openRecommendations,
     openDataFetching,
     closeAllPanels,
-    
+
     // Modal actions
     openModal,
     closeModal,
-    
+
     // Toast actions
     addToast,
     removeToast,
     clearToasts,
-    
+
     // Global actions
     showError,
     clearError,
-    
+
     // Setters
+    setActiveTab,
     setGlobalLoading,
     setGlobalError
   };

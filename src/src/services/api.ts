@@ -76,25 +76,10 @@ export const analysisAPI = {
 
 // Recommendations API
 export const recommendationsAPI = {
-  // Get undervalued stocks by P/S ratio (smart algorithm)
-  async getUndervaluedStocksByPs(stockTickers: string[], limit: number, minMarketCap: number): Promise<any[]> {
-    return await invoke('get_undervalued_stocks_by_ps', { stockTickers, limit, minMarketCap });
-  },
-
-  // Get P/S screening with revenue growth requirements
-  async getPsScreeningWithRevenueGrowth(stockTickers: string[], limit: number, minMarketCap: number): Promise<any[]> {
-    return await invoke('get_ps_screening_with_revenue_growth', { stockTickers, limit, minMarketCap });
-  },
-
-  // Get value recommendations with stats
-  async getValueRecommendationsWithStats(limit: number): Promise<{ recommendations: ValueRecommendation[], stats: RecommendationStats }> {
-    return await invoke('get_value_recommendations_with_stats', { limit });
-  },
-
   // Get GARP P/E screening results
   async getGarpPeScreeningResults(stockTickers: string[], criteria?: GarpCriteria, limit?: number): Promise<GarpScreeningResult[]> {
-    return await invoke('get_garp_pe_screening_results', { 
-      stockTickers, 
+    return await invoke('get_garp_pe_screening_results', {
+      stockTickers,
       criteria: criteria || {
         maxPegRatio: 1.0,
         minRevenueGrowth: 15.0,
@@ -106,6 +91,43 @@ export const recommendationsAPI = {
       },
       limit: limit || 50
     });
+  },
+
+  // Get Piotroski F-Score screening results
+  async getPiotroskilScreeningResults(stockTickers: string[], criteria?: any, limit?: number): Promise<any[]> {
+    return await invoke('get_piotroski_screening_results', {
+      stockTickers,
+      criteria: criteria || {
+        minFScore: 3,
+        minDataCompleteness: 50,
+        passesScreeningOnly: false
+      },
+      limit: limit || 50
+    });
+  },
+
+  // Get Piotroski statistics
+  async getPiotroskilStatistics(): Promise<any> {
+    return await invoke('get_piotroski_statistics');
+  },
+
+  // Get O'Shaughnessy Value Composite screening results
+  async getOShaughnessyScreeningResults(stockTickers: string[], criteria?: any, limit?: number): Promise<any[]> {
+    return await invoke('get_oshaughnessy_screening_results', {
+      stockTickers,
+      criteria: criteria || {
+        maxCompositePercentile: 20.0,
+        maxPsRatio: 2.0,
+        maxEvsRatio: 2.0,
+        passesScreeningOnly: false
+      },
+      limit: limit || 50
+    });
+  },
+
+  // Get O'Shaughnessy statistics
+  async getOShaughnessyStatistics(): Promise<any> {
+    return await invoke('get_oshaughnessy_statistics');
   },
 
   // Run Graham value screening

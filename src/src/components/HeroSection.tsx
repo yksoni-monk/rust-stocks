@@ -39,18 +39,35 @@ export default function HeroSection() {
     }, 100);
   };
 
-  const handleAlternativeScreening = (type: 'ps' | 'pe') => {
-    console.log('📊 Running alternative screening:', type);
-    recommendationsStore.setScreeningType(type);
+  const handlePiotroskilAnalysis = () => {
+    console.log('🔍 Running Piotroski F-Score Analysis');
+    recommendationsStore.setScreeningType('piotroski');
     uiStore.openRecommendations();
-    
+
     // Smooth scroll to recommendations panel after a brief delay
     setTimeout(() => {
       const recommendationsElement = document.querySelector('[data-section="recommendations"]');
       if (recommendationsElement) {
-        recommendationsElement.scrollIntoView({ 
-          behavior: 'smooth', 
-          block: 'start' 
+        recommendationsElement.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start'
+        });
+      }
+    }, 100);
+  };
+
+  const handleOShaughnessyAnalysis = () => {
+    console.log('📈 Running O\'Shaughnessy Value Composite Analysis');
+    recommendationsStore.setScreeningType('oshaughnessy');
+    uiStore.openRecommendations();
+
+    // Smooth scroll to recommendations panel after a brief delay
+    setTimeout(() => {
+      const recommendationsElement = document.querySelector('[data-section="recommendations"]');
+      if (recommendationsElement) {
+        recommendationsElement.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start'
         });
       }
     }, 100);
@@ -73,48 +90,64 @@ export default function HeroSection() {
         {/* Primary Screening Options */}
         <div class="mb-6">
           <div class="flex flex-col gap-4 justify-center items-center">
-            {/* Main GARP Button */}
-            <button
-              onClick={handleRunGarpAnalysis}
-              disabled={recommendationsStore.loading()}
-              class={`text-white text-xl font-semibold px-8 py-4 rounded-xl shadow-lg transition-all duration-200 transform ${
-                recommendationsStore.loading() 
-                  ? 'bg-blue-400 cursor-not-allowed' 
-                  : 'bg-blue-600 hover:bg-blue-700 hover:shadow-xl hover:scale-105'
-              }`}
-            >
-              <Show 
-                when={!recommendationsStore.loading()} 
-                fallback={
-                  <div class="flex items-center gap-2">
-                    <div class="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent"></div>
-                    Analyzing...
-                  </div>
-                }
+            {/* All Screening Methods - Same Size */}
+            <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 w-full max-w-4xl">
+              <button
+                onClick={handleRunGarpAnalysis}
+                disabled={recommendationsStore.loading()}
+                class={`text-white text-lg font-semibold px-6 py-4 rounded-xl shadow-lg transition-all duration-200 transform ${
+                  recommendationsStore.loading()
+                    ? 'bg-blue-400 cursor-not-allowed'
+                    : 'bg-blue-600 hover:bg-blue-700 hover:shadow-xl hover:scale-105'
+                }`}
               >
-                🔍 GARP Analysis
-              </Show>
-            </button>
-            
-            {/* Secondary Options */}
-            <div class="flex gap-3 text-sm">
+                <Show
+                  when={!recommendationsStore.loading()}
+                  fallback={
+                    <div class="flex items-center gap-2 justify-center">
+                      <div class="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
+                      Analyzing...
+                    </div>
+                  }
+                >
+                  🔍 GARP Analysis
+                </Show>
+              </button>
+
               <button
                 onClick={handleGrahamAnalysis}
-                class="bg-gray-200 hover:bg-gray-300 text-gray-700 font-medium px-4 py-2 rounded-lg transition-colors"
+                disabled={recommendationsStore.loading()}
+                class={`text-white text-lg font-semibold px-6 py-4 rounded-xl shadow-lg transition-all duration-200 transform ${
+                  recommendationsStore.loading()
+                    ? 'bg-gray-400 cursor-not-allowed'
+                    : 'bg-gray-600 hover:bg-gray-700 hover:shadow-xl hover:scale-105'
+                }`}
               >
                 💎 Graham Value
               </button>
+
               <button
-                onClick={() => handleAlternativeScreening('ps')}
-                class="bg-gray-200 hover:bg-gray-300 text-gray-700 font-medium px-4 py-2 rounded-lg transition-colors"
+                onClick={handlePiotroskilAnalysis}
+                disabled={recommendationsStore.loading()}
+                class={`text-white text-lg font-semibold px-6 py-4 rounded-xl shadow-lg transition-all duration-200 transform ${
+                  recommendationsStore.loading()
+                    ? 'bg-green-400 cursor-not-allowed'
+                    : 'bg-green-600 hover:bg-green-700 hover:shadow-xl hover:scale-105'
+                }`}
               >
-                📊 P/S Screening
+                📊 Piotroski F-Score
               </button>
+
               <button
-                onClick={() => handleAlternativeScreening('pe')}
-                class="bg-gray-200 hover:bg-gray-300 text-gray-700 font-medium px-4 py-2 rounded-lg transition-colors"
+                onClick={handleOShaughnessyAnalysis}
+                disabled={recommendationsStore.loading()}
+                class={`text-white text-lg font-semibold px-6 py-4 rounded-xl shadow-lg transition-all duration-200 transform ${
+                  recommendationsStore.loading()
+                    ? 'bg-purple-400 cursor-not-allowed'
+                    : 'bg-purple-600 hover:bg-purple-700 hover:shadow-xl hover:scale-105'
+                }`}
               >
-                📈 P/E Screening
+                📈 O'Shaughnessy Value
               </button>
             </div>
           </div>
@@ -133,8 +166,10 @@ export default function HeroSection() {
           </Show>
           
           <div class="mt-3 text-sm text-gray-600">
-            <span class="font-medium">GARP:</span> Growth at reasonable price with PEG ratios (recommended) │ 
-            <span class="font-medium">Graham:</span> Classic value (limited results in current market)
+            <span class="font-medium">GARP:</span> Growth at reasonable price with PEG ratios │
+            <span class="font-medium">Graham:</span> Classic value screening │
+            <span class="font-medium">Piotroski:</span> Quality & financial strength │
+            <span class="font-medium">O'Shaughnessy:</span> Value composite ranking
           </div>
         </div>
 
@@ -251,25 +286,6 @@ export default function HeroSection() {
           </Show>
         </div>
 
-        {/* Alternative Methods */}
-        <div class="border-t border-blue-200 pt-6">
-          <p class="text-sm text-gray-600 mb-3">Or try alternative screening methods:</p>
-          <div class="flex justify-center gap-4">
-            <button
-              onClick={() => handleAlternativeScreening('ps')}
-              class="text-blue-600 hover:text-blue-800 text-sm font-medium px-4 py-2 rounded-lg hover:bg-blue-50 transition-colors"
-            >
-              📊 P/S Screening
-            </button>
-            <span class="text-gray-300">|</span>
-            <button
-              onClick={() => handleAlternativeScreening('pe')}
-              class="text-blue-600 hover:text-blue-800 text-sm font-medium px-4 py-2 rounded-lg hover:bg-blue-50 transition-colors"
-            >
-              📈 P/E Analysis
-            </button>
-          </div>
-        </div>
       </div>
     </div>
   );

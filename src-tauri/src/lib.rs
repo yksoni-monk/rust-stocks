@@ -89,16 +89,7 @@ pub fn run() {
             commands::analysis::get_stock_date_range,
             commands::analysis::get_valuation_ratios,
             commands::analysis::get_ps_evs_history,
-            commands::analysis::get_undervalued_stocks_by_ps,
-            commands::analysis::get_ps_screening_with_revenue_growth,
             commands::analysis::get_valuation_extremes,
-            
-            // Recommendation commands
-            recommendations::get_value_recommendations_with_stats,
-            recommendations::get_value_recommendations,
-            recommendations::analyze_sp500_pe_values,
-            recommendations::get_recommendation_stats,
-            recommendations::analyze_stock_pe_history,
             
             // Initialization commands
             initialization::get_initialization_status,

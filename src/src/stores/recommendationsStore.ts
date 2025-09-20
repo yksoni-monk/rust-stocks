@@ -32,7 +32,7 @@ export interface RecommendationStats {
   average_risk_score?: number;
 }
 
-export type ScreeningType = 'pe' | 'ps' | 'garp_pe' | 'graham_value';
+export type ScreeningType = 'garp_pe' | 'graham_value' | 'piotroski' | 'oshaughnessy';
 
 export interface GarpCriteria {
   maxPegRatio: number;
@@ -44,9 +44,20 @@ export interface GarpCriteria {
   requirePositiveEarnings: boolean;
 }
 
-export interface PsCriteria {
-  psRatio: number;
+export interface PiotroskilCriteria {
+  minFScore: number;
+  minDataCompleteness: number;
+  passesScreeningOnly: boolean;
+  sectors?: string[];
+}
+
+export interface OShaughnessyCriteria {
+  maxCompositePercentile: number;
+  maxPsRatio: number;
+  maxEvsRatio: number;
   minMarketCap: number;
+  passesScreeningOnly: boolean;
+  sectors?: string[];
 }
 
 export interface GrahamCriteria {
@@ -142,10 +153,21 @@ export function createRecommendationsStore() {
     minQualityScore: 50,
     requirePositiveEarnings: true
   });
-  
-  const [psCriteria, setPsCriteria] = createSignal<PsCriteria>({
-    psRatio: 2.0,
-    minMarketCap: 500_000_000
+
+  const [piotroskilCriteria, setPiotroskilCriteria] = createSignal<PiotroskilCriteria>({
+    minFScore: 3,
+    minDataCompleteness: 50,
+    passesScreeningOnly: false,
+    sectors: []
+  });
+
+  const [oshaughnessyCriteria, setOshaughnessyCriteria] = createSignal<OShaughnessyCriteria>({
+    maxCompositePercentile: 20.0,
+    maxPsRatio: 2.0,
+    maxEvsRatio: 2.0,
+    minMarketCap: 200_000_000,
+    passesScreeningOnly: false,
+    sectors: []
   });
   
   const [grahamCriteria, setGrahamCriteria] = createSignal<GrahamCriteria>({
@@ -186,38 +208,40 @@ export function createRecommendationsStore() {
         case 'garp_pe':
           console.log('🎯 Loading GARP P/E screening results...');
           result = await recommendationsAPI.getGarpPeScreeningResults(
-            stockTickers, 
-            garpCriteria(), 
+            stockTickers,
+            garpCriteria(),
             currentLimit
           );
           break;
-          
-        case 'ps':
-          console.log('🎯 Loading P/S screening results...');
-          result = await recommendationsAPI.getPsScreeningWithRevenueGrowth(
-            stockTickers, 
-            currentLimit, 
-            psCriteria().minMarketCap
+
+        case 'piotroski':
+          console.log('🎯 Loading Piotroski F-Score screening results...');
+          result = await recommendationsAPI.getPiotroskilScreeningResults(
+            stockTickers,
+            piotroskilCriteria(),
+            currentLimit
           );
           break;
-          
-        case 'pe':
-          console.log('🎯 Loading P/E screening results...');
-          const peResult = await recommendationsAPI.getValueRecommendationsWithStats(currentLimit);
-          setRecommendations(peResult.recommendations);
-          setStats(peResult.stats);
-          return;
-          
+
+        case 'oshaughnessy':
+          console.log('🎯 Loading O\'Shaughnessy Value Composite screening results...');
+          result = await recommendationsAPI.getOShaughnessyScreeningResults(
+            stockTickers,
+            oshaughnessyCriteria(),
+            currentLimit
+          );
+          break;
+
         case 'graham_value':
           console.log('🎯 Loading Graham value screening results...');
           result = await recommendationsAPI.runGrahamScreening(grahamCriteria());
           break;
-          
+
         default:
           throw new Error(`Unknown screening type: ${currentScreeningType}`);
       }
       
-      // Transform data for GARP, P/S, and Graham screening
+      // Transform data for all screening types
       if (result && result.length > 0) {
         const transformedRecommendations = result.map((stock: any, index: number) => {
           if (currentScreeningType === 'graham_value') {
@@ -226,7 +250,7 @@ export function createRecommendationsStore() {
               rank: index + 1,
               symbol: stock.result?.symbol || stock.symbol,
               company_name: stock.company_name || stock.result?.symbol || stock.symbol,
-              
+
               // Graham-specific fields
               current_pe_ratio: stock.result?.pe_ratio,
               current_price: stock.result?.current_price,
@@ -236,17 +260,46 @@ export function createRecommendationsStore() {
               garp_score: stock.result?.graham_score, // Use graham_score as garp_score for compatibility
               quality_score: stock.result?.quality_score,
               passes_garp_screening: stock.result?.passes_all_filters,
-              
+
               // Graham-specific reasoning
               reasoning: `${stock.recommendation} | Graham Score: ${stock.result?.graham_score?.toFixed(1) || 'N/A'} | ${stock.value_category} | ${stock.safety_category} | P/E: ${stock.result?.pe_ratio?.toFixed(2) || 'N/A'} | P/B: ${stock.result?.pb_ratio?.toFixed(2) || 'N/A'} | Debt/Equity: ${stock.result?.debt_to_equity?.toFixed(2) || 'N/A'}`
             };
-          } else {
-            // GARP and P/S transformation
+          } else if (currentScreeningType === 'piotroski') {
+            // Piotroski F-Score transformation
             return {
               rank: index + 1,
               symbol: stock.symbol,
               company_name: stock.symbol,
-              
+              current_pe_ratio: null,
+              current_price: null,
+              market_cap: null,
+              garp_score: stock.f_score, // Use F-Score as garp_score for compatibility
+              quality_score: stock.data_completeness_score,
+              passes_garp_screening: stock.passes_screening === 1,
+              reasoning: `F-Score: ${stock.f_score}/6 | Data Quality: ${stock.data_completeness_score}% | ${stock.confidence_level} Confidence | Income: ${stock.criterion_positive_income ? '✓' : '✗'} | ROA: ${stock.criterion_improving_roa ? '✓' : '✗'} | Debt: ${stock.criterion_decreasing_debt ? '✓' : '✗'}`
+            };
+          } else if (currentScreeningType === 'oshaughnessy') {
+            // O'Shaughnessy Value Composite transformation
+            return {
+              rank: index + 1,
+              symbol: stock.symbol,
+              company_name: stock.symbol,
+              current_pe_ratio: null,
+              current_price: stock.current_price,
+              market_cap: stock.market_cap,
+              ps_ratio_ttm: stock.ps_ratio,
+              garp_score: 100 - stock.composite_percentile, // Invert percentile for scoring
+              quality_score: stock.data_completeness_score,
+              passes_garp_screening: stock.passes_screening === 1,
+              reasoning: `Value Rank: ${stock.overall_rank} (${stock.composite_percentile}th percentile) | P/S: ${stock.ps_ratio?.toFixed(2) || 'N/A'} | EV/S: ${stock.evs_ratio?.toFixed(2) || 'N/A'} | Score: ${stock.composite_score?.toFixed(1) || 'N/A'}`
+            };
+          } else {
+            // GARP transformation
+            return {
+              rank: index + 1,
+              symbol: stock.symbol,
+              company_name: stock.symbol,
+
               // GARP-specific fields
               current_pe_ratio: stock.current_pe_ratio,
               peg_ratio: stock.peg_ratio,
@@ -261,15 +314,9 @@ export function createRecommendationsStore() {
               quality_score: stock.quality_score,
               passes_garp_screening: stock.passes_garp_screening,
               market_cap: stock.market_cap,
-              
-              // P/S-specific fields
-              ps_ratio_ttm: stock.ps_ratio_ttm,
-              z_score: stock.z_score,
-              
-              // Generate reasoning based on screening type
-              reasoning: currentScreeningType === 'garp_pe' 
-                ? `GARP Score: ${stock.garp_score?.toFixed(2) || 'N/A'} | P/E: ${stock.current_pe_ratio?.toFixed(2) || 'N/A'} | PEG: ${stock.peg_ratio?.toFixed(2) || 'N/A'} | Growth: ${stock.ttm_growth_rate?.toFixed(1) || stock.annual_growth_rate?.toFixed(1) || 'N/A'}% | Quality: ${stock.quality_score || 0}/100`
-                : `P/S ${stock.ps_ratio_ttm?.toFixed(2) || 'N/A'} (Z-score: ${stock.z_score?.toFixed(2) || 'N/A'})`
+
+              // GARP-specific reasoning
+              reasoning: `GARP Score: ${stock.garp_score?.toFixed(2) || 'N/A'} | P/E: ${stock.current_pe_ratio?.toFixed(2) || 'N/A'} | PEG: ${stock.peg_ratio?.toFixed(2) || 'N/A'} | Growth: ${stock.ttm_growth_rate?.toFixed(1) || stock.annual_growth_rate?.toFixed(1) || 'N/A'}% | Quality: ${stock.quality_score || 0}/100`
             };
           }
         });
@@ -295,9 +342,14 @@ export function createRecommendationsStore() {
     setGarpCriteria(prev => ({ ...prev, ...updates }));
   };
 
-  // Update P/S criteria
-  const updatePsCriteria = (updates: Partial<PsCriteria>) => {
-    setPsCriteria(prev => ({ ...prev, ...updates }));
+  // Update Piotroski criteria
+  const updatePiotroskilCriteria = (updates: Partial<PiotroskilCriteria>) => {
+    setPiotroskilCriteria(prev => ({ ...prev, ...updates }));
+  };
+
+  // Update O'Shaughnessy criteria
+  const updateOshaughnessyCriteria = (updates: Partial<OShaughnessyCriteria>) => {
+    setOshaughnessyCriteria(prev => ({ ...prev, ...updates }));
   };
 
   // Update Graham criteria
@@ -321,16 +373,18 @@ export function createRecommendationsStore() {
     screeningType,
     limit,
     garpCriteria,
-    psCriteria,
+    piotroskilCriteria,
+    oshaughnessyCriteria,
     grahamCriteria,
-    
+
     // Actions
     loadRecommendations,
     updateGarpCriteria,
-    updatePsCriteria,
+    updatePiotroskilCriteria,
+    updateOshaughnessyCriteria,
     updateGrahamCriteria,
     clearRecommendations,
-    
+
     // Setters
     setScreeningType,
     setLimit,

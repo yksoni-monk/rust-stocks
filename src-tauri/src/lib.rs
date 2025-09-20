@@ -126,7 +126,15 @@ pub fn run() {
             data_refresh::get_refresh_progress,
             data_refresh::get_last_refresh_result,
             data_refresh::cancel_refresh_operation,
-            data_refresh::get_refresh_duration_estimates
+            data_refresh::get_refresh_duration_estimates,
+
+            // Piotroski F-Score screening commands
+            piotroski_screening::get_piotroski_screening_results,
+            piotroski_screening::get_piotroski_statistics,
+
+            // O'Shaughnessy Value Composite screening commands
+            oshaughnessy_screening::get_oshaughnessy_screening_results,
+            oshaughnessy_screening::get_oshaughnessy_statistics
         ])
         .setup(|_app| {
             Ok(())

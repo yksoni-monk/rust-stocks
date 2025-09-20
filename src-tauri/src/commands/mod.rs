@@ -8,3 +8,5 @@ pub mod recommendations;
 pub mod garp_pe;
 pub mod graham_screening;
 pub mod data_refresh;
+pub mod piotroski_screening;
+pub mod oshaughnessy_screening;

@@ -262,11 +262,100 @@ async fn get_sp500_from_database(pool: &SqlitePool) -> Result<Vec<String>, Strin
         .fetch_all(pool)
         .await
         .map_err(|e| format!("Failed to fetch S&P 500 symbols from database: {}", e))?;
-    
+
     let symbols: Vec<String> = rows.into_iter()
         .map(|row| row.get::<String, _>("symbol"))
         .collect();
-    
+
     println!("📱 Retrieved {} S&P 500 symbols from database", symbols.len());
     Ok(symbols)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::{SqlitePool, pool::PoolOptions};
+    use std::time::Duration;
+    use anyhow::Result;
+
+    /// Simple test database setup for stocks module tests
+    struct TestDatabase {
+        pool: SqlitePool,
+    }
+
+    impl TestDatabase {
+        async fn new() -> Result<Self> {
+            let current_dir = std::env::current_dir()?;
+            let test_db_path = current_dir.join("db/test.db");
+
+            let database_url = format!("sqlite:{}", test_db_path.to_string_lossy());
+
+            let pool = PoolOptions::new()
+                .max_connections(10)
+                .min_connections(2)
+                .acquire_timeout(Duration::from_secs(10))
+                .idle_timeout(Some(Duration::from_secs(600)))
+                .connect(&database_url).await?;
+
+            Ok(TestDatabase { pool })
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_stocks_paginated() {
+        let test_db = TestDatabase::new().await.unwrap();
+
+        let result = super::get_stocks_paginated(10, 0).await;
+        assert!(result.is_ok(), "get_stocks_paginated should succeed");
+
+        let stocks = result.unwrap();
+        assert!(stocks.len() <= 10, "Should return at most 10 stocks");
+
+        // Test pagination with offset
+        let result2 = super::get_stocks_paginated(5, 5).await;
+        assert!(result2.is_ok(), "get_stocks_paginated with offset should succeed");
+
+        println!("✅ get_stocks_paginated test passed");
+    }
+
+    #[tokio::test]
+    async fn test_search_stocks() {
+        let _test_db = TestDatabase::new().await.unwrap();
+
+        let result = super::search_stocks("AAPL".to_string()).await;
+        assert!(result.is_ok(), "search_stocks should succeed");
+
+        let stocks = result.unwrap();
+        if !stocks.is_empty() {
+            assert!(stocks[0].symbol.contains("AAPL") || stocks[0].company_name.to_lowercase().contains("apple"),
+                    "Search should return relevant results");
+        }
+
+        // Test empty search
+        let empty_result = super::search_stocks("NONEXISTENTSYMBOL123".to_string()).await;
+        assert!(empty_result.is_ok(), "Empty search should succeed");
+
+        println!("✅ search_stocks test passed");
+    }
+
+    #[tokio::test]
+    async fn test_get_sp500_symbols() {
+        let _test_db = TestDatabase::new().await.unwrap();
+
+        let result = super::get_sp500_symbols().await;
+        assert!(result.is_ok(), "get_sp500_symbols should succeed");
+
+        let symbols = result.unwrap();
+        assert!(!symbols.is_empty(), "Should return S&P 500 symbols");
+        assert!(symbols.len() >= 400, "Should have at least 400 symbols (allowing for some variance)");
+
+        // Check that symbols are properly formatted
+        for symbol in symbols.iter().take(10) {
+            assert!(!symbol.is_empty(), "Symbol should not be empty");
+            assert!(symbol.chars().all(|c| c.is_alphanumeric() || c == '.'),
+                    "Symbol should contain only alphanumeric characters and dots");
+        }
+
+        println!("✅ get_sp500_symbols test passed with {} symbols", symbols.len());
+    }
 }

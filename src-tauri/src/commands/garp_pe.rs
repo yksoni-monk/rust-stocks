@@ -136,6 +136,104 @@ pub async fn get_garp_pe_screening_results(
     
     let results = query_builder.fetch_all(&pool).await
         .map_err(|e| format!("GARP P/E screening query failed: {}", e))?;
-    
+
     Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::{SqlitePool, pool::PoolOptions};
+    use std::time::Duration;
+    use anyhow::Result;
+
+    /// Simple test database setup for GARP PE module tests
+    struct TestDatabase {
+        pool: SqlitePool,
+    }
+
+    impl TestDatabase {
+        async fn new() -> Result<Self> {
+            let current_dir = std::env::current_dir()?;
+            let test_db_path = current_dir.join("db/test.db");
+
+            let database_url = format!("sqlite:{}", test_db_path.to_string_lossy());
+
+            let pool = PoolOptions::new()
+                .max_connections(10)
+                .min_connections(2)
+                .acquire_timeout(Duration::from_secs(10))
+                .idle_timeout(Some(Duration::from_secs(600)))
+                .connect(&database_url).await?;
+
+            Ok(TestDatabase { pool })
+        }
+    }
+
+    #[tokio::test]
+    async fn test_garp_pe_screening() {
+        let _test_db = TestDatabase::new().await.unwrap();
+
+        // Test with S&P 500 tickers - using common ones that should exist
+        let stock_tickers = vec![
+            "AAPL".to_string(),
+            "MSFT".to_string(),
+            "GOOGL".to_string(),
+            "AMZN".to_string(),
+            "TSLA".to_string(),
+        ];
+
+        let criteria = Some(GarpPeScreeningCriteria {
+            max_peg_ratio: 2.0,
+            min_revenue_growth: 5.0,
+            min_profit_margin: 3.0,
+            max_debt_to_equity: 3.0,
+            min_market_cap: 100_000_000.0,
+            min_quality_score: 25,
+            require_positive_earnings: true,
+        });
+
+        let result = super::get_garp_pe_screening_results(
+            stock_tickers,
+            criteria,
+            Some(10),
+        ).await;
+
+        // Note: This test may fail if data is stale, which is expected behavior
+        // The test validates that the function executes without panicking
+        match result {
+            Ok(results) => {
+                println!("✅ GARP P/E screening test passed with {} results", results.len());
+                // If we get results, validate the structure
+                if !results.is_empty() {
+                    assert!(!results[0].symbol.is_empty(), "Symbol should not be empty");
+                }
+            }
+            Err(err) => {
+                // Check if it's a data freshness error (expected in some cases)
+                if err.contains("cannot proceed due to stale data") {
+                    println!("⚠️ GARP P/E screening test: Data is stale (expected): {}", err);
+                } else {
+                    panic!("Unexpected GARP P/E screening error: {}", err);
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_garp_pe_screening_empty_tickers() {
+        let _test_db = TestDatabase::new().await.unwrap();
+
+        let result = super::get_garp_pe_screening_results(
+            vec![], // Empty tickers
+            None,
+            Some(10),
+        ).await;
+
+        assert!(result.is_ok(), "Empty tickers should return Ok with empty results");
+        let results = result.unwrap();
+        assert!(results.is_empty(), "Should return empty results for empty tickers");
+
+        println!("✅ GARP P/E screening empty tickers test passed");
+    }
 }

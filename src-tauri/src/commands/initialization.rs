@@ -152,3 +152,64 @@ pub async fn check_database_schema() -> Result<String, String> {
         Err(format!("Missing required tables: {}", missing_tables.join(", ")))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::{SqlitePool, pool::PoolOptions};
+    use std::time::Duration;
+    use anyhow::Result;
+
+    /// Simple test database setup for initialization module tests
+    struct TestDatabase {
+        pool: SqlitePool,
+    }
+
+    impl TestDatabase {
+        async fn new() -> Result<Self> {
+            let current_dir = std::env::current_dir()?;
+            let test_db_path = current_dir.join("db/test.db");
+
+            let database_url = format!("sqlite:{}", test_db_path.to_string_lossy());
+
+            let pool = PoolOptions::new()
+                .max_connections(10)
+                .min_connections(2)
+                .acquire_timeout(Duration::from_secs(10))
+                .idle_timeout(Some(Duration::from_secs(600)))
+                .connect(&database_url).await?;
+
+            Ok(TestDatabase { pool })
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_initialization_status() {
+        let _test_db = TestDatabase::new().await.unwrap();
+
+        let result = super::get_initialization_status().await;
+        assert!(result.is_ok(), "get_initialization_status should succeed");
+
+        let status = result.unwrap();
+        assert!(status.companies_processed >= 0, "Companies processed should be non-negative");
+        assert!(status.total_companies >= 0, "Total companies should be non-negative");
+        assert!(!status.current_step.is_empty(), "Current step should not be empty");
+        assert!(!status.status.is_empty(), "Status should not be empty");
+
+        println!("✅ Initialization status test passed: {}, {} of {} companies",
+                 status.status, status.companies_processed, status.total_companies);
+    }
+
+    #[tokio::test]
+    async fn test_check_database_schema() {
+        let _test_db = TestDatabase::new().await.unwrap();
+
+        let result = super::check_database_schema().await;
+        assert!(result.is_ok(), "check_database_schema should succeed");
+
+        let message = result.unwrap();
+        assert!(!message.is_empty(), "Schema check should return a message");
+
+        println!("✅ Database schema check test passed: {}", message);
+    }
+}

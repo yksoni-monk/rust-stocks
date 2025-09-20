@@ -69,3 +69,51 @@ pub async fn get_database_stats() -> Result<DatabaseStats, String> {
         last_update,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::{SqlitePool, pool::PoolOptions};
+    use std::time::Duration;
+    use anyhow::Result;
+
+    /// Simple test database setup for data module tests
+    struct TestDatabase {
+        pool: SqlitePool,
+    }
+
+    impl TestDatabase {
+        async fn new() -> Result<Self> {
+            let current_dir = std::env::current_dir()?;
+            let test_db_path = current_dir.join("db/test.db");
+
+            let database_url = format!("sqlite:{}", test_db_path.to_string_lossy());
+
+            let pool = PoolOptions::new()
+                .max_connections(10)
+                .min_connections(2)
+                .acquire_timeout(Duration::from_secs(10))
+                .idle_timeout(Some(Duration::from_secs(600)))
+                .connect(&database_url).await?;
+
+            Ok(TestDatabase { pool })
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_database_stats() {
+        let _test_db = TestDatabase::new().await.unwrap();
+
+        let result = super::get_database_stats().await;
+        assert!(result.is_ok(), "get_database_stats should succeed");
+
+        let stats = result.unwrap();
+        assert!(stats.total_stocks > 0, "Should have stocks in database");
+        assert!(stats.data_coverage_percentage >= 0.0 && stats.data_coverage_percentage <= 100.0,
+                "Data coverage percentage should be between 0 and 100");
+        assert!(!stats.last_update.is_empty(), "Last update should not be empty");
+
+        println!("✅ Database stats test passed: {} stocks, {} price records, {:.1}% coverage",
+                 stats.total_stocks, stats.total_price_records, stats.data_coverage_percentage);
+    }
+}

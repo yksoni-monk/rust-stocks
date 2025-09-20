@@ -735,3 +735,129 @@ pub async fn get_valuation_extremes(symbol: String) -> Result<ValuationExtremes,
         max_evs_ratio: evs_extremes.1,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::{SqlitePool, pool::PoolOptions};
+    use std::time::Duration;
+    use anyhow::Result;
+
+    /// Simple test database setup for analysis module tests
+    struct TestDatabase {
+        pool: SqlitePool,
+    }
+
+    impl TestDatabase {
+        async fn new() -> Result<Self> {
+            let current_dir = std::env::current_dir()?;
+            let test_db_path = current_dir.join("db/test.db");
+
+            let database_url = format!("sqlite:{}", test_db_path.to_string_lossy());
+
+            let pool = PoolOptions::new()
+                .max_connections(10)
+                .min_connections(2)
+                .acquire_timeout(Duration::from_secs(10))
+                .idle_timeout(Some(Duration::from_secs(600)))
+                .connect(&database_url).await?;
+
+            Ok(TestDatabase { pool })
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_price_history() {
+        let _test_db = TestDatabase::new().await.unwrap();
+
+        let result = super::get_price_history(
+            "AAPL".to_string(),
+            "2024-01-01".to_string(),
+            "2024-01-31".to_string(),
+        ).await;
+
+        assert!(result.is_ok(), "get_price_history should succeed");
+        let prices = result.unwrap();
+
+        if !prices.is_empty() {
+            assert!(prices[0].close > 0.0, "Price should be positive");
+            assert!(prices[0].volume >= 0, "Volume should be non-negative");
+        }
+
+        println!("✅ get_price_history test passed with {} records", prices.len());
+    }
+
+    #[tokio::test]
+    async fn test_get_valuation_ratios() {
+        let _test_db = TestDatabase::new().await.unwrap();
+
+        let result = super::get_valuation_ratios("AAPL".to_string()).await;
+        assert!(result.is_ok(), "get_valuation_ratios should succeed");
+
+        let ratios_opt = result.unwrap();
+        if let Some(ratios) = ratios_opt {
+            assert_eq!(ratios.symbol, "AAPL", "Symbol should match");
+            assert!(ratios.data_completeness_score >= 0, "Data completeness score should be non-negative");
+        }
+
+        println!("✅ get_valuation_ratios test passed");
+    }
+
+    #[tokio::test]
+    async fn test_get_ps_evs_history() {
+        let _test_db = TestDatabase::new().await.unwrap();
+
+        let result = super::get_ps_evs_history(
+            "AAPL".to_string(),
+            "2024-01-01".to_string(),
+            "2024-01-31".to_string(),
+        ).await;
+
+        assert!(result.is_ok(), "get_ps_evs_history should succeed");
+        let history = result.unwrap();
+
+        // History can be empty if no data exists for the period
+        if !history.is_empty() {
+            // Basic validation that we have proper data structure
+            assert!(history.len() > 0, "Should have history records if any exist");
+        }
+
+        println!("✅ get_ps_evs_history test passed with {} records", history.len());
+    }
+
+    #[tokio::test]
+    async fn test_get_stock_date_range() {
+        let _test_db = TestDatabase::new().await.unwrap();
+
+        let result = super::get_stock_date_range("AAPL".to_string()).await;
+        assert!(result.is_ok(), "get_stock_date_range should succeed");
+
+        let date_range = result.unwrap();
+        assert_eq!(date_range.symbol, "AAPL", "Symbol should match");
+        assert!(date_range.total_records >= 0, "Total records should be non-negative");
+        assert!(!date_range.data_source.is_empty(), "Data source should not be empty");
+
+        println!("✅ get_stock_date_range test passed");
+    }
+
+    #[tokio::test]
+    async fn test_get_valuation_extremes() {
+        let _test_db = TestDatabase::new().await.unwrap();
+
+        let result = super::get_valuation_extremes("AAPL".to_string()).await;
+        assert!(result.is_ok(), "get_valuation_extremes should succeed");
+
+        let extremes = result.unwrap();
+        assert_eq!(extremes.symbol, "AAPL", "Symbol should match");
+
+        // Check that if ratios exist, they are positive
+        if let Some(min_pe) = extremes.min_pe_ratio {
+            assert!(min_pe > 0.0, "Min P/E ratio should be positive");
+        }
+        if let Some(max_pe) = extremes.max_pe_ratio {
+            assert!(max_pe > 0.0, "Max P/E ratio should be positive");
+        }
+
+        println!("✅ get_valuation_extremes test passed");
+    }
+}

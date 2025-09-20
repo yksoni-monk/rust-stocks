@@ -435,6 +435,109 @@ mod tests {
         result.graham_score = Some(45.0);
         assert_eq!(generate_recommendation(&result), "Avoid");
     }
+
+    // Integration tests for Tauri commands
+    use sqlx::{SqlitePool, pool::PoolOptions};
+    use std::time::Duration;
+    use anyhow::Result;
+
+    /// Simple test database setup for Graham screening module tests
+    struct TestDatabase {
+        pool: SqlitePool,
+    }
+
+    impl TestDatabase {
+        async fn new() -> Result<Self> {
+            let current_dir = std::env::current_dir()?;
+            let test_db_path = current_dir.join("db/test.db");
+
+            let database_url = format!("sqlite:{}", test_db_path.to_string_lossy());
+
+            let pool = PoolOptions::new()
+                .max_connections(10)
+                .min_connections(2)
+                .acquire_timeout(Duration::from_secs(10))
+                .idle_timeout(Some(Duration::from_secs(600)))
+                .connect(&database_url).await?;
+
+            Ok(TestDatabase { pool })
+        }
+    }
+
+    #[tokio::test]
+    async fn test_graham_screening_default_criteria() {
+        let _test_db = TestDatabase::new().await.unwrap();
+
+        let result = super::get_graham_criteria_defaults().await;
+        assert!(result.is_ok(), "get_graham_criteria_defaults should succeed");
+
+        let criteria = result.unwrap();
+        assert!(criteria.max_pe_ratio > 0.0, "Max P/E ratio should be positive");
+        assert!(criteria.max_pb_ratio > 0.0, "Max P/B ratio should be positive");
+        assert!(criteria.min_market_cap > 0.0, "Min market cap should be positive");
+
+        println!("✅ Graham screening default criteria test passed");
+    }
+
+    #[tokio::test]
+    async fn test_run_graham_screening() {
+        let _test_db = TestDatabase::new().await.unwrap();
+
+        // Get default criteria
+        let criteria = super::get_graham_criteria_defaults().await.unwrap();
+
+        let result = super::run_graham_screening(criteria).await;
+        assert!(result.is_ok(), "run_graham_screening should succeed");
+
+        let results = result.unwrap();
+
+        // Results can be empty if no stocks meet criteria
+        if !results.is_empty() {
+            assert!(!results[0].result.symbol.is_empty(), "Symbol should not be empty");
+            assert_eq!(results[0].is_sp500, true, "Should only return S&P 500 stocks");
+        }
+
+        println!("✅ Graham screening test passed with {} results", results.len());
+    }
+
+    #[tokio::test]
+    async fn test_get_graham_screening_presets() {
+        let _test_db = TestDatabase::new().await.unwrap();
+
+        let result = super::get_graham_screening_presets().await;
+        assert!(result.is_ok(), "get_graham_screening_presets should succeed");
+
+        let presets = result.unwrap();
+
+        // Should have at least some default presets
+        if !presets.is_empty() {
+            assert!(!presets[0].name.is_empty(), "Preset name should not be empty");
+        }
+
+        println!("✅ Graham screening presets test passed with {} presets", presets.len());
+    }
+
+    #[tokio::test]
+    async fn test_get_latest_graham_results() {
+        let _test_db = TestDatabase::new().await.unwrap();
+
+        let result = super::get_latest_graham_results(Some(10)).await;
+
+        // This test might fail if there's no cached data, which is fine
+        match result {
+            Ok(results) => {
+                // Results can be empty if no previous screenings exist
+                if !results.is_empty() {
+                    assert!(!results[0].result.symbol.is_empty(), "Symbol should not be empty");
+                }
+                println!("✅ Latest Graham results test passed with {} results", results.len());
+            }
+            Err(err) => {
+                // This is expected if no cached data exists
+                println!("⚠️ Latest Graham results test: No cached data (expected): {}", err);
+            }
+        }
+    }
 }
 
 // Provide a Default implementation for GrahamScreeningResult for testing

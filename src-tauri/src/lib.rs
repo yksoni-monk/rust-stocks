@@ -103,6 +103,7 @@ pub fn run() {
             // Initialization commands
             initialization::get_initialization_status,
             initialization::check_database_schema,
+            initialization::initialize_sp500_stocks,
             
             // GARP P/E screening commands
             garp_pe::get_garp_pe_screening_results,

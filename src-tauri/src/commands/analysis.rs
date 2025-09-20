@@ -105,34 +105,6 @@ pub async fn get_price_history(symbol: String, start_date: String, end_date: Str
 }
 
 #[tauri::command]
-pub async fn export_data(symbol: String, format: String) -> Result<String, String> {
-    let pool = get_database_connection().await?;
-    
-    // Get count of records for this stock by symbol
-    let record_count = match sqlx::query("
-        SELECT COUNT(*) as count 
-        FROM daily_prices dp
-        JOIN stocks s ON dp.stock_id = s.id
-        WHERE s.symbol = ?1")
-        .bind(&symbol)
-        .fetch_one(&pool).await 
-    {
-        Ok(row) => row.get::<i64, _>("count"),
-        Err(_) => 0,
-    };
-    
-    let message = format!(
-        "Export simulation: {} records for {} in {} format. \
-        This feature will be enhanced to generate actual files in the next phase.",
-        record_count,
-        symbol,
-        format
-    );
-    
-    Ok(message)
-}
-
-#[tauri::command]
 pub async fn get_stock_date_range(symbol: String) -> Result<DateRangeInfo, String> {
     let pool = get_database_connection().await?;
     

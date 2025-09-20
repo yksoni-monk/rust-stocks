@@ -69,17 +69,3 @@ pub async fn get_database_stats() -> Result<DatabaseStats, String> {
         last_update,
     })
 }
-
-#[tauri::command]
-pub async fn fetch_stock_data(stock_symbols: Vec<String>, start_date: String, end_date: String) -> Result<String, String> {
-    // For now, just return a simulation message
-    // In the full implementation, this would integrate with your DataCollector
-    let message = format!(
-        "Data fetching simulation: Would fetch {} stocks from {} to {}. \
-        This feature will be integrated with the actual DataCollector in the next phase.",
-        stock_symbols.len(), 
-        start_date, 
-        end_date
-    );
-    Ok(message)
-}

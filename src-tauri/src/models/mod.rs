@@ -45,32 +45,8 @@ pub struct DailyPrice {
     pub dividend_yield: Option<f64>,
 }
 
-/// Stock analysis result for P/E decline ranking
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct StockAnalysis {
-    pub stock: Stock,
-    pub current_price: f64,
-    pub current_pe: Option<f64>,
-    pub year_ago_pe: Option<f64>,
-    pub pe_decline_percent: f64,
-    pub price_change_percent: f64,
-}
-
-/// Detailed stock information for UI display
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct StockDetail {
-    pub stock: Stock,
-    pub current_price: DailyPrice,
-    pub price_history: Vec<DailyPrice>,
-    pub pe_trend: Vec<(NaiveDate, f64)>,
-    pub volume_trend: Vec<(NaiveDate, i64)>,
-}
-
 /// Schwab API quote response structure
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct SchwabQuote {
     pub symbol: String,
     #[serde(rename = "lastPrice")]
@@ -105,13 +81,6 @@ pub struct SchwabPriceBar {
 }
 
 /// System metadata for tracking state
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct SystemMetadata {
-    pub key: String,
-    pub value: String,
-    pub updated_at: DateTime<Utc>,
-}
 
 /// Configuration for the application
 #[derive(Debug, Clone)]
@@ -123,7 +92,6 @@ pub struct Config {
     pub alpha_vantage_api_key: String,
     pub database_path: String,
     pub rate_limit_per_minute: u32,
-    #[allow(dead_code)]
     pub batch_size: usize,
 }
 
@@ -170,7 +138,6 @@ impl Config {
 // Enhanced TUI Application Models
 // ============================================================================
 
-// DateRange moved to concurrent_fetcher.rs to avoid duplication
 
 // DatabaseStats moved to ui/dashboard.rs to avoid duplication
 

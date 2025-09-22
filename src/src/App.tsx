@@ -80,7 +80,10 @@ function App() {
           {/* Results Area - Shows when screening is run */}
           <Show when={uiStore.showRecommendations()}>
             <div data-section="recommendations">
-              <ResultsPanel onClose={uiStore.closeAllPanels} />
+              <ResultsPanel 
+                onClose={uiStore.closeAllPanels} 
+                screeningType={recommendationsStore.screeningType()}
+              />
             </div>
           </Show>
 

@@ -3,11 +3,69 @@ import { recommendationsStore } from '../stores/recommendationsStore';
 import { stockStore } from '../stores/stockStore';
 import type { Recommendation, ScreeningType } from '../stores/recommendationsStore';
 
+// Color mapping for different screening types to match button colors
+const getScreeningTypeColors = (screeningType: ScreeningType) => {
+  switch (screeningType) {
+    case 'garp_pe':
+      return {
+        primary: 'bg-blue-600',
+        hover: 'hover:bg-blue-700',
+        text: 'text-blue-100',
+        accent: 'text-blue-600',
+        gradient: 'from-blue-50 to-blue-100',
+        border: 'border-blue-200'
+      };
+    case 'graham_value':
+      return {
+        primary: 'bg-gray-600',
+        hover: 'hover:bg-gray-700',
+        text: 'text-gray-100',
+        accent: 'text-gray-600',
+        gradient: 'from-gray-50 to-gray-100',
+        border: 'border-gray-200'
+      };
+    case 'piotroski':
+      return {
+        primary: 'bg-green-600',
+        hover: 'hover:bg-green-700',
+        text: 'text-green-100',
+        accent: 'text-green-600',
+        gradient: 'from-green-50 to-emerald-50',
+        border: 'border-green-200'
+      };
+    case 'oshaughnessy':
+      return {
+        primary: 'bg-purple-600',
+        hover: 'hover:bg-purple-700',
+        text: 'text-purple-100',
+        accent: 'text-purple-600',
+        gradient: 'from-purple-50 to-purple-100',
+        border: 'border-purple-200'
+      };
+    default:
+      return {
+        primary: 'bg-blue-600',
+        hover: 'hover:bg-blue-700',
+        text: 'text-blue-100',
+        accent: 'text-blue-600',
+        gradient: 'from-blue-50 to-blue-100',
+        border: 'border-blue-200'
+      };
+  }
+};
+
 interface ResultsPanelProps {
   onClose: () => void;
+  screeningType: ScreeningType;
 }
 
 export default function ResultsPanel(props: ResultsPanelProps) {
+  console.log('🚀 ResultsPanel created with screening type:', props.screeningType);
+  
+  // Get colors based on the prop - simple and direct
+  const colors = getScreeningTypeColors(props.screeningType);
+  console.log('🎨 Using colors for', props.screeningType, ':', colors);
+
   // Load recommendations when S&P 500 symbols are available
   const loadRecommendations = () => {
     const symbols = stockStore.sp500Symbols();
@@ -47,31 +105,31 @@ export default function ResultsPanel(props: ResultsPanelProps) {
   };
 
   return (
-    <div class="bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl border-2 border-green-200 shadow-lg mb-8">
+    <div class={`bg-gradient-to-r ${colors.gradient} rounded-xl border-2 ${colors.border} shadow-lg mb-8`}>
       {/* Results Header */}
-      <div class="bg-gradient-to-r from-green-600 to-emerald-600 text-white p-6 rounded-t-xl">
+      <div class={`${colors.primary} text-white p-6 rounded-t-xl`}>
         <div class="flex justify-between items-start">
           <div class="flex-1">
             <h2 class="text-2xl font-bold mb-2">
-              {getScreeningTitle(recommendationsStore.screeningType())}
+              {getScreeningTitle(props.screeningType)}
             </h2>
             <Show 
               when={!recommendationsStore.loading() && !recommendationsStore.error() && recommendationsStore.recommendations().length > 0}
               fallback={
-                <p class="text-green-100 opacity-90">
+                <p class={`${colors.text} opacity-90`}>
                   Analyzing S&P 500 stocks with advanced screening algorithms
                 </p>
               }
             >
-              <p class="text-green-100">
-                {getScreeningSummary(recommendationsStore.screeningType(), recommendationsStore.recommendations().length)}
+              <p class={colors.text}>
+                {getScreeningSummary(props.screeningType, recommendationsStore.recommendations().length)}
               </p>
             </Show>
           </div>
           
           <button
             onClick={props.onClose}
-            class="ml-4 p-2 hover:bg-green-700 rounded-full transition-colors"
+            class={`ml-4 p-2 ${colors.hover} rounded-full transition-colors`}
             title="Close results"
           >
             <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">

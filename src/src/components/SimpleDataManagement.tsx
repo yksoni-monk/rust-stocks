@@ -203,7 +203,9 @@ export default function SimpleDataManagement() {
   };
 
   const handleCardRefresh = (cardId: 'market' | 'financial' | 'ratios') => {
-    dataRefreshStore.startRefresh(cardId);
+    // Map card IDs to backend refresh modes
+    const refreshMode = cardId === 'financial' ? 'financials' : cardId;
+    dataRefreshStore.startRefresh(refreshMode as 'market' | 'financials' | 'ratios');
   };
 
   const handleCardSelection = (cardId: string, selected: boolean) => {

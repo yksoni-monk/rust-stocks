@@ -55,7 +55,7 @@ export const analysisAPI = {
 
   // Get price history
   async getPriceHistory(symbol: string, startDate: string, endDate: string): Promise<PriceData[]> {
-    return await invoke('get_price_history', { symbol, startDate, endDate });
+    return await invoke('get_price_history', { symbol, start_date: startDate, end_date: endDate });
   },
 
   // Get valuation ratios
@@ -65,7 +65,7 @@ export const analysisAPI = {
 
   // Get P/S and EV/S history
   async getPsEvsHistory(symbol: string, startDate: string, endDate: string): Promise<any[]> {
-    return await invoke('get_ps_evs_history', { symbol, startDate, endDate });
+    return await invoke('get_ps_evs_history', { symbol, start_date: startDate, end_date: endDate });
   },
 
   // Get valuation extremes (all-time high/low P/E and P/S ratios)

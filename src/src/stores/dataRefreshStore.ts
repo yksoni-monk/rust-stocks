@@ -1,4 +1,5 @@
 import { createSignal } from 'solid-js';
+import { listen } from '@tauri-apps/api/event';
 import { dataRefreshAPI } from '../services/api';
 import type {
   SystemFreshnessReport,
@@ -16,6 +17,7 @@ export function createDataRefreshStore() {
   const [lastRefreshResult, setLastRefreshResult] = createSignal<RefreshResult | null>(null);
   const [durationEstimates, setDurationEstimates] = createSignal<RefreshDurationEstimates | null>(null);
   const [isRefreshing, setIsRefreshing] = createSignal(false);
+  const [refreshingCards, setRefreshingCards] = createSignal<Set<string>>(new Set());
   const [error, setError] = createSignal<string | null>(null);
   const [currentSessionId, setCurrentSessionId] = createSignal<string | null>(null);
 
@@ -56,11 +58,19 @@ export function createDataRefreshStore() {
     }
   };
 
+  // Check if a specific card is refreshing
+  const isCardRefreshing = (cardMode: string) => {
+    return refreshingCards().has(cardMode);
+  };
+
   // Start data refresh operation
   const startRefresh = async (mode: 'market' | 'financials' | 'ratios', forceRefresh = false) => {
     try {
       setError(null);
       setIsRefreshing(true);
+
+      // Add this specific card to refreshing set
+      setRefreshingCards(prev => new Set([...prev, mode]));
 
       const request: RefreshRequestDto = {
         mode,
@@ -80,6 +90,12 @@ export function createDataRefreshStore() {
       const errorMessage = err instanceof Error ? err.message : 'Failed to start refresh';
       setError(errorMessage);
       setIsRefreshing(false);
+      // Remove from refreshing set on error
+      setRefreshingCards(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(mode);
+        return newSet;
+      });
       console.error('❌ Failed to start refresh:', err);
     }
   };
@@ -114,6 +130,17 @@ export function createDataRefreshStore() {
           if (progress.status === 'completed' || progress.status === 'failed') {
             stopProgressPolling();
             setIsRefreshing(false);
+
+            // Remove the specific card from refreshing set
+            const operationType = progress.operation_type;
+            if (operationType) {
+              setRefreshingCards(prev => {
+                const newSet = new Set(prev);
+                // Convert to lowercase to match what we stored (backend uses "Market", frontend uses "market")
+                newSet.delete(operationType.toLowerCase());
+                return newSet;
+              });
+            }
 
             // Update freshness status after completion
             await checkDataFreshness();
@@ -208,6 +235,27 @@ export function createDataRefreshStore() {
     await checkDataFreshness();
     await loadDurationEstimates();
     await loadLastRefreshResult();
+
+    // Listen for refresh completion events from backend
+    listen('refresh-completed', async (event: any) => {
+      const { mode, status } = event.payload;
+      console.log(`🎉 Refresh completed for ${mode}: ${status}`);
+
+      // Remove from refreshing set
+      setRefreshingCards(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(mode);
+        return newSet;
+      });
+
+      // Update freshness status
+      await checkDataFreshness();
+
+      // Stop global refreshing state
+      setIsRefreshing(false);
+      stopProgressPolling();
+    });
+
     return setupAutoRefresh();
   };
 
@@ -268,6 +316,9 @@ export function createDataRefreshStore() {
     loadDurationEstimates,
     loadLastRefreshResult,
     initialize,
+
+    // Card-specific refresh state
+    isCardRefreshing,
 
     // Utilities
     getDataTypeIcon,

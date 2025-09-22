@@ -6,6 +6,7 @@ use crate::tools::data_freshness_checker::{DataFreshnessChecker, SystemFreshness
 use crate::tools::data_refresh_orchestrator::{DataRefreshOrchestrator, RefreshRequest, RefreshMode, RefreshResult};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
+use tauri::Emitter;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RefreshProgress {
@@ -61,7 +62,7 @@ pub async fn check_screening_readiness(feature: String) -> Result<bool, String> 
 
 /// Start a data refresh operation
 #[tauri::command]
-pub async fn start_data_refresh(request: RefreshRequestDto) -> Result<String, String> {
+pub async fn start_data_refresh(app_handle: tauri::AppHandle, request: RefreshRequestDto) -> Result<String, String> {
     let pool = get_database_connection().await
         .map_err(|e| format!("Database connection failed: {}", e))?;
 
@@ -86,12 +87,45 @@ pub async fn start_data_refresh(request: RefreshRequestDto) -> Result<String, St
     let result = orchestrator.execute_refresh(refresh_request).await
         .map_err(|e| format!("Failed to start data refresh: {}", e))?;
 
+    let session_id = result.session_id.clone();
+    let mode = request.mode.clone();
+
+    // Spawn background task to monitor completion and emit event
+    tokio::spawn(async move {
+        // Wait for completion by polling the database
+        let pool = match get_database_connection().await {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+
+        // Poll every 2 seconds for completion
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+
+            let query = "SELECT status FROM refresh_progress WHERE session_id = ? ORDER BY start_time DESC LIMIT 1";
+            if let Ok(row) = sqlx::query(query).bind(&session_id).fetch_optional(&pool).await {
+                if let Some(row) = row {
+                    let status: String = row.get("status");
+                    if status == "completed" || status == "failed" {
+                        // Emit event to frontend
+                        let _ = app_handle.emit("refresh-completed", serde_json::json!({
+                            "mode": mode,
+                            "session_id": session_id,
+                            "status": status
+                        }));
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
     Ok(result.session_id)
 }
 
 /// Get progress of active refresh operations
 #[tauri::command]
-pub async fn get_refresh_progress() -> Result<Vec<RefreshProgress>, String> {
+pub async fn get_refresh_progress(session_id: String) -> Result<Option<RefreshProgress>, String> {
     let pool = get_database_connection().await
         .map_err(|e| format!("Database connection failed: {}", e))?;
 
@@ -110,11 +144,13 @@ pub async fn get_refresh_progress() -> Result<Vec<RefreshProgress>, String> {
             initiated_by,
             CAST((JULIANDAY('now') - JULIANDAY(start_time)) * 24 * 60 AS INTEGER) as elapsed_minutes
         FROM refresh_progress
-        WHERE status IN ('running', 'error')
+        WHERE session_id = ? AND status IN ('running', 'completed', 'failed', 'error')
         ORDER BY start_time DESC
+        LIMIT 1
     "#;
 
     let rows = sqlx::query(query)
+        .bind(&session_id)
         .fetch_all(&pool)
         .await
         .map_err(|e| format!("Failed to get refresh progress: {}", e))?;
@@ -134,7 +170,7 @@ pub async fn get_refresh_progress() -> Result<Vec<RefreshProgress>, String> {
             initiated_by: row.get("initiated_by"),
             elapsed_minutes: row.get("elapsed_minutes"),
         }
-    }).collect();
+    }).next();
 
     Ok(progress)
 }

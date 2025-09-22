@@ -4,10 +4,10 @@ use sqlx::{SqlitePool, Row};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PriceData {
     pub date: String,
-    pub open: f64,
-    pub high: f64,
-    pub low: f64,
-    pub close: f64,
+    pub open_price: f64,
+    pub high_price: f64,
+    pub low_price: f64,
+    pub close_price: f64,
     pub volume: i64,
     pub pe_ratio: Option<f64>,
 }
@@ -86,10 +86,10 @@ pub async fn get_price_history(symbol: String, start_date: String, end_date: Str
                 
                 PriceData {
                     date: date_string,
-                    open: row.get::<f64, _>("open_price"),
-                    high: row.get::<f64, _>("high_price"),
-                    low: row.get::<f64, _>("low_price"),
-                    close: row.get::<f64, _>("close_price"),
+                    open_price: row.get::<f64, _>("open_price"),
+                    high_price: row.get::<f64, _>("high_price"),
+                    low_price: row.get::<f64, _>("low_price"),
+                    close_price: row.get::<f64, _>("close_price"),
                     volume: row.try_get::<Option<i64>, _>("volume").unwrap_or(None).unwrap_or(0),
                     pe_ratio: row.try_get::<Option<f64>, _>("pe_ratio").unwrap_or(None),
                 }

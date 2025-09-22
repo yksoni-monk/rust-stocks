@@ -49,7 +49,11 @@ function DataStatusCard(props: CardStatusProps) {
 
   // Get reactive data - this will update when the store changes
   const freshnessData = () => dataRefreshStore.freshnessStatus();
-  const isRefreshing = () => dataRefreshStore.isRefreshing();
+  const isCardRefreshingForThis = () => {
+    // Map our card ID to backend refresh mode for checking refresh state
+    const refreshMode = props.cardId === 'financial' ? 'financials' : props.cardId;
+    return dataRefreshStore.isCardRefreshing(refreshMode);
+  };
   const dataSource = () => {
     const freshness = freshnessData();
     const dataSourceKey = getDataSourceKey(props.cardId);
@@ -177,10 +181,10 @@ function DataStatusCard(props: CardStatusProps) {
       {/* Action Button */}
       <button
         onClick={props.onRefresh}
-        disabled={statusInfo().actionDisabled || isRefreshing()}
+        disabled={statusInfo().actionDisabled || isCardRefreshingForThis()}
         class={`w-full px-4 py-2 text-sm font-medium rounded-lg transition-colors ${statusInfo().actionColor} ${statusInfo().actionDisabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
       >
-        {isRefreshing() ? '🔄 Refreshing...' : statusInfo().actionText}
+        {isCardRefreshingForThis() ? '🔄 Refreshing...' : statusInfo().actionText}
       </button>
     </div>
   );
@@ -303,7 +307,7 @@ export default function SimpleDataManagement() {
               </span>
               <button
                 onClick={handleBatchRefresh}
-                disabled={dataRefreshStore.isRefreshing()}
+                disabled={selectedCards().size === 0}
                 class="px-4 py-2 text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors disabled:bg-gray-300"
               >
                 🔄 Refresh Selected

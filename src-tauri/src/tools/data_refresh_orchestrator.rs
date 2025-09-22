@@ -1043,7 +1043,11 @@ impl DataRefreshOrchestrator {
 
         sqlx::query(query)
             .bind(session_id)
-            .bind(format!("{:?}", request.mode))
+            .bind(match request.mode {
+                RefreshMode::Market => "market",
+                RefreshMode::Financials => "financials",
+                RefreshMode::Ratios => "ratios",
+            })
             .bind(steps.len() as i32 + 2) // +2 for start/finish
             .bind("Initializing")
             .bind(&request.initiated_by)

@@ -95,11 +95,41 @@ npm run tauri dev                                       # Desktop app with Solid
 - Migrations are in `src-tauri/db/migrations/`
 - Backups are in `src-tauri/db/backups/`
 
+## 🛡️ ENGINEERING DISCIPLINE RULES (MANDATORY)
+**After major API inconsistency bugs, these rules are NON-NEGOTIABLE:**
+
+### **API Contract Discipline**
+1. **NEVER** modify backend function signatures without checking all frontend callers
+2. **ALWAYS** use consistent naming: `snake_case` in Rust, map to `camelCase` in frontend
+3. **ALWAYS** validate parameter names match between frontend invoke() and backend function
+4. **ALWAYS** verify return types match between frontend expectations and backend reality
+
+### **Testing Requirements**
+5. **ALWAYS** run integration tests for API changes: `cargo test && cd src && npm test`
+6. **NEVER** claim something is "fixed" without testing the actual user flow
+7. **ALWAYS** test frontend-backend communication end-to-end
+
+### **Schema Consistency**
+8. **ALWAYS** make database field names match API struct field names exactly
+9. **NEVER** use different field names between database schema and API models
+10. **ALWAYS** use proper serde mapping for camelCase conversion
+
+### **Before Any API Change Checklist**
+- [ ] Check frontend API calls match backend function signatures
+- [ ] Verify parameter names are consistent (startDate → start_date mapping)
+- [ ] Confirm return types match frontend expectations
+- [ ] Test the actual user flow, not just unit tests
+- [ ] Update TypeScript interfaces if backend structs change
+
+**Violation of these rules wastes user time and is unacceptable.**
+
 ## NEVER DO THESE THINGS
 - ❌ Look for database in ROOT - it's in `src-tauri/db/stocks.db`
 - ❌ Put migrations in root - they belong in `src-tauri/db/migrations/`
 - ❌ Confuse frontend (src/) with backend (src-tauri/src/)
 - ❌ Create databases or migrations outside proper directories
+- ❌ Change API contracts without checking both sides
+- ❌ Use different field names between database and API models
 
 ## RECENT WORK COMPLETED
 1. ✅ Multi-period database schema (income_statements, balance_sheets, daily_valuation_ratios)

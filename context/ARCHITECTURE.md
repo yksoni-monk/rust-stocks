@@ -269,6 +269,85 @@ CREATE TABLE option_chains (
 
 *For detailed documentation, see `context/SOLIDJS_FRONTEND_ARCHITECTURE.md` and `context/FRONTEND_MIGRATION_HISTORY.md`*
 
+## Event-Driven Data Refresh Architecture
+
+**Status**: ✅ **Implemented** (September 2025) - Replaced complex polling with real-time event notifications
+
+### System Overview
+The data refresh system uses Tauri's event system for immediate backend-to-frontend communication, eliminating polling complexity and providing instant UI updates when refresh operations complete.
+
+### Architecture Components
+
+#### Backend Event Emission (`src-tauri/src/commands/data_refresh.rs:64`)
+```rust
+#[tauri::command]
+pub async fn start_data_refresh(app_handle: tauri::AppHandle, request: RefreshRequestDto) -> Result<String, String> {
+    // Start refresh operation
+    let session_id = orchestrator.execute_refresh(refresh_request).await?;
+
+    // Spawn background monitoring task
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            // Poll for completion and emit event
+            if status == "completed" || status == "failed" {
+                let _ = app_handle.emit("refresh-completed", serde_json::json!({
+                    "mode": mode,
+                    "session_id": session_id,
+                    "status": status
+                }));
+                break;
+            }
+        }
+    });
+}
+```
+
+#### Frontend Event Listener (`src/src/stores/dataRefreshStore.ts:240`)
+```typescript
+// Listen for refresh completion events from backend
+listen('refresh-completed', async (event: any) => {
+    const { mode, status } = event.payload;
+    console.log(`🎉 Refresh completed for ${mode}: ${status}`);
+
+    // Remove from refreshing set
+    setRefreshingCards(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(mode);
+        return newSet;
+    });
+
+    // Update freshness status immediately
+    await checkDataFreshness();
+    setIsRefreshing(false);
+    stopProgressPolling();
+});
+```
+
+### Event Flow
+1. **User Action**: User clicks refresh button for any card (market, financials, ratios)
+2. **Frontend Call**: `startRefresh(mode)` calls backend via Tauri IPC
+3. **Backend Processing**: Orchestrator executes refresh operation asynchronously
+4. **Monitoring Task**: Background task polls database every 2 seconds for completion
+5. **Event Emission**: When complete, backend emits `refresh-completed` event
+6. **Frontend Reception**: Event listener immediately updates UI state
+7. **State Update**: Card shows updated status without manual refresh
+
+### Multi-Card Support
+The system handles all three refresh modes uniformly:
+- **Market Data**: Daily prices, market cap updates
+- **Financials**: Financial statements, ratios calculation
+- **Ratios**: P/E, P/S, EV/S ratio updates
+
+Each mode emits the same event structure ensuring consistent UI behavior across all cards.
+
+### Benefits
+- **Immediate Updates**: No waiting for polling intervals
+- **Resource Efficient**: No continuous polling overhead
+- **Consistent UX**: All three cards update instantly upon completion
+- **Reliable State**: Event-driven prevents UI/backend state mismatches
+- **Scalable**: Handles multiple concurrent refresh operations
+
 ## Frontend Architecture (Legacy - React)
 
 ### Current State: Backend Code Mixed with UI Components

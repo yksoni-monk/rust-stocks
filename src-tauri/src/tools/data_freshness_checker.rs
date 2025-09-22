@@ -1,5 +1,5 @@
 use anyhow::Result;
-use chrono::{DateTime, Local, NaiveDate, Utc};
+use chrono::{Local, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{SqlitePool, Row};
 use std::collections::HashMap;
@@ -13,14 +13,7 @@ mod freshness_columns {
     pub const LATEST_DATA_DATE: &str = "latest_data_date";
     pub const LAST_SUCCESSFUL_REFRESH: &str = "last_successful_refresh";
     pub const RECORDS_UPDATED: &str = "records_updated";
-    pub const ERROR_MESSAGE: &str = "error_message";
-    pub const MAX_STALENESS_DAYS: &str = "max_staleness_days";
-    pub const REFRESH_FREQUENCY_HOURS: &str = "refresh_frequency_hours";
-    pub const AUTO_REFRESH_ENABLED: &str = "auto_refresh_enabled";
-    pub const REFRESH_PRIORITY: &str = "refresh_priority";
     pub const STALENESS_DAYS: &str = "staleness_days";
-    pub const REFRESH_RECOMMENDATION: &str = "refresh_recommendation";
-    pub const NEXT_RECOMMENDED_REFRESH: &str = "next_recommended_refresh";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -187,7 +180,7 @@ impl DataStatusReader {
 
         for row in rows {
             let source_name: String = row.get(freshness_columns::DATA_SOURCE);
-            let status_str: String = row.get(freshness_columns::REFRESH_STATUS);
+            let _status_str: String = row.get(freshness_columns::REFRESH_STATUS);
             let latest_date_str: Option<String> = row.try_get(freshness_columns::LATEST_DATA_DATE).ok();
             let last_refresh_str: Option<String> = row.try_get(freshness_columns::LAST_SUCCESSFUL_REFRESH).ok();
             let records_updated: i64 = row.get(freshness_columns::RECORDS_UPDATED);
@@ -420,162 +413,6 @@ impl DataStatusReader {
             records_count: pe_records,
             message,
             refresh_priority: priority,
-        })
-    }
-
-    /// Check P/S and EV/S ratio freshness
-    async fn check_ps_evs_ratios(&self) -> Result<DataFreshnessStatus> {
-        let query = r#"
-            SELECT
-                MAX(date) as latest_ratio_date,
-                COUNT(CASE WHEN ps_ratio_ttm IS NOT NULL THEN 1 END) as ps_records,
-                COUNT(CASE WHEN evs_ratio_ttm IS NOT NULL THEN 1 END) as evs_records,
-                COUNT(DISTINCT stock_id) as stocks_with_ratios
-            FROM daily_valuation_ratios
-            WHERE ps_ratio_ttm IS NOT NULL OR evs_ratio_ttm IS NOT NULL
-        "#;
-
-        let row = sqlx::query(query).fetch_one(&self.pool).await?;
-
-        let latest_date_str: Option<String> = row.get("latest_ratio_date");
-        let ps_records: i64 = row.get("ps_records");
-        let evs_records: i64 = row.get("evs_records");
-
-        let (status, staleness_days, message) = if let Some(ref date_str) = latest_date_str {
-            let latest_date = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")?;
-            let staleness = self.today.signed_duration_since(latest_date).num_days();
-
-            let status = if staleness <= 7 {
-                FreshnessStatus::Current
-            } else if staleness <= 14 {
-                FreshnessStatus::Stale
-            } else {
-                FreshnessStatus::Error
-            };
-
-            let message = format!("P/S ({}) and EV/S ({}) ratios current to {}, {} days old",
-                                ps_records, evs_records, latest_date, staleness);
-            (status, Some(staleness), message)
-        } else {
-            (FreshnessStatus::Missing, None, "No P/S or EV/S ratio data found".to_string())
-        };
-
-        let priority = match status {
-            FreshnessStatus::Current => RefreshPriority::Low,
-            FreshnessStatus::Stale => RefreshPriority::Medium,
-            FreshnessStatus::Missing | FreshnessStatus::Error => RefreshPriority::High,
-        };
-
-        Ok(DataFreshnessStatus {
-            data_source: "ps_evs_ratios".to_string(),
-            status,
-            latest_data_date: latest_date_str,
-            last_refresh: None,
-            staleness_days,
-            records_count: ps_records + evs_records,
-            message,
-            refresh_priority: priority,
-        })
-    }
-
-    /// Check financial statements freshness
-    async fn check_financial_statements(&self) -> Result<DataFreshnessStatus> {
-        let query = r#"
-            SELECT
-                MAX(report_date) as latest_report_date,
-                COUNT(*) as total_statements,
-                COUNT(DISTINCT stock_id) as stocks_with_data,
-                COUNT(CASE WHEN period_type = 'TTM' THEN 1 END) as ttm_statements
-            FROM income_statements
-        "#;
-
-        let row = sqlx::query(query).fetch_one(&self.pool).await?;
-
-        let latest_date_str: Option<String> = row.get("latest_report_date");
-        let total_statements: i64 = row.get("total_statements");
-        let ttm_statements: i64 = row.get("ttm_statements");
-
-        let (status, staleness_days, message) = if let Some(ref date_str) = latest_date_str {
-            let latest_date = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")?;
-            let staleness = self.today.signed_duration_since(latest_date).num_days();
-
-            // Financial data has different staleness criteria (quarterly updates)
-            let status = if staleness <= 120 { // ~4 months for quarterly data
-                FreshnessStatus::Current
-            } else if staleness <= 180 { // ~6 months
-                FreshnessStatus::Stale
-            } else {
-                FreshnessStatus::Error
-            };
-
-            let message = format!("Financial data: {} statements ({} TTM), latest {}, {} days old",
-                                total_statements, ttm_statements, latest_date, staleness);
-            (status, Some(staleness), message)
-        } else {
-            (FreshnessStatus::Missing, None, "No financial statement data found".to_string())
-        };
-
-        let priority = match status {
-            FreshnessStatus::Current => RefreshPriority::Low,
-            FreshnessStatus::Stale => RefreshPriority::Medium,
-            FreshnessStatus::Missing | FreshnessStatus::Error => RefreshPriority::High,
-        };
-
-        Ok(DataFreshnessStatus {
-            data_source: "financial_statements".to_string(),
-            status,
-            latest_data_date: latest_date_str,
-            last_refresh: None,
-            staleness_days,
-            records_count: total_statements,
-            message,
-            refresh_priority: priority,
-        })
-    }
-
-    /// Check company metadata freshness
-    async fn check_company_metadata(&self) -> Result<DataFreshnessStatus> {
-        let query = r#"
-            SELECT
-                MAX(updated_at) as last_update,
-                COUNT(*) as total_companies,
-                COUNT(CASE WHEN earliest_data_date IS NOT NULL THEN 1 END) as with_coverage_info
-            FROM company_metadata
-        "#;
-
-        let row = sqlx::query(query).fetch_one(&self.pool).await?;
-
-        let last_update_str: Option<String> = row.get("last_update");
-        let total_companies: i64 = row.get("total_companies");
-        let with_coverage: i64 = row.get("with_coverage_info");
-
-        let (status, message) = if total_companies > 0 {
-            let coverage_pct = (with_coverage as f64 / total_companies as f64) * 100.0;
-
-            let status = if coverage_pct >= 95.0 {
-                FreshnessStatus::Current
-            } else if coverage_pct >= 80.0 {
-                FreshnessStatus::Stale
-            } else {
-                FreshnessStatus::Error
-            };
-
-            let message = format!("Company metadata: {} companies, {:.1}% with coverage info",
-                                total_companies, coverage_pct);
-            (status, message)
-        } else {
-            (FreshnessStatus::Missing, "No company metadata found".to_string())
-        };
-
-        Ok(DataFreshnessStatus {
-            data_source: "company_metadata".to_string(),
-            status,
-            latest_data_date: None, // Metadata doesn't have a single date
-            last_refresh: last_update_str,
-            staleness_days: None,
-            records_count: total_companies,
-            message,
-            refresh_priority: RefreshPriority::Low,
         })
     }
 

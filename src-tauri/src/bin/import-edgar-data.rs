@@ -67,7 +67,7 @@ enum Commands {
 // SEC Company Tickers JSON structure
 #[derive(Debug, Deserialize)]
 struct SecCompanyTickers {
-    fields: Vec<String>,
+    _fields: Vec<String>,
     data: Vec<Vec<serde_json::Value>>,
 }
 
@@ -95,7 +95,7 @@ struct EdgarConcept {
 struct EdgarFactValue {
     end: String,  // Date in YYYY-MM-DD format
     val: f64,
-    form: Option<String>,  // "10-K", "10-Q", etc. (can be null)
+    _form: Option<String>,  // "10-K", "10-Q", etc. (can be null)
     fy: Option<i32>,      // Fiscal year (can be null)
     fp: Option<String>,   // Fiscal period "Q1", "Q2", "Q3", "Q4", "FY" (can be null)
 }
@@ -710,7 +710,7 @@ impl EdgarExtractor {
         Ok(())
     }
     
-    async fn extract_entity_name_from_file(file_path: &std::path::Path) -> Result<String> {
+    async fn _extract_entity_name_from_file(file_path: &std::path::Path) -> Result<String> {
         // Read just enough of the JSON to get the entity name
         let content = async_fs::read_to_string(file_path).await?;
         

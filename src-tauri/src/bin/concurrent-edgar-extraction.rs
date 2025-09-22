@@ -6,7 +6,7 @@
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use sqlx::SqlitePool;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
@@ -16,7 +16,7 @@ use std::time::Duration;
 use tokio::fs as async_fs;
 use tokio::sync::{Mutex, Semaphore};
 use tokio::task::JoinHandle;
-use tokio::time::{interval, sleep};
+use tokio::time::interval;
 use tracing::{info, warn, debug, error};
 use rust_stocks_tauri_lib::tools::data_freshness_checker::DataStatusReader;
 
@@ -66,9 +66,9 @@ enum Commands {
 // EDGAR JSON structures
 #[derive(Debug, Deserialize)]
 struct EdgarCompanyFacts {
-    cik: i64,
+    _cik: i64,
     #[serde(rename = "entityName")]
-    entity_name: String,
+    _entity_name: String,
     facts: EdgarFacts,
 }
 
@@ -214,7 +214,7 @@ struct ExtractionTask {
     cik: String,
     symbol: String,
     stock_id: i64,
-    company_name: String,
+    _company_name: String,
     edgar_file_path: PathBuf,
     priority: u8,
 }
@@ -279,7 +279,7 @@ impl WorkQueueManager {
                 cik,
                 symbol,
                 stock_id,
-                company_name,
+                _company_name: company_name,
                 edgar_file_path: PathBuf::from(file_path),
                 priority,
             });
@@ -324,7 +324,7 @@ impl WorkQueueManager {
 // Worker statistics
 #[derive(Debug, Clone)]
 struct WorkerStats {
-    worker_id: usize,
+    _worker_id: usize,
     processed_count: usize,
     current_company: Option<String>,
     last_update: DateTime<Utc>,
@@ -359,7 +359,7 @@ impl ProgressTracker {
     async fn update_worker_status(&self, worker_id: usize, status: WorkerStatus, current_company: Option<String>) {
         let mut stats = self.worker_stats.lock().await;
         let worker_stat = stats.entry(worker_id).or_insert(WorkerStats {
-            worker_id,
+            _worker_id: worker_id,
             processed_count: 0,
             current_company: None,
             last_update: Utc::now(),
@@ -412,7 +412,7 @@ impl ProgressTracker {
         let worker_stats = self.worker_stats.lock().await;
         if !worker_stats.is_empty() {
             println!("\n👷 Worker Status:");
-            for (worker_id, stats) in worker_stats.iter() {
+            for (_worker_id, stats) in worker_stats.iter() {
                 let status_str = match &stats.status {
                     WorkerStatus::Idle => "💤 Idle",
                     WorkerStatus::ReadingFile => "📖 Reading",
@@ -426,7 +426,7 @@ impl ProgressTracker {
                     .unwrap_or("none");
                 
                 println!("   Worker {}: {} processed | {} | Current: {}", 
-                         worker_id, stats.processed_count, status_str, company_str);
+                         stats._worker_id, stats.processed_count, status_str, company_str);
             }
         }
         println!();
@@ -508,7 +508,7 @@ impl ConcurrentEdgarExtractor {
                 progress_tracker.display_progress(&work_queue).await;
                 
                 // Check if work is complete
-                let (total, completed, failed, remaining) = work_queue.get_stats();
+                let (total, _completed, _failed, remaining) = work_queue.get_stats();
                 if remaining == 0 && total > 0 {
                     break;
                 }

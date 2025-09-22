@@ -273,14 +273,13 @@ async fn get_sp500_from_database(pool: &SqlitePool) -> Result<Vec<String>, Strin
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use sqlx::{SqlitePool, pool::PoolOptions};
     use std::time::Duration;
     use anyhow::Result;
 
     /// Simple test database setup for stocks module tests
     struct TestDatabase {
-        pool: SqlitePool,
+        _pool: SqlitePool,
     }
 
     impl TestDatabase {
@@ -297,13 +296,13 @@ mod tests {
                 .idle_timeout(Some(Duration::from_secs(600)))
                 .connect(&database_url).await?;
 
-            Ok(TestDatabase { pool })
+            Ok(TestDatabase { _pool: pool })
         }
     }
 
     #[tokio::test]
     async fn test_get_stocks_paginated() {
-        let test_db = TestDatabase::new().await.unwrap();
+        let _test_db = TestDatabase::new().await.unwrap();
 
         let result = super::get_stocks_paginated(10, 0).await;
         assert!(result.is_ok(), "get_stocks_paginated should succeed");

@@ -78,7 +78,7 @@ pub struct DataRefreshManager {
     status_reader: DataStatusReader,
     #[allow(dead_code)]
     date_calculator: DateRangeCalculator,
-    edgar_extractor: EdgarDataExtractor,
+    _edgar_extractor: EdgarDataExtractor,
     refresh_steps: HashMap<RefreshMode, Vec<RefreshStep>>,
 }
 
@@ -98,7 +98,7 @@ impl DataRefreshManager {
             pool,
             status_reader,
             date_calculator,
-            edgar_extractor,
+            _edgar_extractor: edgar_extractor,
             refresh_steps,
         })
     }

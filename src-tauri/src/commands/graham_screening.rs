@@ -443,7 +443,7 @@ mod tests {
 
     /// Simple test database setup for Graham screening module tests
     struct TestDatabase {
-        pool: SqlitePool,
+        _pool: SqlitePool,
     }
 
     impl TestDatabase {
@@ -460,7 +460,7 @@ mod tests {
                 .idle_timeout(Some(Duration::from_secs(600)))
                 .connect(&database_url).await?;
 
-            Ok(TestDatabase { pool })
+            Ok(TestDatabase { _pool: pool })
         }
     }
 

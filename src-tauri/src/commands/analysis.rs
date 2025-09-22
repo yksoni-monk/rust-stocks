@@ -738,14 +738,13 @@ pub async fn get_valuation_extremes(symbol: String) -> Result<ValuationExtremes,
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use sqlx::{SqlitePool, pool::PoolOptions};
     use std::time::Duration;
     use anyhow::Result;
 
     /// Simple test database setup for analysis module tests
     struct TestDatabase {
-        pool: SqlitePool,
+        _pool: SqlitePool,
     }
 
     impl TestDatabase {
@@ -762,7 +761,7 @@ mod tests {
                 .idle_timeout(Some(Duration::from_secs(600)))
                 .connect(&database_url).await?;
 
-            Ok(TestDatabase { pool })
+            Ok(TestDatabase { _pool: pool })
         }
     }
 

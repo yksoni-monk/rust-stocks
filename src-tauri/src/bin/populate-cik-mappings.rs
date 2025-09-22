@@ -5,16 +5,16 @@
 /// for EDGAR data extraction.
 
 use anyhow::{Result, anyhow};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
 use std::path::Path;
 use std::fs;
-use tracing::{info, warn};
+use tracing::info;
 
 #[derive(Debug, Deserialize)]
 struct SecCompanyTickers {
-    fields: Vec<String>,
+    _fields: Vec<String>,
     data: Vec<Vec<serde_json::Value>>,
 }
 

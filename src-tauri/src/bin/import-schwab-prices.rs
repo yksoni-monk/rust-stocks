@@ -10,7 +10,7 @@ use clap::{Parser, Subcommand};
 use rust_stocks_tauri_lib::api::schwab_client::SchwabClient;
 use rust_stocks_tauri_lib::api::StockDataProvider;
 use rust_stocks_tauri_lib::models::Config;
-use rust_stocks_tauri_lib::tools::date_range_calculator::{DateRangeCalculator, UpdatePlan};
+use rust_stocks_tauri_lib::tools::date_range_calculator::DateRangeCalculator;
 use rust_stocks_tauri_lib::tools::data_freshness_checker::DataStatusReader;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
@@ -571,7 +571,7 @@ async fn test_single_symbol(
 
     // Create a test downloader to use the same logic as the bulk downloader
     let progress_file = PathBuf::from("test_progress.json");
-    let mut downloader = BulkDownloader::new(config, progress_file.clone(), settings.clone(), incremental_mode).await?;
+    let downloader = BulkDownloader::new(config, progress_file.clone(), settings.clone(), incremental_mode).await?;
 
     // Test the download for this symbol
     let bars_count = downloader.download_symbol_data(symbol).await?;

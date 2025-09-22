@@ -155,14 +155,13 @@ pub async fn check_database_schema() -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use sqlx::{SqlitePool, pool::PoolOptions};
     use std::time::Duration;
     use anyhow::Result;
 
     /// Simple test database setup for initialization module tests
     struct TestDatabase {
-        pool: SqlitePool,
+        _pool: SqlitePool,
     }
 
     impl TestDatabase {
@@ -179,7 +178,7 @@ mod tests {
                 .idle_timeout(Some(Duration::from_secs(600)))
                 .connect(&database_url).await?;
 
-            Ok(TestDatabase { pool })
+            Ok(TestDatabase { _pool: pool })
         }
     }
 
@@ -191,8 +190,9 @@ mod tests {
         assert!(result.is_ok(), "get_initialization_status should succeed");
 
         let status = result.unwrap();
-        assert!(status.companies_processed >= 0, "Companies processed should be non-negative");
-        assert!(status.total_companies >= 0, "Total companies should be non-negative");
+        // Note: These comparisons are always true since u32 is unsigned
+        // assert!(status.companies_processed >= 0, "Companies processed should be non-negative");
+        // assert!(status.total_companies >= 0, "Total companies should be non-negative");
         assert!(!status.current_step.is_empty(), "Current step should not be empty");
         assert!(!status.status.is_empty(), "Status should not be empty");
 

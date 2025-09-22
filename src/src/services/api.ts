@@ -162,7 +162,15 @@ export const recommendationsAPI = {
 export const dataRefreshAPI = {
   // Get current data freshness status
   async getDataFreshnessStatus(): Promise<SystemFreshnessReport> {
-    return await invoke('get_data_freshness_status');
+    console.log('🔄 API: Calling get_data_freshness_status...');
+    try {
+      const result = await invoke('get_data_freshness_status');
+      console.log('✅ API: get_data_freshness_status result:', result);
+      return result;
+    } catch (error) {
+      console.error('❌ API: get_data_freshness_status failed:', error);
+      throw error;
+    }
   },
 
   // Check if specific screening features are ready

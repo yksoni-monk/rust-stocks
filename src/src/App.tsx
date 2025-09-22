@@ -6,9 +6,7 @@ import { dataRefreshStore } from './stores/dataRefreshStore';
 import HeroSection from './components/HeroSection';
 import StockBrowser from './components/StockBrowser';
 import ResultsPanel from './components/ResultsPanel';
-import DataStatusPanel from './components/DataStatusPanel';
-import RefreshControls from './components/RefreshControls';
-import RefreshProgress from './components/RefreshProgress';
+import SimpleDataManagement from './components/SimpleDataManagement';
 
 function App() {
   console.log('🚀 SolidJS App starting...');
@@ -92,22 +90,7 @@ function App() {
 
         {/* Data Management Tab Content */}
         <Show when={uiStore.activeTab() === 'data-management'}>
-          <div class="space-y-8">
-            {/* Data Status Panel */}
-            <DataStatusPanel />
-
-            {/* Refresh Controls */}
-            <RefreshControls />
-
-            {/* Progress Monitoring */}
-            <div>
-              <h2 class="text-xl font-semibold text-gray-900 mb-4 flex items-center">
-                <span class="mr-2">📊</span>
-                Progress Monitoring
-              </h2>
-              <RefreshProgress />
-            </div>
-          </div>
+          <SimpleDataManagement />
         </Show>
       </div>
     </div>

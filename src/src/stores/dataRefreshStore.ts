@@ -26,13 +26,16 @@ export function createDataRefreshStore() {
   const checkDataFreshness = async () => {
     try {
       setError(null);
+      console.log('🔄 DataRefreshStore: Starting data freshness check...');
       const status = await dataRefreshAPI.getDataFreshnessStatus();
+      console.log('✅ DataRefreshStore: Received freshness status:', status);
       setFreshnessStatus(status);
       console.log('🔍 Data freshness status updated:', status.overall_status);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to check data freshness';
       setError(errorMessage);
-      console.error('❌ Failed to check data freshness:', err);
+      console.error('❌ DataRefreshStore: Failed to check data freshness:', err);
+      console.error('❌ Error details:', errorMessage);
     }
   };
 

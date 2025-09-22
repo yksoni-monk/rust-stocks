@@ -1,37 +1,45 @@
 import { Show, For } from 'solid-js';
 import { dataRefreshStore } from '../stores/dataRefreshStore';
-import type { DataTypeStatus } from '../utils/types';
+import type { DataFreshnessStatus } from '../bindings';
 
 interface DataTypeCardProps {
   title: string;
-  status: DataTypeStatus | undefined;
+  status: DataFreshnessStatus | undefined;
   icon: string;
   dataType: 'market' | 'financials' | 'ratios';
 }
 
 function DataTypeCard(props: DataTypeCardProps) {
-  const getStatusBadge = (status: DataTypeStatus | undefined) => {
+  const getStatusBadge = (status: DataFreshnessStatus | undefined) => {
     if (!status) {
       return <span class="px-2 py-1 text-xs font-medium bg-gray-100 text-gray-600 rounded-full">Unknown</span>;
     }
 
-    if (status.is_fresh) {
-      return <span class="px-2 py-1 text-xs font-medium bg-green-100 text-green-800 rounded-full">Fresh</span>;
-    } else if (status.hours_since_update < status.freshness_threshold_hours * 2) {
-      return <span class="px-2 py-1 text-xs font-medium bg-yellow-100 text-yellow-800 rounded-full">Stale</span>;
-    } else {
-      return <span class="px-2 py-1 text-xs font-medium bg-red-100 text-red-800 rounded-full">Critical</span>;
+    switch (status.status) {
+      case 'Current':
+        return <span class="px-2 py-1 text-xs font-medium bg-green-100 text-green-800 rounded-full">Fresh</span>;
+      case 'Stale':
+        return <span class="px-2 py-1 text-xs font-medium bg-yellow-100 text-yellow-800 rounded-full">Stale</span>;
+      case 'Missing':
+      case 'Error':
+        return <span class="px-2 py-1 text-xs font-medium bg-red-100 text-red-800 rounded-full">Critical</span>;
+      default:
+        return <span class="px-2 py-1 text-xs font-medium bg-gray-100 text-gray-600 rounded-full">Unknown</span>;
     }
   };
 
-  const formatTimeAgo = (hoursAgo: number): string => {
-    if (hoursAgo < 1) {
-      return 'Less than 1 hour ago';
-    } else if (hoursAgo < 24) {
-      return `${Math.floor(hoursAgo)} hours ago`;
+  const formatTimeAgo = (status: DataFreshnessStatus | undefined): string => {
+    if (!status || !status.staleness_days) {
+      return 'Unknown';
+    }
+
+    const days = status.staleness_days;
+    if (days === 0) {
+      return 'Today';
+    } else if (days === 1) {
+      return '1 day ago';
     } else {
-      const days = Math.floor(hoursAgo / 24);
-      return `${days} day${days > 1 ? 's' : ''} ago`;
+      return `${days} days ago`;
     }
   };
 
@@ -53,7 +61,7 @@ function DataTypeCard(props: DataTypeCardProps) {
             <div class="flex justify-between">
               <span>Last Updated:</span>
               <span class="font-medium">
-                {formatTimeAgo(props.status?.hours_since_update || 0)}
+                {formatTimeAgo(props.status)}
               </span>
             </div>
           </div>

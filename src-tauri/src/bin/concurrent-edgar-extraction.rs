@@ -18,7 +18,7 @@ use tokio::sync::{Mutex, Semaphore};
 use tokio::task::JoinHandle;
 use tokio::time::{interval, sleep};
 use tracing::{info, warn, debug, error};
-use rust_stocks_tauri_lib::tools::data_freshness_checker::DataFreshnessChecker;
+use rust_stocks_tauri_lib::tools::data_freshness_checker::DataStatusReader;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -555,7 +555,7 @@ impl ConcurrentEdgarExtractor {
                 )"
             ).fetch_one(&*self.db_pool).await.unwrap_or(0);
 
-            if let Err(e) = DataFreshnessChecker::update_import_status(
+            if let Err(e) = DataStatusReader::update_import_status(
                 &self.db_pool,
                 "financial_statements",
                 total_records,

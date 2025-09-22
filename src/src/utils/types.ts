@@ -115,49 +115,12 @@ export interface InitializationStatus {
   message?: string;
 }
 
-// Data Refresh Types
-export interface SystemFreshnessReport {
-  market_data: DataTypeStatus;
-  financial_data: DataTypeStatus;
-  calculated_ratios: DataTypeStatus;
-  overall_status: 'fresh' | 'stale' | 'critical';
-  screening_readiness: {
-    garp_screening: boolean;
-    graham_screening: boolean;
-    piotroski_screening: boolean;
-    oshaughnessy_screening: boolean;
-    blocking_issues: string[];
-  };
-}
+// Data Refresh Types - now generated from Rust via ts-rs
+// See ../bindings/ for generated types
 
-export interface DataTypeStatus {
-  is_fresh: boolean;
-  last_updated: string;
-  hours_since_update: number;
-  freshness_threshold_hours: number;
-  next_recommended_refresh: string;
-}
+// DataTypeStatus interface removed - now using generated DataFreshnessStatus from ../bindings
 
-export interface RefreshProgress {
-  session_id: string;
-  operation_type: string;
-  start_time: string;
-  total_steps: number;
-  completed_steps: number;
-  current_step_name?: string;
-  current_step_progress: number;
-  overall_progress_percent: number;
-  estimated_completion?: string;
-  status: string;
-  initiated_by: string;
-  elapsed_minutes: number;
-}
-
-export interface RefreshRequestDto {
-  mode: string; // "market", "financials", "ratios"
-  force_sources?: string[];
-  initiated_by?: string;
-}
+// Refresh types now generated from Rust via ts-rs - see ../bindings/
 
 export interface RefreshResult {
   session_id: string;

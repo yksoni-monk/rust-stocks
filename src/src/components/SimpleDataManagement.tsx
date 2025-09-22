@@ -56,8 +56,12 @@ function DataStatusCard(props: CardStatusProps) {
   };
   const dataSource = () => {
     const freshness = freshnessData();
-    const dataSourceKey = getDataSourceKey(props.cardId);
-    return freshness?.data_sources?.[dataSourceKey];
+    switch(props.cardId) {
+      case 'market': return freshness?.market_data;
+      case 'financial': return freshness?.financial_data;
+      case 'ratios': return freshness?.calculated_ratios;
+      default: return null;
+    }
   };
 
   // Determine status and styling - made reactive
@@ -91,7 +95,7 @@ function DataStatusCard(props: CardStatusProps) {
       };
     }
 
-    const staleness = currentDataSource.staleness_days || 0;
+    const staleness = currentDataSource.staleness_days ? Number(currentDataSource.staleness_days) : 0;
 
     if (currentDataSource.status === 'Current' && staleness <= 2) {
       return {
@@ -141,13 +145,13 @@ function DataStatusCard(props: CardStatusProps) {
       return 'Click button to check status';
     }
 
-    const count = currentDataSource.records_count;
+    const count = Number(currentDataSource.records_count);
 
     const countStr = count > 1000000 ? `${(count/1000000).toFixed(1)}M` :
                      count > 1000 ? `${(count/1000).toFixed(0)}K` :
                      count.toString();
 
-    const staleness = currentDataSource.staleness_days || 0;
+    const staleness = currentDataSource.staleness_days ? Number(currentDataSource.staleness_days) : 0;
     const timeStr = staleness === 0 ? 'Today' :
                    staleness === 1 ? '1 day ago' :
                    staleness < 7 ? `${staleness} days ago` :

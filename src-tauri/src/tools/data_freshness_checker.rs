@@ -3,20 +3,41 @@ use chrono::{DateTime, Local, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{SqlitePool, Row};
 use std::collections::HashMap;
+use ts_rs::TS;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Column names for the v_data_freshness_summary view
+/// This prevents magic number bugs and makes the code more maintainable
+mod freshness_columns {
+    pub const DATA_SOURCE: &str = "data_source";
+    pub const REFRESH_STATUS: &str = "refresh_status";
+    pub const LATEST_DATA_DATE: &str = "latest_data_date";
+    pub const LAST_SUCCESSFUL_REFRESH: &str = "last_successful_refresh";
+    pub const RECORDS_UPDATED: &str = "records_updated";
+    pub const ERROR_MESSAGE: &str = "error_message";
+    pub const MAX_STALENESS_DAYS: &str = "max_staleness_days";
+    pub const REFRESH_FREQUENCY_HOURS: &str = "refresh_frequency_hours";
+    pub const AUTO_REFRESH_ENABLED: &str = "auto_refresh_enabled";
+    pub const REFRESH_PRIORITY: &str = "refresh_priority";
+    pub const STALENESS_DAYS: &str = "staleness_days";
+    pub const REFRESH_RECOMMENDATION: &str = "refresh_recommendation";
+    pub const NEXT_RECOMMENDED_REFRESH: &str = "next_recommended_refresh";
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct DataFreshnessStatus {
     pub data_source: String,
     pub status: FreshnessStatus,
-    pub latest_data_date: Option<NaiveDate>,
-    pub last_refresh: Option<DateTime<Utc>>,
+    pub latest_data_date: Option<String>, // Changed to String for TS compatibility
+    pub last_refresh: Option<String>, // Changed to String for TS compatibility
     pub staleness_days: Option<i64>,
     pub records_count: i64,
     pub message: String,
     pub refresh_priority: RefreshPriority,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[ts(export)]
 pub enum FreshnessStatus {
     Current,
     Stale,
@@ -24,7 +45,8 @@ pub enum FreshnessStatus {
     Error,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd, TS)]
+#[ts(export)]
 pub enum RefreshPriority {
     Low,
     Medium,
@@ -32,16 +54,20 @@ pub enum RefreshPriority {
     Critical,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct SystemFreshnessReport {
     pub overall_status: FreshnessStatus,
-    pub data_sources: HashMap<String, DataFreshnessStatus>,
+    pub market_data: DataFreshnessStatus,
+    pub financial_data: DataFreshnessStatus,
+    pub calculated_ratios: DataFreshnessStatus,
     pub recommendations: Vec<RefreshRecommendation>,
     pub screening_readiness: ScreeningReadiness,
-    pub last_check: DateTime<Utc>,
+    pub last_check: String, // Changed to String for TS compatibility
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct RefreshRecommendation {
     pub action: String,
     pub reason: String,
@@ -49,7 +75,8 @@ pub struct RefreshRecommendation {
     pub priority: RefreshPriority,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct ScreeningReadiness {
     pub garp_screening: bool,
     pub graham_screening: bool,
@@ -57,12 +84,12 @@ pub struct ScreeningReadiness {
     pub blocking_issues: Vec<String>,
 }
 
-pub struct DataFreshnessChecker {
+pub struct DataStatusReader {
     pool: SqlitePool,
     today: NaiveDate,
 }
 
-impl DataFreshnessChecker {
+impl DataStatusReader {
     pub fn new(pool: SqlitePool) -> Self {
         Self {
             pool,
@@ -84,36 +111,97 @@ impl DataFreshnessChecker {
         // Check screening readiness
         let screening_readiness = self.assess_screening_readiness(&data_sources).await?;
 
+        // Extract semantic data sources directly
+        let market_data = data_sources.get("daily_prices")
+            .cloned()
+            .unwrap_or_else(|| DataFreshnessStatus {
+                data_source: "daily_prices".to_string(),
+                status: FreshnessStatus::Missing,
+                latest_data_date: None,
+                last_refresh: None,
+                staleness_days: None,
+                records_count: 0,
+                message: "Market data not available".to_string(),
+                refresh_priority: RefreshPriority::Critical,
+            });
+
+        let financial_data = data_sources.get("financial_statements")
+            .cloned()
+            .unwrap_or_else(|| DataFreshnessStatus {
+                data_source: "financial_statements".to_string(),
+                status: FreshnessStatus::Missing,
+                latest_data_date: None,
+                last_refresh: None,
+                staleness_days: None,
+                records_count: 0,
+                message: "Financial data not available".to_string(),
+                refresh_priority: RefreshPriority::Critical,
+            });
+
+        let calculated_ratios = data_sources.get("ps_evs_ratios")
+            .cloned()
+            .unwrap_or_else(|| DataFreshnessStatus {
+                data_source: "ps_evs_ratios".to_string(),
+                status: FreshnessStatus::Missing,
+                latest_data_date: None,
+                last_refresh: None,
+                staleness_days: None,
+                records_count: 0,
+                message: "Ratio data not available".to_string(),
+                refresh_priority: RefreshPriority::Critical,
+            });
+
         Ok(SystemFreshnessReport {
             overall_status,
-            data_sources,
+            market_data,
+            financial_data,
+            calculated_ratios,
             recommendations,
             screening_readiness,
-            last_check: Utc::now(),
+            last_check: Utc::now().to_rfc3339(),
         })
     }
 
     /// Fast check using existing summary view (0.004s vs 10s)
     async fn check_data_sources_fast(&self) -> Result<HashMap<String, DataFreshnessStatus>> {
-        let query = "SELECT * FROM v_data_freshness_summary";
+        let query = r#"
+            SELECT 
+                data_source,
+                refresh_status,
+                latest_data_date,
+                last_successful_refresh,
+                records_updated,
+                error_message,
+                max_staleness_days,
+                refresh_frequency_hours,
+                auto_refresh_enabled,
+                refresh_priority,
+                staleness_days,
+                refresh_recommendation,
+                next_recommended_refresh
+            FROM v_data_freshness_summary
+        "#;
         let rows = sqlx::query(query).fetch_all(&self.pool).await?;
 
         let mut data_sources = HashMap::new();
 
         for row in rows {
-            let source_name: String = row.get(0);
-            let status_str: String = row.get(1);
-            let latest_date_str: Option<String> = row.try_get(2).ok();
-            let last_refresh_str: Option<String> = row.try_get(3).ok();
-            let records_updated: i64 = row.get(4);
-            let staleness_days: i64 = row.get(11);
+            let source_name: String = row.get(freshness_columns::DATA_SOURCE);
+            let status_str: String = row.get(freshness_columns::REFRESH_STATUS);
+            let latest_date_str: Option<String> = row.try_get(freshness_columns::LATEST_DATA_DATE).ok();
+            let last_refresh_str: Option<String> = row.try_get(freshness_columns::LAST_SUCCESSFUL_REFRESH).ok();
+            let records_updated: i64 = row.get(freshness_columns::RECORDS_UPDATED);
+            let staleness_days: i64 = row.get(freshness_columns::STALENESS_DAYS);
 
-            let status = match status_str.as_str() {
-                "current" => FreshnessStatus::Current,
-                "stale" => FreshnessStatus::Stale,
-                "refreshing" => FreshnessStatus::Stale, // Show as stale, not error
-                "unknown" | "missing" => FreshnessStatus::Missing, // Show as missing, not error
-                _ => FreshnessStatus::Error,
+            // Determine status based on staleness_days, not just database status
+            let status = if staleness_days <= 2 {
+                FreshnessStatus::Current
+            } else if staleness_days <= 7 {
+                FreshnessStatus::Stale
+            } else if staleness_days <= 30 {
+                FreshnessStatus::Stale
+            } else {
+                FreshnessStatus::Stale // Keep as Stale for very old data
             };
 
             let priority = match status {
@@ -125,8 +213,8 @@ impl DataFreshnessChecker {
             data_sources.insert(source_name.clone(), DataFreshnessStatus {
                 data_source: source_name,
                 status: status.clone(),
-                latest_data_date: latest_date_str.and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok()),
-                last_refresh: last_refresh_str.and_then(|s| s.parse().ok()),
+                latest_data_date: latest_date_str,
+                last_refresh: last_refresh_str,
                 staleness_days: Some(staleness_days),
                 records_count: records_updated,
                 message: format!("Status: {:?}, {} records, {} days old", status, records_updated, staleness_days),
@@ -261,7 +349,7 @@ impl DataFreshnessChecker {
         Ok(DataFreshnessStatus {
             data_source: "daily_prices".to_string(),
             status,
-            latest_data_date: latest_date_str.clone().and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok()),
+            latest_data_date: latest_date_str,
             last_refresh: None, // TODO: Get from refresh tracking table
             staleness_days,
             records_count: total_records,
@@ -326,7 +414,7 @@ impl DataFreshnessChecker {
         Ok(DataFreshnessStatus {
             data_source: "pe_ratios".to_string(),
             status,
-            latest_data_date: latest_date_str.clone().and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok()),
+            latest_data_date: latest_date_str,
             last_refresh: None,
             staleness_days,
             records_count: pe_records,
@@ -381,7 +469,7 @@ impl DataFreshnessChecker {
         Ok(DataFreshnessStatus {
             data_source: "ps_evs_ratios".to_string(),
             status,
-            latest_data_date: latest_date_str.clone().and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok()),
+            latest_data_date: latest_date_str,
             last_refresh: None,
             staleness_days,
             records_count: ps_records + evs_records,
@@ -436,7 +524,7 @@ impl DataFreshnessChecker {
         Ok(DataFreshnessStatus {
             data_source: "financial_statements".to_string(),
             status,
-            latest_data_date: latest_date_str.clone().and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok()),
+            latest_data_date: latest_date_str,
             last_refresh: None,
             staleness_days,
             records_count: total_statements,
@@ -483,7 +571,7 @@ impl DataFreshnessChecker {
             data_source: "company_metadata".to_string(),
             status,
             latest_data_date: None, // Metadata doesn't have a single date
-            last_refresh: last_update_str.and_then(|s| DateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S%.f %z").ok().map(|dt| dt.with_timezone(&Utc))),
+            last_refresh: last_update_str,
             staleness_days: None,
             records_count: total_companies,
             message,
@@ -681,12 +769,20 @@ impl FreshnessStatus {
 }
 
 impl SystemFreshnessReport {
-    pub fn get_stale_components(&self) -> Vec<&str> {
-        self.data_sources
-            .iter()
-            .filter(|(_, status)| status.status.needs_refresh())
-            .map(|(name, _)| name.as_str())
-            .collect()
+    pub fn get_stale_components(&self) -> Vec<String> {
+        let mut stale_components = Vec::new();
+        
+        if self.market_data.status.needs_refresh() {
+            stale_components.push("market_data".to_string());
+        }
+        if self.financial_data.status.needs_refresh() {
+            stale_components.push("financial_data".to_string());
+        }
+        if self.calculated_ratios.status.needs_refresh() {
+            stale_components.push("calculated_ratios".to_string());
+        }
+        
+        stale_components
     }
 
     pub fn get_stale_components_message(&self) -> String {

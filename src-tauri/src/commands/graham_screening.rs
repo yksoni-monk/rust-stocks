@@ -8,7 +8,7 @@ use crate::models::graham_value::{
 };
 use crate::analysis::graham_screener::GrahamScreener;
 use crate::database::helpers::get_database_connection;
-use crate::tools::data_freshness_checker::DataFreshnessChecker;
+use crate::tools::data_freshness_checker::DataStatusReader;
 
 /// Run Graham value screening with specified criteria
 #[tauri::command]
@@ -22,8 +22,8 @@ pub async fn run_graham_screening(
         .map_err(|e| format!("Database connection failed: {}", e))?;
 
     // Check data freshness before proceeding
-    let freshness_checker = DataFreshnessChecker::new(pool.clone());
-    let freshness_report = freshness_checker.check_system_freshness().await
+    let status_reader = DataStatusReader::new(pool.clone());
+    let freshness_report = status_reader.check_system_freshness().await
         .map_err(|e| format!("Failed to check data freshness: {}", e))?;
 
     // Check if Graham screening can proceed

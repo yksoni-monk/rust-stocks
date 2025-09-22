@@ -11,7 +11,7 @@ use rust_stocks_tauri_lib::api::schwab_client::SchwabClient;
 use rust_stocks_tauri_lib::api::StockDataProvider;
 use rust_stocks_tauri_lib::models::Config;
 use rust_stocks_tauri_lib::tools::date_range_calculator::{DateRangeCalculator, UpdatePlan};
-use rust_stocks_tauri_lib::tools::data_freshness_checker::DataFreshnessChecker;
+use rust_stocks_tauri_lib::tools::data_freshness_checker::DataStatusReader;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::collections::{HashMap, HashSet};
@@ -658,7 +658,7 @@ async fn show_progress_status(progress_file: &PathBuf) -> Result<()> {
         .unwrap_or_else(|_| "sqlite:./db/stocks.db".to_string());
     let tracking_pool = SqlitePool::connect(&database_url).await?;
 
-    if let Err(e) = DataFreshnessChecker::update_tracking_with_total_count(&tracking_pool, "daily_prices").await {
+    if let Err(e) = DataStatusReader::update_tracking_with_total_count(&tracking_pool, "daily_prices").await {
         eprintln!("⚠️ Failed to update tracking status: {}", e);
     } else {
         println!("✅ Daily prices tracking status updated");

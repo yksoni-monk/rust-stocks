@@ -4,8 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
+    "build:bindings": "cd ../src-tauri && cargo test --lib generate_bindings || true",
+    "dev": "npm run build:bindings && vite",
+    "build": "npm run build:bindings && vite build",
     "lint": "eslint .",
     "preview": "vite preview"
   },

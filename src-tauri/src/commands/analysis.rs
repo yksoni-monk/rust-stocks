@@ -780,7 +780,7 @@ mod tests {
         let prices = result.unwrap();
 
         if !prices.is_empty() {
-            assert!(prices[0].close > 0.0, "Price should be positive");
+            assert!(prices[0].close_price > 0.0, "Price should be positive");
             assert!(prices[0].volume >= 0, "Volume should be non-negative");
         }
 

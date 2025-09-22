@@ -11,9 +11,9 @@ use chrono::Local;
 
 use rust_stocks_tauri_lib::tools::{
     data_refresh_orchestrator::{
-        DataRefreshOrchestrator, RefreshRequest, RefreshMode
+        DataRefreshManager, RefreshRequest, RefreshMode
     },
-    data_freshness_checker::{DataFreshnessChecker, FreshnessStatus, RefreshPriority},
+    data_freshness_checker::{DataStatusReader, FreshnessStatus, RefreshPriority},
 };
 
 #[derive(Parser)]
@@ -109,19 +109,19 @@ async fn main() -> Result<()> {
 async fn show_data_status(pool: &sqlx::SqlitePool, cli: &Cli) -> Result<()> {
     println!("🔍 Checking current data freshness status...\n");
 
-    let freshness_checker = DataFreshnessChecker::new(pool.clone());
+    let freshness_checker = DataStatusReader::new(pool.clone());
     let report = freshness_checker.check_system_freshness().await?;
 
     // Display overall status
     println!("📊 OVERALL STATUS: {:?}", report.overall_status);
-    println!("🕐 Last check: {}", report.last_check.format("%Y-%m-%d %H:%M:%S UTC"));
+    println!("🕐 Last check: {}", report.last_check);
     println!();
 
     // Display individual data sources
     println!("📋 DATA SOURCE STATUS:");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
-    let mut sources: Vec<_> = report.data_sources.values().collect();
+    let mut sources = vec![&report.market_data, &report.financial_data, &report.calculated_ratios];
     sources.sort_by(|a, b| b.refresh_priority.partial_cmp(&a.refresh_priority).unwrap());
 
     for source in sources {
@@ -204,8 +204,8 @@ async fn show_refresh_plan(pool: &sqlx::SqlitePool, cli: &Cli) -> Result<()> {
     let mode = cli.mode.clone().unwrap_or(RefreshMode::Market);
     println!("🔍 Preview: What would be refreshed with {:?} mode\n", mode);
 
-    let freshness_checker = DataFreshnessChecker::new(pool.clone());
-    let _orchestrator = DataRefreshOrchestrator::new(pool.clone()).await?;
+    let freshness_checker = DataStatusReader::new(pool.clone());
+    let _orchestrator = DataRefreshManager::new(pool.clone()).await?;
 
     let report = freshness_checker.check_system_freshness().await?;
 
@@ -226,10 +226,14 @@ async fn show_refresh_plan(pool: &sqlx::SqlitePool, cli: &Cli) -> Result<()> {
 
     // Always check what needs refreshing based on staleness
     for (source, duration) in &available_steps {
-        if let Some(source_status) = report.data_sources.get(source) {
-            if source_status.status.needs_refresh() {
-                plan_steps.push((source.clone(), *duration));
-            }
+        let source_status = match source.as_str() {
+            "daily_prices" => &report.market_data,
+            "financial_statements" => &report.financial_data,
+            "ps_evs_ratios" => &report.calculated_ratios,
+            _ => continue,
+        };
+        if source_status.status.needs_refresh() {
+            plan_steps.push((source.clone(), *duration));
         }
     }
 
@@ -256,7 +260,7 @@ async fn show_refresh_plan(pool: &sqlx::SqlitePool, cli: &Cli) -> Result<()> {
 async fn execute_data_refresh(pool: &sqlx::SqlitePool, _cli: &Cli, mode: RefreshMode) -> Result<()> {
     println!("🚀 Starting data refresh in {:?} mode...\n", mode);
 
-    let orchestrator = DataRefreshOrchestrator::new(pool.clone()).await?;
+    let orchestrator = DataRefreshManager::new(pool.clone()).await?;
 
     let request = RefreshRequest {
         mode,

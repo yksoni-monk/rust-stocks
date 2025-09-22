@@ -8,7 +8,7 @@ use tokio::time::sleep;
 use std::time::Duration as StdDuration;
 use uuid::Uuid;
 
-use crate::tools::data_freshness_checker::{DataFreshnessChecker, SystemFreshnessReport};
+use crate::tools::data_freshness_checker::{DataStatusReader, SystemFreshnessReport};
 use crate::tools::ratio_calculator;
 use crate::tools::date_range_calculator::DateRangeCalculator;
 use crate::tools::edgar_extractor::EdgarDataExtractor;
@@ -73,21 +73,21 @@ pub struct RefreshProgress {
     pub error_details: Option<String>,
 }
 
-pub struct DataRefreshOrchestrator {
+pub struct DataRefreshManager {
     pool: SqlitePool,
-    freshness_checker: DataFreshnessChecker,
+    status_reader: DataStatusReader,
     #[allow(dead_code)]
     date_calculator: DateRangeCalculator,
     edgar_extractor: EdgarDataExtractor,
     refresh_steps: HashMap<RefreshMode, Vec<RefreshStep>>,
 }
 
-impl DataRefreshOrchestrator {
+impl DataRefreshManager {
     pub async fn new(pool: SqlitePool) -> Result<Self> {
         // Load .env file first to ensure environment variables are available
         dotenvy::dotenv().ok();
 
-        let freshness_checker = DataFreshnessChecker::new(pool.clone());
+        let status_reader = DataStatusReader::new(pool.clone());
         let date_calculator = DateRangeCalculator::new();
         let edgar_data_path = std::env::var("EDGAR_DATA_PATH")
             .unwrap_or_else(|_| "edgar_data".to_string());
@@ -96,7 +96,7 @@ impl DataRefreshOrchestrator {
 
         Ok(Self {
             pool,
-            freshness_checker,
+            status_reader,
             date_calculator,
             edgar_extractor,
             refresh_steps,
@@ -136,7 +136,7 @@ impl DataRefreshOrchestrator {
 
         // 1. Check current freshness status
         println!("🔍 Checking current data freshness...");
-        let freshness_report = self.freshness_checker.check_system_freshness().await?;
+        let freshness_report = self.status_reader.check_system_freshness().await?;
         self.update_progress(&session_id, 1, "Checking data freshness", 100.0).await?;
 
         // 2. Determine what needs to be refreshed
@@ -193,7 +193,7 @@ impl DataRefreshOrchestrator {
 
         // 4. Final verification and cleanup
         self.update_progress(&session_id, total_steps, "Finalizing refresh", 100.0).await?;
-        let final_report = self.freshness_checker.check_system_freshness().await?;
+        let final_report = self.status_reader.check_system_freshness().await?;
 
         let end_time = Utc::now();
         let duration_seconds = end_time.signed_duration_since(start_time).num_seconds();
@@ -235,12 +235,15 @@ impl DataRefreshOrchestrator {
         } else {
             // Otherwise, determine what needs refresh based on staleness
             for step in available_steps {
-                if let Some(source_status) = freshness_report.data_sources.get(&step.data_source) {
-                    if source_status.status.needs_refresh() {
-                        plan.push(step.clone());
-                    }
-                } else {
-                    // Unknown sources get refreshed by default
+                // Check if the data source needs refresh based on the semantic fields
+                let needs_refresh = match step.data_source.as_str() {
+                    "daily_prices" => freshness_report.market_data.status.needs_refresh(),
+                    "financial_statements" => freshness_report.financial_data.status.needs_refresh(),
+                    "ps_evs_ratios" => freshness_report.calculated_ratios.status.needs_refresh(),
+                    _ => true, // Unknown data source, refresh it
+                };
+                
+                if needs_refresh {
                     plan.push(step.clone());
                 }
             }
@@ -260,9 +263,9 @@ impl DataRefreshOrchestrator {
         self.record_refresh_start(&step.data_source).await?;
 
         let records_processed = match step.data_source.as_str() {
-            "market_data" => self.refresh_market_internal(session_id).await?,
-            "edgar_financials" => self.refresh_financials_internal(session_id).await?,
-            "calculated_ratios" => self.refresh_ratios_internal(session_id).await?,
+            "daily_prices" => self.refresh_market_internal(session_id).await?,
+            "financial_statements" => self.refresh_financials_internal(session_id).await?,
+            "ps_evs_ratios" => self.refresh_ratios_internal(session_id).await?,
             _ => return Err(anyhow!("Unknown data source: {}", step.data_source)),
         };
 
@@ -991,7 +994,7 @@ impl DataRefreshOrchestrator {
         steps.insert(RefreshMode::Market, vec![
             RefreshStep {
                 name: "Update market data".to_string(),
-                data_source: "market_data".to_string(),
+                data_source: "daily_prices".to_string(),
                 estimated_duration_minutes: 15,
                 command: "internal".to_string(), // Internal function call
                 dependencies: vec![],
@@ -1003,7 +1006,7 @@ impl DataRefreshOrchestrator {
         steps.insert(RefreshMode::Financials, vec![
             RefreshStep {
                 name: "Extract EDGAR financial data".to_string(),
-                data_source: "edgar_financials".to_string(),
+                data_source: "financial_statements".to_string(),
                 estimated_duration_minutes: 90,
                 command: "internal".to_string(), // Internal function call
                 dependencies: vec![],
@@ -1015,10 +1018,10 @@ impl DataRefreshOrchestrator {
         steps.insert(RefreshMode::Ratios, vec![
             RefreshStep {
                 name: "Calculate all ratios and metrics".to_string(),
-                data_source: "calculated_ratios".to_string(),
+                data_source: "ps_evs_ratios".to_string(),
                 estimated_duration_minutes: 10,
                 command: "internal".to_string(), // Internal function call
-                dependencies: vec!["market_data".to_string(), "edgar_financials".to_string()],
+                dependencies: vec!["daily_prices".to_string(), "financial_statements".to_string()],
                 priority: 1,
             },
         ]);
@@ -1137,26 +1140,31 @@ impl DataRefreshOrchestrator {
     async fn update_refresh_status(&self, data_source: &str, success: bool, records: Option<i64>, error: Option<String>) -> Result<()> {
         let status = if success { "current" } else { "error" };
 
+        println!("🔄 Updating refresh status for {}: success={}, records={:?}, status={}", data_source, success, records, status);
+
         let query = r#"
             UPDATE data_refresh_status
             SET
-                last_refresh_complete = CURRENT_TIMESTAMP,
                 last_successful_refresh = CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE last_successful_refresh END,
                 refresh_status = ?,
                 records_updated = COALESCE(?, records_updated),
+                latest_data_date = CASE WHEN ? THEN DATE('now') ELSE latest_data_date END,
                 error_message = ?,
                 updated_at = CURRENT_TIMESTAMP
             WHERE data_source = ?
         "#;
 
-        sqlx::query(query)
+        let result = sqlx::query(query)
             .bind(success)
             .bind(status)
             .bind(records)
+            .bind(success)  // For latest_data_date update
             .bind(error)
             .bind(data_source)
             .execute(&self.pool)
             .await?;
+
+        println!("✅ Database update result: {} rows affected", result.rows_affected());
 
         Ok(())
     }
@@ -1232,6 +1240,6 @@ impl DataRefreshOrchestrator {
 
     /// Get system freshness status
     pub async fn get_system_status(&self) -> Result<SystemFreshnessReport> {
-        self.freshness_checker.check_system_freshness().await
+        self.status_reader.check_system_freshness().await
     }
 }

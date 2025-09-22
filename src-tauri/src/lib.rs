@@ -6,6 +6,7 @@ pub mod database;
 pub mod database_sqlx;
 pub mod tools;
 pub mod analysis;
+pub mod types;
 
 use commands::*;
 use tauri::WindowEvent;

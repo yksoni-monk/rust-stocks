@@ -1,6 +1,6 @@
 use crate::models::garp_pe::{GarpPeScreeningResult, GarpPeScreeningCriteria};
 use crate::database::helpers::get_database_connection;
-use crate::tools::data_freshness_checker::DataFreshnessChecker;
+use crate::tools::data_freshness_checker::DataStatusReader;
 
 #[tauri::command]
 pub async fn get_garp_pe_screening_results(
@@ -17,8 +17,8 @@ pub async fn get_garp_pe_screening_results(
     }
 
     // Check data freshness before proceeding
-    let freshness_checker = DataFreshnessChecker::new(pool.clone());
-    let freshness_report = freshness_checker.check_system_freshness().await
+    let status_reader = DataStatusReader::new(pool.clone());
+    let freshness_report = status_reader.check_system_freshness().await
         .map_err(|e| format!("Failed to check data freshness: {}", e))?;
 
     // Check if GARP screening can proceed

@@ -1,5 +1,10 @@
 import { invoke } from '@tauri-apps/api/core';
 import type {
+  RefreshRequestDto,
+  RefreshProgressDto,
+  SystemFreshnessReport
+} from '../bindings';
+import type {
   Stock,
   PriceData,
   ValuationRatios,
@@ -10,9 +15,6 @@ import type {
   ValueRecommendation,
   DatabaseStats,
   InitializationStatus,
-  SystemFreshnessReport,
-  RefreshProgress,
-  RefreshRequestDto,
   RefreshResult,
   RefreshDurationEstimates
 } from '../utils/types';
@@ -184,7 +186,7 @@ export const dataRefreshAPI = {
   },
 
   // Get refresh progress
-  async getRefreshProgress(sessionId: string): Promise<RefreshProgress | null> {
+  async getRefreshProgress(sessionId: string): Promise<RefreshProgressDto | null> {
     return await invoke('get_refresh_progress', { sessionId });
   },
 

@@ -2,34 +2,13 @@
 // Exposes data freshness checking and refresh control to the frontend
 
 use crate::database::helpers::get_database_connection;
-use crate::tools::data_freshness_checker::{DataFreshnessChecker, SystemFreshnessReport};
-use crate::tools::data_refresh_orchestrator::{DataRefreshOrchestrator, RefreshRequest, RefreshMode, RefreshResult};
-use serde::{Deserialize, Serialize};
+use crate::tools::data_freshness_checker::{DataStatusReader, SystemFreshnessReport};
+use crate::tools::data_refresh_orchestrator::{DataRefreshManager, RefreshRequest, RefreshMode, RefreshResult};
+use crate::types::{RefreshCompletedEvent, RefreshMode as RefreshModeDto, RefreshProgressDto, RefreshRequestDto, RefreshStatus};
 use sqlx::Row;
 use tauri::Emitter;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RefreshProgress {
-    pub session_id: String,
-    pub operation_type: String,
-    pub start_time: String,
-    pub total_steps: i32,
-    pub completed_steps: i32,
-    pub current_step_name: Option<String>,
-    pub current_step_progress: f64,
-    pub overall_progress_percent: f64,
-    pub estimated_completion: Option<String>,
-    pub status: String,
-    pub initiated_by: String,
-    pub elapsed_minutes: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RefreshRequestDto {
-    pub mode: String, // "quick", "standard", "full"
-    pub force_sources: Option<Vec<String>>,
-    pub initiated_by: Option<String>,
-}
+// Types now come from crate::types and are exported via ts-rs
 
 /// Get current data freshness status
 #[tauri::command]
@@ -37,8 +16,8 @@ pub async fn get_data_freshness_status() -> Result<SystemFreshnessReport, String
     let pool = get_database_connection().await
         .map_err(|e| format!("Database connection failed: {}", e))?;
 
-    let freshness_checker = DataFreshnessChecker::new(pool);
-    freshness_checker.check_system_freshness().await
+    let status_reader = DataStatusReader::new(pool);
+    status_reader.check_system_freshness().await
         .map_err(|e| format!("Failed to check data freshness: {}", e))
 }
 
@@ -48,8 +27,8 @@ pub async fn check_screening_readiness(feature: String) -> Result<bool, String> 
     let pool = get_database_connection().await
         .map_err(|e| format!("Database connection failed: {}", e))?;
 
-    let freshness_checker = DataFreshnessChecker::new(pool);
-    let report = freshness_checker.check_system_freshness().await
+    let status_reader = DataStatusReader::new(pool);
+    let report = status_reader.check_system_freshness().await
         .map_err(|e| format!("Failed to check data freshness: {}", e))?;
 
     match feature.as_str() {
@@ -66,14 +45,13 @@ pub async fn start_data_refresh(app_handle: tauri::AppHandle, request: RefreshRe
     let pool = get_database_connection().await
         .map_err(|e| format!("Database connection failed: {}", e))?;
 
-    let orchestrator = DataRefreshOrchestrator::new(pool).await
+    let orchestrator = DataRefreshManager::new(pool).await
         .map_err(|e| format!("Failed to initialize refresh orchestrator: {}", e))?;
 
-    let refresh_mode = match request.mode.as_str() {
-        "market" => RefreshMode::Market,
-        "financials" => RefreshMode::Financials,
-        "ratios" => RefreshMode::Ratios,
-        _ => return Err(format!("Invalid refresh mode: {}", request.mode)),
+    let refresh_mode = match request.mode {
+        RefreshModeDto::Market => RefreshMode::Market,
+        RefreshModeDto::Financials => RefreshMode::Financials,
+        RefreshModeDto::Ratios => RefreshMode::Ratios,
     };
 
     let refresh_request = RefreshRequest {
@@ -103,19 +81,30 @@ pub async fn start_data_refresh(app_handle: tauri::AppHandle, request: RefreshRe
             tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
 
             let query = "SELECT status FROM refresh_progress WHERE session_id = ? ORDER BY start_time DESC LIMIT 1";
+            println!("🔍 Polling refresh status for session {}...", session_id);
             if let Ok(row) = sqlx::query(query).bind(&session_id).fetch_optional(&pool).await {
                 if let Some(row) = row {
                     let status: String = row.get("status");
+                    println!("🔍 Found status: {}", status);
                     if status == "completed" || status == "failed" {
-                        // Emit event to frontend
-                        let _ = app_handle.emit("refresh-completed", serde_json::json!({
-                            "mode": mode,
-                            "session_id": session_id,
-                            "status": status
-                        }));
+                        // Emit typed event to frontend
+                        let typed_status = match status.as_str() {
+                            "completed" => RefreshStatus::Completed,
+                            "failed" => RefreshStatus::Failed,
+                            "running" => RefreshStatus::Running,
+                            "cancelled" => RefreshStatus::Cancelled,
+                            _ => RefreshStatus::Failed,
+                        };
+                        println!("🎉 Emitting refresh-completed event for {:?}: {}", mode, status);
+                        let event = RefreshCompletedEvent { mode, session_id: session_id.clone(), status: typed_status };
+                        let _ = app_handle.emit("refresh-completed", &event);
                         break;
                     }
+                } else {
+                    println!("⚠️ No progress record found for session {}", session_id);
                 }
+            } else {
+                println!("❌ Failed to query progress for session {}", session_id);
             }
         }
     });
@@ -125,7 +114,7 @@ pub async fn start_data_refresh(app_handle: tauri::AppHandle, request: RefreshRe
 
 /// Get progress of active refresh operations
 #[tauri::command]
-pub async fn get_refresh_progress(session_id: String) -> Result<Option<RefreshProgress>, String> {
+pub async fn get_refresh_progress(session_id: String) -> Result<Option<RefreshProgressDto>, String> {
     let pool = get_database_connection().await
         .map_err(|e| format!("Database connection failed: {}", e))?;
 
@@ -156,9 +145,24 @@ pub async fn get_refresh_progress(session_id: String) -> Result<Option<RefreshPr
         .map_err(|e| format!("Failed to get refresh progress: {}", e))?;
 
     let progress = rows.into_iter().map(|row| {
-        RefreshProgress {
+        let op_type_str: String = row.get("operation_type");
+        let operation_type = match op_type_str.as_str() {
+            "market" => RefreshModeDto::Market,
+            "financials" => RefreshModeDto::Financials,
+            "ratios" => RefreshModeDto::Ratios,
+            _ => RefreshModeDto::Ratios,
+        };
+        let status_str: String = row.get("status");
+        let status = match status_str.as_str() {
+            "running" => RefreshStatus::Running,
+            "completed" => RefreshStatus::Completed,
+            "failed" => RefreshStatus::Failed,
+            "cancelled" => RefreshStatus::Cancelled,
+            _ => RefreshStatus::Failed,
+        };
+        RefreshProgressDto {
             session_id: row.get("session_id"),
-            operation_type: row.get("operation_type"),
+            operation_type,
             start_time: row.get("start_time"),
             total_steps: row.get("total_steps"),
             completed_steps: row.get("completed_steps"),
@@ -166,7 +170,7 @@ pub async fn get_refresh_progress(session_id: String) -> Result<Option<RefreshPr
             current_step_progress: row.get("current_step_progress"),
             overall_progress_percent: row.get("overall_progress_percent"),
             estimated_completion: row.try_get("estimated_completion").ok(),
-            status: row.get("status"),
+            status,
             initiated_by: row.get("initiated_by"),
             elapsed_minutes: row.get("elapsed_minutes"),
         }

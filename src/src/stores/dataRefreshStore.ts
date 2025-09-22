@@ -2,9 +2,14 @@ import { createSignal } from 'solid-js';
 import { listen } from '@tauri-apps/api/event';
 import { dataRefreshAPI } from '../services/api';
 import type {
-  SystemFreshnessReport,
-  RefreshProgress,
+  RefreshMode,
   RefreshRequestDto,
+  RefreshProgressDto,
+  RefreshCompletedEvent,
+  SystemFreshnessReport,
+  DataFreshnessStatus
+} from '../bindings';
+import type {
   RefreshResult,
   RefreshDurationEstimates
 } from '../utils/types';
@@ -13,7 +18,7 @@ import type {
 export function createDataRefreshStore() {
   // State signals
   const [freshnessStatus, setFreshnessStatus] = createSignal<SystemFreshnessReport | null>(null);
-  const [refreshProgress, setRefreshProgress] = createSignal<RefreshProgress | null>(null);
+  const [refreshProgress, setRefreshProgress] = createSignal<RefreshProgressDto | null>(null);
   const [lastRefreshResult, setLastRefreshResult] = createSignal<RefreshResult | null>(null);
   const [durationEstimates, setDurationEstimates] = createSignal<RefreshDurationEstimates | null>(null);
   const [isRefreshing, setIsRefreshing] = createSignal(false);
@@ -31,8 +36,6 @@ export function createDataRefreshStore() {
       console.log('🔄 DataRefreshStore: Starting data freshness check...');
       const status = await dataRefreshAPI.getDataFreshnessStatus();
       console.log('✅ DataRefreshStore: Received freshness status:', status);
-      console.log('📋 DataRefreshStore: Full status object:', JSON.stringify(status, null, 2));
-      console.log('📊 DataRefreshStore: Data sources:', status.data_sources);
       setFreshnessStatus(status);
       console.log('🔍 Data freshness status updated:', status.overall_status);
     } catch (err) {
@@ -64,7 +67,7 @@ export function createDataRefreshStore() {
   };
 
   // Start data refresh operation
-  const startRefresh = async (mode: 'market' | 'financials' | 'ratios', forceRefresh = false) => {
+  const startRefresh = async (mode: RefreshMode, forceRefresh = false) => {
     try {
       setError(null);
       setIsRefreshing(true);
@@ -74,7 +77,7 @@ export function createDataRefreshStore() {
 
       const request: RefreshRequestDto = {
         mode,
-        force_sources: forceRefresh ? [mode] : undefined,
+        force_sources: forceRefresh ? [mode] : null,
         initiated_by: 'frontend_user'
       };
 
@@ -216,7 +219,7 @@ export function createDataRefreshStore() {
       await checkDataFreshness();
 
       const status = freshnessStatus();
-      if (status?.market_data && !status.market_data.is_fresh) {
+      if (status?.market_data && status.market_data.status !== 'Current') {
         // Auto-refresh market data if stale (low-cost operation)
         console.log('🔄 Auto-refreshing stale market data...');
         await startRefresh('market');
@@ -237,9 +240,10 @@ export function createDataRefreshStore() {
     await loadLastRefreshResult();
 
     // Listen for refresh completion events from backend
-    listen('refresh-completed', async (event: any) => {
+    listen<RefreshCompletedEvent>('refresh-completed', async (event) => {
       const { mode, status } = event.payload;
       console.log(`🎉 Refresh completed for ${mode}: ${status}`);
+      console.log('🔄 Refreshing data freshness status...');
 
       // Remove from refreshing set
       setRefreshingCards(prev => {
@@ -250,6 +254,7 @@ export function createDataRefreshStore() {
 
       // Update freshness status
       await checkDataFreshness();
+      console.log('✅ Data freshness status refreshed after completion');
 
       // Stop global refreshing state
       setIsRefreshing(false);
@@ -260,7 +265,7 @@ export function createDataRefreshStore() {
   };
 
   // Utility functions
-  const getDataTypeIcon = (type: 'market' | 'financials' | 'ratios'): string => {
+  const getDataTypeIcon = (type: RefreshMode): string => {
     switch (type) {
       case 'market': return '📈';
       case 'financials': return '📋';

@@ -8,7 +8,7 @@ use rust_stocks_tauri_lib::tools::ttm_importer::{
     import_complete_ttm_dataset,
     TTMImportStats,
 };
-use rust_stocks_tauri_lib::tools::data_freshness_checker::DataFreshnessChecker;
+use rust_stocks_tauri_lib::tools::data_freshness_checker::DataStatusReader;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -103,7 +103,7 @@ async fn main() -> Result<()> {
             if stats.income_statements_imported > 0 || stats.balance_sheets_imported > 0 {
                 println!("📊 Updating financial data tracking status...");
 
-                if let Err(e) = DataFreshnessChecker::update_tracking_with_total_count(
+                if let Err(e) = DataStatusReader::update_tracking_with_total_count(
                     &pool,
                     "financial_statements"
                 ).await {

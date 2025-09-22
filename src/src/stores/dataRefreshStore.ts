@@ -29,6 +29,8 @@ export function createDataRefreshStore() {
       console.log('🔄 DataRefreshStore: Starting data freshness check...');
       const status = await dataRefreshAPI.getDataFreshnessStatus();
       console.log('✅ DataRefreshStore: Received freshness status:', status);
+      console.log('📋 DataRefreshStore: Full status object:', JSON.stringify(status, null, 2));
+      console.log('📊 DataRefreshStore: Data sources:', status.data_sources);
       setFreshnessStatus(status);
       console.log('🔍 Data freshness status updated:', status.overall_status);
     } catch (err) {

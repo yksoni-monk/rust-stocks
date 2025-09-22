@@ -10,6 +10,7 @@ use rust_stocks_tauri_lib::tools::ratio_calculator::{
     calculate_ratios_for_negative_earnings_stocks,
     generate_ratio_summary_report,
 };
+use rust_stocks_tauri_lib::tools::data_freshness_checker::DataFreshnessChecker;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -145,6 +146,14 @@ async fn main() -> Result<()> {
                 return Err(e);
             }
         }
+    }
+
+    // Update tracking table with total database count
+    println!("\n📊 Updating ratio tracking status...");
+    if let Err(e) = DataFreshnessChecker::update_tracking_with_total_count(&pool, "ps_evs_ratios").await {
+        eprintln!("⚠️ Failed to update tracking status: {}", e);
+    } else {
+        println!("✅ Ratio tracking status updated");
     }
 
     pool.close().await;

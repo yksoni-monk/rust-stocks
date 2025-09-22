@@ -11,6 +11,7 @@ use rust_stocks_tauri_lib::api::schwab_client::SchwabClient;
 use rust_stocks_tauri_lib::api::StockDataProvider;
 use rust_stocks_tauri_lib::models::Config;
 use rust_stocks_tauri_lib::tools::date_range_calculator::{DateRangeCalculator, UpdatePlan};
+use rust_stocks_tauri_lib::tools::data_freshness_checker::DataFreshnessChecker;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::collections::{HashMap, HashSet};
@@ -650,6 +651,20 @@ async fn show_progress_status(progress_file: &PathBuf) -> Result<()> {
     println!("  Total records: {}", progress.statistics.total_price_records);
     println!("  Average bars/symbol: {:.1}", progress.statistics.average_bars_per_symbol);
     println!("  Download speed: {:.2} symbols/minute", progress.statistics.download_speed_symbols_per_minute);
-    
+
+    // Update tracking table with total database count
+    println!("\n📊 Updating data tracking status...");
+    let database_url = std::env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "sqlite:./db/stocks.db".to_string());
+    let tracking_pool = SqlitePool::connect(&database_url).await?;
+
+    if let Err(e) = DataFreshnessChecker::update_tracking_with_total_count(&tracking_pool, "daily_prices").await {
+        eprintln!("⚠️ Failed to update tracking status: {}", e);
+    } else {
+        println!("✅ Daily prices tracking status updated");
+    }
+
+    tracking_pool.close().await;
+
     Ok(())
 }

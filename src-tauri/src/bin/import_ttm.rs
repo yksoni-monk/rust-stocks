@@ -8,6 +8,7 @@ use rust_stocks_tauri_lib::tools::ttm_importer::{
     import_complete_ttm_dataset,
     TTMImportStats,
 };
+use rust_stocks_tauri_lib::tools::data_freshness_checker::DataFreshnessChecker;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -97,6 +98,20 @@ async fn main() -> Result<()> {
         Ok(stats) => {
             let duration = start_time.elapsed();
             print_success_summary(&stats, duration);
+
+            // Update tracking status for financial statements
+            if stats.income_statements_imported > 0 || stats.balance_sheets_imported > 0 {
+                println!("📊 Updating financial data tracking status...");
+
+                if let Err(e) = DataFreshnessChecker::update_tracking_with_total_count(
+                    &pool,
+                    "financial_statements"
+                ).await {
+                    eprintln!("⚠️ Failed to update tracking status: {}", e);
+                } else {
+                    println!("✅ Financial data tracking status updated");
+                }
+            }
         }
         Err(e) => {
             eprintln!("❌ TTM Import Failed: {}", e);

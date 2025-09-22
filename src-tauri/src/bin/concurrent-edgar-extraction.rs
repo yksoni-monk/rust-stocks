@@ -18,6 +18,7 @@ use tokio::sync::{Mutex, Semaphore};
 use tokio::task::JoinHandle;
 use tokio::time::{interval, sleep};
 use tracing::{info, warn, debug, error};
+use rust_stocks_tauri_lib::tools::data_freshness_checker::DataFreshnessChecker;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -535,7 +536,37 @@ impl ConcurrentEdgarExtractor {
         info!("   Successfully processed: {}", completed);
         info!("   Failed: {}", failed);
         info!("   Success rate: {:.1}%", (completed as f64 / total as f64) * 100.0);
-        
+
+        // Update tracking status for financial statements if we processed any companies
+        if completed > 0 {
+            info!("📊 Updating financial data tracking status...");
+
+            // Get the latest period date from imported data
+            let latest_date = sqlx::query_scalar::<_, Option<String>>(
+                "SELECT MAX(report_date) FROM income_statements WHERE data_source = 'edgar'"
+            ).fetch_one(&*self.db_pool).await.unwrap_or(None);
+
+            // Count total records imported from EDGAR
+            let total_records = sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM (
+                    SELECT 1 FROM income_statements WHERE data_source = 'edgar'
+                    UNION ALL
+                    SELECT 1 FROM balance_sheets WHERE data_source = 'edgar'
+                )"
+            ).fetch_one(&*self.db_pool).await.unwrap_or(0);
+
+            if let Err(e) = DataFreshnessChecker::update_import_status(
+                &self.db_pool,
+                "financial_statements",
+                total_records,
+                latest_date.as_deref()
+            ).await {
+                warn!("⚠️ Failed to update tracking status: {}", e);
+            } else {
+                info!("✅ Financial data tracking status updated ({} records)", total_records);
+            }
+        }
+
         Ok(())
     }
 }

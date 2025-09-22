@@ -52,7 +52,8 @@ function DataStatusCard(props: CardStatusProps) {
   const isRefreshing = () => dataRefreshStore.isRefreshing();
   const dataSource = () => {
     const freshness = freshnessData();
-    return freshness?.data_sources?.[getDataSourceKey(props.cardId)];
+    const dataSourceKey = getDataSourceKey(props.cardId);
+    return freshness?.data_sources?.[dataSourceKey];
   };
 
   // Determine status and styling - made reactive
@@ -137,6 +138,7 @@ function DataStatusCard(props: CardStatusProps) {
     }
 
     const count = currentDataSource.records_count;
+
     const countStr = count > 1000000 ? `${(count/1000000).toFixed(1)}M` :
                      count > 1000 ? `${(count/1000).toFixed(0)}K` :
                      count.toString();

@@ -66,9 +66,9 @@ enum Commands {
 // EDGAR JSON structures
 #[derive(Debug, Deserialize)]
 struct EdgarCompanyFacts {
-    _cik: i64,
+    cik: i64,
     #[serde(rename = "entityName")]
-    _entity_name: String,
+    entity_name: String,
     facts: EdgarFacts,
 }
 
@@ -96,6 +96,7 @@ struct EdgarFactValue {
 struct ExtractedFinancialData {
     income_statements: Vec<IncomeStatementData>,
     balance_sheets: Vec<BalanceSheetData>,
+    cash_flow_statements: Vec<CashFlowStatementData>,
 }
 
 #[derive(Debug, Clone)]
@@ -131,10 +132,26 @@ struct BalanceSheetData {
     shares_outstanding: Option<f64>,
 }
 
+#[derive(Debug)]
+struct CashFlowStatementData {
+    stock_id: i64,
+    period: String,
+    year: i32,
+    end_date: String,
+    operating_cash_flow: Option<f64>,
+    investing_cash_flow: Option<f64>,
+    financing_cash_flow: Option<f64>,
+    net_cash_flow: Option<f64>,
+    depreciation_expense: Option<f64>,
+    dividends_paid: Option<f64>,
+    share_repurchases: Option<f64>,
+}
+
 // GAAP field mapping configuration
 struct GaapFieldMapping {
     income_statement_fields: HashMap<String, Vec<String>>,
     balance_sheet_fields: HashMap<String, Vec<String>>,
+    cash_flow_fields: HashMap<String, Vec<String>>,
 }
 
 impl GaapFieldMapping {
@@ -201,9 +218,43 @@ impl GaapFieldMapping {
             "CommonStockSharesIssued".to_string(),
         ]);
         
+        // Cash flow field mappings (priority order)
+        let mut cash_flow_fields = HashMap::new();
+        
+        cash_flow_fields.insert("operating_cash_flow".to_string(), vec![
+            "NetCashProvidedByUsedInOperatingActivities".to_string(),
+            "CashFlowsFromOperatingActivities".to_string(),
+        ]);
+        
+        cash_flow_fields.insert("investing_cash_flow".to_string(), vec![
+            "NetCashProvidedByUsedInInvestingActivities".to_string(),
+            "CashFlowsFromInvestingActivities".to_string(),
+        ]);
+        
+        cash_flow_fields.insert("financing_cash_flow".to_string(), vec![
+            "NetCashProvidedByUsedInFinancingActivities".to_string(),
+            "CashFlowsFromFinancingActivities".to_string(),
+        ]);
+        
+        cash_flow_fields.insert("net_cash_flow".to_string(), vec![
+            "CashAndCashEquivalentsPeriodIncreaseDecrease".to_string(),
+            "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsPeriodIncreaseDecreaseIncludingExchangeRateEffect".to_string(),
+        ]);
+        
+        cash_flow_fields.insert("depreciation_expense".to_string(), vec![
+            "DepreciationDepletionAndAmortization".to_string(),
+            "DepreciationAndAmortization".to_string(),
+        ]);
+        
+        cash_flow_fields.insert("dividends_paid".to_string(), vec![
+            "PaymentsOfDividends".to_string(),
+            "PaymentsOfDividendsCommonStock".to_string(),
+        ]);
+        
         Self {
             income_statement_fields,
             balance_sheet_fields,
+            cash_flow_fields,
         }
     }
 }
@@ -656,9 +707,10 @@ async fn process_extraction_task(
     let gaap_mapping = GaapFieldMapping::new();
     let extracted_data = extract_financial_statements(&edgar_data, task.stock_id, &gaap_mapping)?;
     
-    debug!("Extracted {} income statements and {} balance sheets for {}", 
+    debug!("Extracted {} income statements, {} balance sheets, and {} cash flow statements for {}", 
            extracted_data.income_statements.len(), 
-           extracted_data.balance_sheets.len(), 
+           extracted_data.balance_sheets.len(),
+           extracted_data.cash_flow_statements.len(),
            task.symbol);
     
     // Update status
@@ -680,6 +732,7 @@ fn extract_financial_statements(
 ) -> Result<ExtractedFinancialData> {
     let mut income_statements = Vec::new();
     let mut balance_sheets = Vec::new();
+    let mut cash_flow_statements = Vec::new();
     
     // Extract periods from GAAP facts
     let periods = extract_available_periods(&edgar_data.facts.us_gaap)?;
@@ -704,11 +757,22 @@ fn extract_financial_statements(
         ) {
             balance_sheets.push(balance_sheet);
         }
+        
+        // Extract cash flow statement data for this period
+        if let Ok(cash_flow_stmt) = extract_cash_flow_statement_for_period(
+            &edgar_data.facts.us_gaap, 
+            stock_id, 
+            &period_info,
+            gaap_mapping,
+        ) {
+            cash_flow_statements.push(cash_flow_stmt);
+        }
     }
     
     Ok(ExtractedFinancialData {
         income_statements,
         balance_sheets,
+        cash_flow_statements,
     })
 }
 
@@ -865,6 +929,73 @@ fn extract_balance_sheet_for_period(
     Ok(balance_sheet)
 }
 
+fn extract_cash_flow_statement_for_period(
+    gaap_facts: &HashMap<String, EdgarConcept>,
+    stock_id: i64,
+    period_info: &PeriodInfo,
+    gaap_mapping: &GaapFieldMapping,
+) -> Result<CashFlowStatementData> {
+    let mut cash_flow_stmt = CashFlowStatementData {
+        stock_id,
+        period: period_info.period.clone(),
+        year: period_info.year,
+        end_date: period_info.end_date.clone(),
+        operating_cash_flow: None,
+        investing_cash_flow: None,
+        financing_cash_flow: None,
+        net_cash_flow: None,
+        depreciation_expense: None,
+        dividends_paid: None,
+        share_repurchases: None,
+    };
+    
+    // Extract operating cash flow
+    cash_flow_stmt.operating_cash_flow = extract_field_value_for_period(
+        gaap_facts,
+        &gaap_mapping.cash_flow_fields["operating_cash_flow"],
+        period_info,
+    );
+    
+    // Extract investing cash flow
+    cash_flow_stmt.investing_cash_flow = extract_field_value_for_period(
+        gaap_facts,
+        &gaap_mapping.cash_flow_fields["investing_cash_flow"],
+        period_info,
+    );
+    
+    // Extract financing cash flow
+    cash_flow_stmt.financing_cash_flow = extract_field_value_for_period(
+        gaap_facts,
+        &gaap_mapping.cash_flow_fields["financing_cash_flow"],
+        period_info,
+    );
+    
+    // Extract net cash flow
+    cash_flow_stmt.net_cash_flow = extract_field_value_for_period(
+        gaap_facts,
+        &gaap_mapping.cash_flow_fields["net_cash_flow"],
+        period_info,
+    );
+    
+    // Extract depreciation expense
+    cash_flow_stmt.depreciation_expense = extract_field_value_for_period(
+        gaap_facts,
+        &gaap_mapping.cash_flow_fields["depreciation_expense"],
+        period_info,
+    );
+    
+    // Extract dividends paid (note: payments are typically negative)
+    if let Some(dividends) = extract_field_value_for_period(
+        gaap_facts,
+        &gaap_mapping.cash_flow_fields["dividends_paid"],
+        period_info,
+    ) {
+        cash_flow_stmt.dividends_paid = Some(-dividends); // Convert to positive for storage
+    }
+    
+    Ok(cash_flow_stmt)
+}
+
 fn extract_field_value_for_period(
     gaap_facts: &HashMap<String, EdgarConcept>,
     field_priorities: &[String],
@@ -957,6 +1088,45 @@ async fn insert_financial_data_to_db(db_pool: &SqlitePool, data: &ExtractedFinan
         .bind(balance_sheet.total_equity)
         .bind(balance_sheet.cash_and_equivalents)
         .bind(balance_sheet.shares_outstanding)
+        .execute(&mut *tx)
+        .await?;
+    }
+    
+    // Insert cash flow statements
+    for cash_flow_stmt in &data.cash_flow_statements {
+        let period_type = match cash_flow_stmt.period.as_str() {
+            "FY" => "Annual",
+            "Q1" | "Q2" | "Q3" | "Q4" => "Quarterly",
+            _ => "Quarterly", // Default to quarterly
+        };
+        
+        let fiscal_period = if cash_flow_stmt.period == "FY" {
+            None
+        } else {
+            Some(cash_flow_stmt.period.clone())
+        };
+        
+        sqlx::query(
+            r#"
+            INSERT OR REPLACE INTO cash_flow_statements 
+            (stock_id, period_type, report_date, fiscal_year, fiscal_period,
+             operating_cash_flow, investing_cash_flow, financing_cash_flow, net_cash_flow,
+             depreciation_expense, dividends_paid, share_repurchases, data_source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'edgar')
+            "#
+        )
+        .bind(cash_flow_stmt.stock_id)
+        .bind(period_type)
+        .bind(&cash_flow_stmt.end_date)
+        .bind(cash_flow_stmt.year)
+        .bind(fiscal_period)
+        .bind(cash_flow_stmt.operating_cash_flow)
+        .bind(cash_flow_stmt.investing_cash_flow)
+        .bind(cash_flow_stmt.financing_cash_flow)
+        .bind(cash_flow_stmt.net_cash_flow)
+        .bind(cash_flow_stmt.depreciation_expense)
+        .bind(cash_flow_stmt.dividends_paid)
+        .bind(cash_flow_stmt.share_repurchases)
         .execute(&mut *tx)
         .await?;
     }

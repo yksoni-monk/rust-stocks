@@ -11,8 +11,6 @@ use uuid::Uuid;
 use crate::tools::data_freshness_checker::{DataStatusReader, SystemFreshnessReport};
 use crate::tools::ratio_calculator;
 use crate::tools::date_range_calculator::DateRangeCalculator;
-use crate::tools::edgar_extractor::EdgarDataExtractor;
-use crate::extractors::cash_flow_extractor::CashFlowExtractor;
 use crate::api::schwab_client::SchwabClient;
 use crate::api::StockDataProvider;
 use crate::models::Config;
@@ -79,8 +77,6 @@ pub struct DataRefreshManager {
     status_reader: DataStatusReader,
     #[allow(dead_code)]
     date_calculator: DateRangeCalculator,
-    _edgar_extractor: EdgarDataExtractor,
-    cash_flow_extractor: CashFlowExtractor,
     refresh_steps: HashMap<RefreshMode, Vec<RefreshStep>>,
 }
 
@@ -91,18 +87,12 @@ impl DataRefreshManager {
 
         let status_reader = DataStatusReader::new(pool.clone());
         let date_calculator = DateRangeCalculator::new();
-        let edgar_data_path = std::env::var("EDGAR_DATA_PATH")
-            .unwrap_or_else(|_| "edgar_data".to_string());
-        let edgar_extractor = EdgarDataExtractor::new(&edgar_data_path, pool.clone());
-        let cash_flow_extractor = CashFlowExtractor::new(pool.clone());
         let refresh_steps = Self::define_refresh_steps();
 
         Ok(Self {
             pool,
             status_reader,
             date_calculator,
-            _edgar_extractor: edgar_extractor,
-            cash_flow_extractor,
             refresh_steps,
         })
     }
@@ -243,6 +233,7 @@ impl DataRefreshManager {
                 let needs_refresh = match step.data_source.as_str() {
                     "daily_prices" => freshness_report.market_data.status.needs_refresh(),
                     "financial_statements" => freshness_report.financial_data.status.needs_refresh(),
+                    "cash_flow_statements" => freshness_report.financial_data.status.needs_refresh(),
                     "ps_evs_ratios" => freshness_report.calculated_ratios.status.needs_refresh(),
                     _ => true, // Unknown data source, refresh it
                 };
@@ -439,122 +430,46 @@ impl DataRefreshManager {
         Ok(total_records as i64)
     }
 
-    /// Refresh all EDGAR financial data (income, balance, cash flow) - PARALLEL VERSION
+    /// Refresh all EDGAR financial data (income, balance, cash flow) - Uses Concurrent Extractor
     async fn refresh_financials_internal(&self, _session_id: &str) -> Result<i64> {
-        println!("📈 Refreshing EDGAR financial data (parallel processing)...");
-
-        // Get S&P 500 CIKs for processing
-        let ciks_query = r#"
-            SELECT cm.cik, cm.stock_id, s.symbol, s.company_name
-            FROM cik_mappings_sp500 cm
-            INNER JOIN stocks s ON s.symbol = cm.symbol
-            WHERE s.status = 'active'
-            ORDER BY s.symbol
-        "#;
-
-        let cik_data = sqlx::query_as::<_, (String, i32, String, String)>(ciks_query)
-            .fetch_all(&self.pool)
-            .await?;
-
-        println!("📊 Found {} S&P 500 companies for EDGAR extraction", cik_data.len());
-
-        // Parallel processing with semaphore
-        let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(20)); // Max 20 concurrent
-        let edgar_data_path = std::env::var("EDGAR_DATA_PATH")
-            .unwrap_or_else(|_| "edgar_data".to_string());
-
-        let mut tasks = Vec::new();
-        let total_companies = cik_data.len();
-
-        for (cik_str, stock_id, symbol, company_name) in cik_data {
-            let permit = semaphore.clone();
-            let pool = self.pool.clone();
-            let edgar_path = edgar_data_path.clone();
-
-            let task = tokio::spawn(async move {
-                let _permit = permit.acquire().await.unwrap();
-
-                // Parse CIK string to i32
-                let cik = match cik_str.parse::<i32>() {
-                    Ok(c) => c,
-                    Err(e) => return Err(anyhow!("Invalid CIK format '{}': {}", cik_str, e)),
-                };
-
-                // Create extractor instance for this task
-                let extractor = EdgarDataExtractor::new(&edgar_path, pool);
-
-                // Extract and store financial data
-                match extractor.extract_company_data(cik).await {
-                    Ok(financial_data) => {
-                        match extractor.store_financial_data(stock_id, &financial_data).await {
-                            Ok(records_stored) => {
-                                if records_stored > 0 {
-                                    println!("✅ {} ({}) - {} financial records", symbol, company_name, records_stored);
-                                }
-                                Ok((symbol, records_stored))
-                            }
-                            Err(e) => {
-                                println!("⚠️ {} - Failed to store: {}", symbol, e);
-                                Err(anyhow!("Store failed for {}: {}", symbol, e))
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        println!("⚠️ {} - EDGAR extraction failed: {}", symbol, e);
-                        Err(anyhow!("Extract failed for {}: {}", symbol, e))
-                    }
-                }
-            });
-            tasks.push(task);
+        println!("📈 Refreshing EDGAR financial data using concurrent extractor...");
+        
+        // Run the concurrent EDGAR extraction binary
+        let output = Command::new("cargo")
+            .args(&["run", "--bin", "concurrent-edgar-extraction", "--", "extract"])
+            .current_dir("../src-tauri")
+            .output()
+            .await
+            .map_err(|e| anyhow!("Failed to run concurrent extractor: {}", e))?;
+        
+        if !output.status.success() {
+            let error_msg = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow!("Concurrent extractor failed: {}", error_msg));
         }
-
-        // Wait for all tasks to complete
-        println!("🚀 Processing {} companies concurrently (max 20 parallel)...", tasks.len());
-
-        let mut total_records = 0;
-        let mut processed_companies = 0;
-
-        for (i, task) in tasks.into_iter().enumerate() {
-            match task.await {
-                Ok(Ok((_symbol, records))) => {
-                    total_records += records as i64;
-                    processed_companies += 1;
-                }
-                Ok(Err(e)) => {
-                    println!("⚠️ Task failed: {}", e);
-                }
-                Err(e) => {
-                    println!("⚠️ Task {} panicked: {}", i, e);
-                }
-            }
-
-            // Progress update every 50 companies
-            if processed_companies % 50 == 0 {
-                println!("📊 Progress: {}/{} companies processed, {} total records",
-                         processed_companies, total_companies, total_records);
-            }
-        }
-
-        println!("✅ S&P 500 EDGAR financial data refresh completed - {} companies, {} records",
-                processed_companies, total_records);
+        
+        let success_msg = String::from_utf8_lossy(&output.stdout);
+        println!("✅ Concurrent EDGAR extraction completed: {}", success_msg);
+        
+        // Count total records extracted
+        let total_records = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM (
+                SELECT 1 FROM income_statements WHERE data_source = 'edgar'
+                UNION ALL
+                SELECT 1 FROM balance_sheets WHERE data_source = 'edgar'
+                UNION ALL
+                SELECT 1 FROM cash_flow_statements WHERE data_source = 'edgar'
+            )"
+        ).fetch_one(&self.pool).await?;
+        
+        println!("📊 Total EDGAR financial records: {}", total_records);
         Ok(total_records)
     }
 
     /// Extract cash flow statements for complete Piotroski F-Score
     async fn refresh_cash_flow_internal(&self, _session_id: &str) -> Result<i64> {
-        println!("💰 Extracting cash flow statements for Piotroski F-Score...");
-
-        // Use the cash flow extractor to process all S&P 500 stocks
-        let extraction_report = self.cash_flow_extractor.extract_all_sp500_cash_flow().await
-            .map_err(|e| anyhow!("Cash flow extraction failed: {}", e))?;
-
-        println!("✅ Cash flow extraction completed:");
-        println!("   📊 Total symbols: {}", extraction_report.total_symbols);
-        println!("   ✅ Successful: {}", extraction_report.successful_extractions);
-        println!("   ❌ Failed: {}", extraction_report.failed_extractions);
-        println!("   📈 Total records: {}", extraction_report.total_records);
-
-        Ok(extraction_report.total_records as i64)
+        println!("💰 Cash flow extraction now handled by concurrent extractor...");
+        println!("✅ Use 'refresh_data financials' to extract all financial data including cash flow");
+        Ok(0)
     }
 
     /// Calculate all ratios and metrics for all algorithms

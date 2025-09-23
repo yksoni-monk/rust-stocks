@@ -150,37 +150,13 @@ This single document contains everything you need:
 
 ## 📚 Architecture Documents
 
-### **Individual Method Documentation**
-1. **[Graham Value Screener](./GRAHAM_VALUE_SCREENER_ARCHITECTURE.md)**
-   - Complete implementation with minor enhancements needed
-   - Missing current ratio and interest coverage criteria
-   - Well-documented with clear implementation plan
-
-2. **[GARP P/E Screening](./GARP_PE_SCREENING_ARCHITECTURE.md)**
-   - Incorrect GARP formula implementation
-   - Missing growth quality and sustainability metrics
-   - Detailed correction plan with proper methodology
-
-3. **[Piotroski F-Score](./PIOTROSKI_F_SCORE_ARCHITECTURE.md)**
-   - Severely incomplete implementation (only 3 of 9 criteria)
-   - Missing critical data infrastructure (cash flow, balance sheet)
-   - Comprehensive implementation plan with data requirements
-
-4. **[O'Shaughnessy Value Composite](./OSHAGHNESSY_VALUE_COMPOSITE_ARCHITECTURE.md)**
-   - Partially implemented (3 of 6 metrics)
-   - Missing cash flow, EBITDA, and dividend data
-   - Detailed completion plan with data infrastructure needs
-
-### **Implementation Planning**
-5. **[Screening Methods Implementation Plan](./SCREENING_METHODS_IMPLEMENTATION_PLAN.md)**
-   - Comprehensive 4-week implementation timeline
-   - Detailed task breakdown by priority
-   - Risk mitigation and success metrics
-
-6. **[Screening Methods Audit Summary](./SCREENING_METHODS_AUDIT_SUMMARY.md)**
-   - Executive summary of all findings
-   - Critical issues and recommendations
-   - Next steps and deployment strategy
+### **EDGAR Data Extraction**
+**[EDGAR Data Extraction Unified Architecture](./EDGAR_DATA_EXTRACTION_UNIFIED_ARCHITECTURE.md)**
+- Comprehensive unified architecture for EDGAR data extraction
+- Concurrent processing design for 18,915+ companies
+- Database schema extensions and field mapping strategies
+- Integration with refresh data architecture
+- Performance optimization and quality assurance framework
 
 ## 🔧 Implementation Priority
 

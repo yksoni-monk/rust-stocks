@@ -40,10 +40,6 @@ name = "import-schwab-prices"
 path = "src/bin/import-schwab-prices.rs"
 
 [[bin]]
-name = "import-edgar-data"
-path = "src/bin/import-edgar-data.rs"
-
-[[bin]]
 name = "populate-cik-mappings"
 path = "src/bin/populate-cik-mappings.rs"
 

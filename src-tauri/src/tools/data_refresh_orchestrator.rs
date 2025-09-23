@@ -465,11 +465,33 @@ impl DataRefreshManager {
         Ok(total_records)
     }
 
-    /// Extract cash flow statements for complete Piotroski F-Score
+    /// Calculate TTM cash flow data for complete Piotroski F-Score
     async fn refresh_cash_flow_internal(&self, _session_id: &str) -> Result<i64> {
-        println!("💰 Cash flow extraction now handled by concurrent extractor...");
-        println!("✅ Use 'refresh_data financials' to extract all financial data including cash flow");
-        Ok(0)
+        println!("💰 Calculating TTM cash flow data using concurrent processor...");
+
+        // Run the concurrent cash flow TTM calculation binary
+        let output = Command::new("cargo")
+            .args(&["run", "--bin", "concurrent-cashflow-ttm", "--", "calculate"])
+            .current_dir("../src-tauri")
+            .output()
+            .await
+            .map_err(|e| anyhow!("Failed to run TTM calculator: {}", e))?;
+
+        if !output.status.success() {
+            let error_msg = String::from_utf8_lossy(&output.stderr);
+            return Err(anyhow!("TTM calculator failed: {}", error_msg));
+        }
+
+        let success_msg = String::from_utf8_lossy(&output.stdout);
+        println!("✅ TTM cash flow calculation completed: {}", success_msg);
+
+        // Count total TTM cash flow records created
+        let ttm_records = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM cash_flow_statements WHERE period_type = 'TTM'"
+        ).fetch_one(&self.pool).await?;
+
+        println!("📊 Total TTM cash flow records: {}", ttm_records);
+        Ok(ttm_records)
     }
 
     /// Calculate all ratios and metrics for all algorithms
@@ -756,11 +778,11 @@ impl DataRefreshManager {
                 priority: 1,
             },
             RefreshStep {
-                name: "Extract cash flow statements".to_string(),
+                name: "Calculate TTM cash flow data".to_string(),
                 data_source: "cash_flow_statements".to_string(),
-                estimated_duration_minutes: 60,
+                estimated_duration_minutes: 10,
                 command: "internal".to_string(), // Internal function call
-                dependencies: vec![],
+                dependencies: vec!["financial_statements".to_string()],
                 priority: 2,
             },
         ]);

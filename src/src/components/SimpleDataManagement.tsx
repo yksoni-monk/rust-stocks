@@ -137,20 +137,23 @@ function DataStatusCard(props: CardStatusProps) {
 
     // If freshness exists but this data source is missing
     if (freshness && !currentDataSource) {
-      return 'No data imported yet';
+      return {
+        primary: 'No data imported yet',
+        secondary: 'Click refresh to import data',
+        details: []
+      };
     }
 
     // If no status check done yet
     if (!currentDataSource) {
-      return 'Click button to check status';
+      return {
+        primary: 'Click button to check status',
+        secondary: 'Data status unknown',
+        details: []
+      };
     }
 
-    const count = Number(currentDataSource.records_count);
-
-    const countStr = count > 1000000 ? `${(count/1000000).toFixed(1)}M` :
-                     count > 1000 ? `${(count/1000).toFixed(0)}K` :
-                     count.toString();
-
+    const dataSummary = currentDataSource.data_summary;
     const staleness = currentDataSource.staleness_days ? Number(currentDataSource.staleness_days) : 0;
     const timeStr = staleness === 0 ? 'Today' :
                    staleness === 1 ? '1 day ago' :
@@ -158,7 +161,21 @@ function DataStatusCard(props: CardStatusProps) {
                    staleness < 30 ? `${Math.floor(staleness/7)} weeks ago` :
                    `${Math.floor(staleness/30)} months ago`;
 
-    return `${countStr} records • ${timeStr}`;
+    // Enhanced display using data summary
+    const primary = dataSummary?.stock_count
+      ? `${dataSummary.stock_count} stocks`
+      : `${currentDataSource.records_count} records`;
+
+    const secondary = dataSummary?.date_range
+      ? `${dataSummary.date_range} • ${timeStr}`
+      : timeStr;
+
+    const details = [
+      ...(dataSummary?.data_types || []),
+      ...(dataSummary?.key_metrics || [])
+    ];
+
+    return { primary, secondary, details };
   };
 
   return (
@@ -177,8 +194,23 @@ function DataStatusCard(props: CardStatusProps) {
         <div class={`text-lg font-medium mb-1 ${statusInfo().statusColor}`}>
           {statusInfo().status}
         </div>
-        <div class="text-sm text-gray-600">
-          {formatMetrics()}
+        <div class="text-sm text-gray-600 space-y-1">
+          <div class="font-medium">{formatMetrics().primary}</div>
+          <div class="text-xs text-gray-500">{formatMetrics().secondary}</div>
+          {formatMetrics().details.length > 0 && (
+            <div class="text-xs text-gray-500">
+              <div class="flex flex-wrap gap-1 mt-1">
+                {formatMetrics().details.slice(0, 4).map((detail, index) => (
+                  <span key={index} class="bg-gray-100 px-2 py-0.5 rounded text-xs">
+                    {detail}
+                  </span>
+                ))}
+                {formatMetrics().details.length > 4 && (
+                  <span class="text-gray-400">+{formatMetrics().details.length - 4} more</span>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 

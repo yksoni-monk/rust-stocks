@@ -27,6 +27,18 @@ pub struct DataFreshnessStatus {
     pub records_count: i64,
     pub message: String,
     pub refresh_priority: RefreshPriority,
+    // Enhanced fields for better UX
+    pub data_summary: DataSummary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DataSummary {
+    pub date_range: Option<String>,
+    pub stock_count: Option<i64>,
+    pub data_types: Vec<String>,
+    pub key_metrics: Vec<String>,
+    pub completeness_score: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
@@ -116,6 +128,13 @@ impl DataStatusReader {
                 records_count: 0,
                 message: "Market data not available".to_string(),
                 refresh_priority: RefreshPriority::Critical,
+                data_summary: DataSummary {
+                    date_range: None,
+                    stock_count: None,
+                    data_types: vec!["Daily Prices".to_string()],
+                    key_metrics: vec!["No data available".to_string()],
+                    completeness_score: None,
+                },
             });
 
         let financial_data = data_sources.get("financial_statements")
@@ -129,6 +148,13 @@ impl DataStatusReader {
                 records_count: 0,
                 message: "Financial data not available".to_string(),
                 refresh_priority: RefreshPriority::Critical,
+                data_summary: DataSummary {
+                    date_range: None,
+                    stock_count: None,
+                    data_types: vec!["Financial Statements".to_string()],
+                    key_metrics: vec!["No data available".to_string()],
+                    completeness_score: None,
+                },
             });
 
         let calculated_ratios = data_sources.get("ps_evs_ratios")
@@ -142,6 +168,13 @@ impl DataStatusReader {
                 records_count: 0,
                 message: "Ratio data not available".to_string(),
                 refresh_priority: RefreshPriority::Critical,
+                data_summary: DataSummary {
+                    date_range: None,
+                    stock_count: None,
+                    data_types: vec!["Financial Ratios".to_string()],
+                    key_metrics: vec!["No data available".to_string()],
+                    completeness_score: None,
+                },
             });
 
         Ok(SystemFreshnessReport {
@@ -203,6 +236,17 @@ impl DataStatusReader {
                 _ => RefreshPriority::Critical,
             };
 
+            // Generate enhanced data summary
+            let data_summary = self.generate_data_summary(&source_name, records_updated, &latest_date_str).await.unwrap_or_else(|_| {
+                DataSummary {
+                    date_range: latest_date_str.clone(),
+                    stock_count: None,
+                    data_types: vec![source_name.clone()],
+                    key_metrics: vec![format!("{} records", records_updated)],
+                    completeness_score: None,
+                }
+            });
+
             data_sources.insert(source_name.clone(), DataFreshnessStatus {
                 data_source: source_name,
                 status: status.clone(),
@@ -212,10 +256,246 @@ impl DataStatusReader {
                 records_count: records_updated,
                 message: format!("Status: {:?}, {} records, {} days old", status, records_updated, staleness_days),
                 refresh_priority: priority,
+                data_summary,
             });
         }
 
         Ok(data_sources)
+    }
+
+    /// Generate detailed data summary for better UX
+    async fn generate_data_summary(&self, data_source: &str, records_count: i64, latest_date: &Option<String>) -> Result<DataSummary> {
+        match data_source {
+            "daily_prices" => self.generate_market_data_summary(records_count, latest_date).await,
+            "financial_statements" => self.generate_financial_data_summary(records_count, latest_date).await,
+            "ps_evs_ratios" => self.generate_ratios_summary(records_count, latest_date).await,
+            "cash_flow_statements" => self.generate_cash_flow_summary(records_count, latest_date).await,
+            _ => Ok(DataSummary {
+                date_range: latest_date.clone(),
+                stock_count: None,
+                data_types: vec![data_source.to_string()],
+                key_metrics: vec![format!("{} records", records_count)],
+                completeness_score: None,
+            })
+        }
+    }
+
+    async fn generate_market_data_summary(&self, records_count: i64, latest_date: &Option<String>) -> Result<DataSummary> {
+        // Get detailed market data stats
+        let stats_query = r#"
+            SELECT
+                MIN(date) as earliest_date,
+                MAX(date) as latest_date,
+                COUNT(DISTINCT stock_id) as unique_stocks,
+                COUNT(*) as total_records,
+                AVG(volume) as avg_volume
+            FROM daily_prices
+        "#;
+
+        let row = sqlx::query(stats_query).fetch_one(&self.pool).await?;
+        let earliest_date: Option<String> = row.get("earliest_date");
+        let unique_stocks: i64 = row.get("unique_stocks");
+        let avg_volume: Option<f64> = row.get("avg_volume");
+
+        let date_range = match (earliest_date, latest_date) {
+            (Some(start), Some(end)) => Some(format!("{} to {}", start, end)),
+            (None, Some(end)) => Some(format!("Up to {}", end)),
+            _ => None,
+        };
+
+        let mut key_metrics = vec![
+            format!("{} stocks", unique_stocks),
+            format!("{:.1}M records", records_count as f64 / 1_000_000.0),
+        ];
+
+        if let Some(vol) = avg_volume {
+            key_metrics.push(format!("Avg volume: {:.0}K", vol / 1000.0));
+        }
+
+        // Calculate completeness score based on S&P 500 coverage
+        let sp500_count_query = "SELECT COUNT(*) FROM sp500_symbols";
+        let sp500_total: i64 = sqlx::query_scalar(sp500_count_query).fetch_one(&self.pool).await?;
+        let completeness_score = if sp500_total > 0 {
+            Some((unique_stocks as f32 / sp500_total as f32) * 100.0)
+        } else {
+            None
+        };
+
+        Ok(DataSummary {
+            date_range,
+            stock_count: Some(unique_stocks),
+            data_types: vec!["Daily Prices".to_string(), "Volume Data".to_string(), "OHLC Data".to_string()],
+            key_metrics,
+            completeness_score,
+        })
+    }
+
+    async fn generate_financial_data_summary(&self, records_count: i64, latest_date: &Option<String>) -> Result<DataSummary> {
+        // Get detailed financial data stats
+        let stats_query = r#"
+            SELECT
+                MIN(report_date) as earliest_date,
+                MAX(report_date) as latest_date,
+                COUNT(DISTINCT stock_id) as unique_stocks,
+                COUNT(DISTINCT CASE WHEN period_type = 'TTM' THEN stock_id END) as stocks_with_ttm,
+                COUNT(*) as total_records
+            FROM income_statements
+        "#;
+
+        let row = sqlx::query(stats_query).fetch_one(&self.pool).await?;
+        let earliest_date: Option<String> = row.get("earliest_date");
+        let unique_stocks: i64 = row.get("unique_stocks");
+        let stocks_with_ttm: i64 = row.get("stocks_with_ttm");
+
+        // Check for cash flow data
+        let cash_flow_query = "SELECT COUNT(DISTINCT stock_id) FROM cash_flow_statements WHERE period_type = 'TTM'";
+        let cash_flow_stocks: i64 = sqlx::query_scalar(cash_flow_query).fetch_one(&self.pool).await.unwrap_or(0);
+
+        let date_range = match (earliest_date, latest_date) {
+            (Some(start), Some(end)) => Some(format!("{} to {}", start, end)),
+            (None, Some(end)) => Some(format!("Up to {}", end)),
+            _ => None,
+        };
+
+        let mut data_types = vec!["Income Statements".to_string(), "Balance Sheets".to_string()];
+        if cash_flow_stocks > 0 {
+            data_types.push("Cash Flow Statements".to_string());
+        }
+
+        let key_metrics = vec![
+            format!("{} stocks", unique_stocks),
+            format!("{} with TTM data", stocks_with_ttm),
+            format!("{} with cash flow", cash_flow_stocks),
+        ];
+
+        // Calculate completeness score for Piotroski analysis (needs all three statement types)
+        let piotroski_ready_query = r#"
+            SELECT COUNT(DISTINCT s.id) FROM stocks s
+            JOIN income_statements i ON s.id = i.stock_id AND i.period_type = 'TTM'
+            JOIN balance_sheets b ON s.id = b.stock_id AND b.period_type = 'TTM'
+            JOIN cash_flow_statements c ON s.id = c.stock_id AND c.period_type = 'TTM'
+            JOIN sp500_symbols sp ON s.symbol = sp.symbol
+        "#;
+        let piotroski_ready: i64 = sqlx::query_scalar(piotroski_ready_query).fetch_one(&self.pool).await.unwrap_or(0);
+
+        let sp500_total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sp500_symbols").fetch_one(&self.pool).await?;
+        let completeness_score = if sp500_total > 0 {
+            Some((piotroski_ready as f32 / sp500_total as f32) * 100.0)
+        } else {
+            None
+        };
+
+        Ok(DataSummary {
+            date_range,
+            stock_count: Some(unique_stocks),
+            data_types,
+            key_metrics,
+            completeness_score,
+        })
+    }
+
+    async fn generate_ratios_summary(&self, records_count: i64, latest_date: &Option<String>) -> Result<DataSummary> {
+        // Get detailed ratios stats
+        let stats_query = r#"
+            SELECT
+                MIN(date) as earliest_date,
+                MAX(date) as latest_date,
+                COUNT(DISTINCT stock_id) as unique_stocks,
+                COUNT(DISTINCT CASE WHEN pe_ratio IS NOT NULL THEN stock_id END) as stocks_with_pe,
+                COUNT(DISTINCT CASE WHEN ps_ratio IS NOT NULL THEN stock_id END) as stocks_with_ps,
+                COUNT(DISTINCT CASE WHEN ev_sales_ratio IS NOT NULL THEN stock_id END) as stocks_with_evs
+            FROM daily_valuation_ratios
+        "#;
+
+        let row = sqlx::query(stats_query).fetch_one(&self.pool).await?;
+        let earliest_date: Option<String> = row.get("earliest_date");
+        let unique_stocks: i64 = row.get("unique_stocks");
+        let stocks_with_pe: i64 = row.get("stocks_with_pe");
+        let stocks_with_ps: i64 = row.get("stocks_with_ps");
+        let stocks_with_evs: i64 = row.get("stocks_with_evs");
+
+        let date_range = match (earliest_date, latest_date) {
+            (Some(start), Some(end)) => Some(format!("{} to {}", start, end)),
+            (None, Some(end)) => Some(format!("Up to {}", end)),
+            _ => None,
+        };
+
+        let mut data_types = vec![];
+        if stocks_with_pe > 0 { data_types.push("P/E Ratios".to_string()); }
+        if stocks_with_ps > 0 { data_types.push("P/S Ratios".to_string()); }
+        if stocks_with_evs > 0 { data_types.push("EV/S Ratios".to_string()); }
+
+        let key_metrics = vec![
+            format!("{} stocks", unique_stocks),
+            format!("{} with P/E", stocks_with_pe),
+            format!("{} with P/S", stocks_with_ps),
+            format!("{} with EV/S", stocks_with_evs),
+        ];
+
+        // Calculate completeness score based on stocks with any ratio
+        let sp500_total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sp500_symbols").fetch_one(&self.pool).await?;
+        let completeness_score = if sp500_total > 0 {
+            Some((unique_stocks as f32 / sp500_total as f32) * 100.0)
+        } else {
+            None
+        };
+
+        Ok(DataSummary {
+            date_range,
+            stock_count: Some(unique_stocks),
+            data_types,
+            key_metrics,
+            completeness_score,
+        })
+    }
+
+    async fn generate_cash_flow_summary(&self, records_count: i64, latest_date: &Option<String>) -> Result<DataSummary> {
+        let stats_query = r#"
+            SELECT
+                MIN(report_date) as earliest_date,
+                MAX(report_date) as latest_date,
+                COUNT(DISTINCT stock_id) as unique_stocks,
+                COUNT(DISTINCT CASE WHEN period_type = 'TTM' THEN stock_id END) as stocks_with_ttm,
+                COUNT(DISTINCT CASE WHEN period_type = 'Quarterly' THEN stock_id END) as stocks_with_quarterly
+            FROM cash_flow_statements
+        "#;
+
+        let row = sqlx::query(stats_query).fetch_one(&self.pool).await?;
+        let earliest_date: Option<String> = row.get("earliest_date");
+        let unique_stocks: i64 = row.get("unique_stocks");
+        let stocks_with_ttm: i64 = row.get("stocks_with_ttm");
+        let stocks_with_quarterly: i64 = row.get("stocks_with_quarterly");
+
+        let date_range = match (earliest_date, latest_date) {
+            (Some(start), Some(end)) => Some(format!("{} to {}", start, end)),
+            (None, Some(end)) => Some(format!("Up to {}", end)),
+            _ => None,
+        };
+
+        let mut data_types = vec!["Cash Flow Statements".to_string()];
+        if stocks_with_ttm > 0 { data_types.push("TTM Data".to_string()); }
+        if stocks_with_quarterly > 0 { data_types.push("Quarterly Data".to_string()); }
+
+        let key_metrics = vec![
+            format!("{} stocks", unique_stocks),
+            format!("{} with TTM", stocks_with_ttm),
+            format!("{} quarterly", stocks_with_quarterly),
+        ];
+
+        let sp500_total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sp500_symbols").fetch_one(&self.pool).await?;
+        let completeness_score = if sp500_total > 0 {
+            Some((stocks_with_ttm as f32 / sp500_total as f32) * 100.0)
+        } else {
+            None
+        };
+
+        Ok(DataSummary {
+            date_range,
+            stock_count: Some(unique_stocks),
+            data_types,
+            key_metrics,
+            completeness_score,
+        })
     }
 
     /// Update tracking after successful data import
@@ -342,12 +622,19 @@ impl DataStatusReader {
         Ok(DataFreshnessStatus {
             data_source: "daily_prices".to_string(),
             status,
-            latest_data_date: latest_date_str,
+            latest_data_date: latest_date_str.clone(),
             last_refresh: None, // TODO: Get from refresh tracking table
             staleness_days,
             records_count: total_records,
             message,
             refresh_priority: priority,
+            data_summary: self.generate_market_data_summary(total_records, &latest_date_str).await.unwrap_or(DataSummary {
+                date_range: latest_date_str,
+                stock_count: None,
+                data_types: vec!["Daily Prices".to_string()],
+                key_metrics: vec![format!("{} records", total_records)],
+                completeness_score: None,
+            }),
         })
     }
 
@@ -407,12 +694,19 @@ impl DataStatusReader {
         Ok(DataFreshnessStatus {
             data_source: "pe_ratios".to_string(),
             status,
-            latest_data_date: latest_date_str,
+            latest_data_date: latest_date_str.clone(),
             last_refresh: None,
             staleness_days,
             records_count: pe_records,
             message,
             refresh_priority: priority,
+            data_summary: self.generate_ratios_summary(pe_records, &latest_date_str).await.unwrap_or(DataSummary {
+                date_range: latest_date_str,
+                stock_count: None,
+                data_types: vec!["P/E Ratios".to_string()],
+                key_metrics: vec![format!("{} records", pe_records)],
+                completeness_score: None,
+            }),
         })
     }
 
@@ -581,7 +875,7 @@ impl DataStatusReader {
         Ok(DataFreshnessStatus {
             data_source: "graham_screening".to_string(),
             status: combined_status.clone(),
-            latest_data_date: pe_status.latest_data_date,
+            latest_data_date: pe_status.latest_data_date.clone(),
             last_refresh: None,
             staleness_days: pe_status.staleness_days,
             records_count: pe_status.records_count + price_status.records_count,
@@ -590,6 +884,13 @@ impl DataStatusReader {
                 RefreshPriority::Low
             } else {
                 RefreshPriority::High
+            },
+            data_summary: DataSummary {
+                date_range: pe_status.latest_data_date,
+                stock_count: None,
+                data_types: vec!["Graham Screening".to_string()],
+                key_metrics: vec!["Combined P/E and Price Analysis".to_string()],
+                completeness_score: None,
             },
         })
     }

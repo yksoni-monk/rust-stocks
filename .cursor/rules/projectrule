@@ -1,0 +1,62 @@
+# Cursor Rules
+
+## Database Rules
+- CRITICAL: Database changes MUST use sqlx migrations only.
+  - NEVER run direct SQL (ALTER TABLE/UPDATE/CREATE/DROP) against the DB from the terminal or ad-hoc scripts.
+  - Use files under `db/migrations/` and run via `sqlx migrate run --database-url "sqlite:src-tauri/db/stocks.db" --source db/migrations`.
+  - If a manual hotfix is unavoidable, first create a migration file, then apply it via the migration runner. No exceptions.
+  - Update/validate dependent views (e.g., `v_data_freshness_summary`) in the same migration when schema changes affect them.
+  - Make a backup before migrations when touching critical tables (use the existing `DatabaseManager::create_backup`).
+  - After migration, compile and run a freshness check to validate (`cargo check` and app status call).
+
+## Project Structure Rules
+- Working directory is ALWAYS ROOT: `/Users/yksoni/code/misc/rust-stocks`
+- Frontend is in `src/` (SolidJS TypeScript components)
+- Backend is in `src-tauri/src/` (Rust code)
+- Database is in `src-tauri/db/stocks.db` (2.5GB PRODUCTION DATABASE)
+- Migrations are in `src-tauri/db/migrations/`
+- Backups are in `src-tauri/db/backups/`
+
+## API Contract Discipline (NON-NEGOTIABLE)
+- NEVER modify backend function signatures without checking all frontend callers
+- ALWAYS use consistent naming: `snake_case` in Rust, map to `camelCase` in frontend
+- ALWAYS validate parameter names match between frontend invoke() and backend function
+- ALWAYS verify return types match between frontend expectations and backend reality
+- ALWAYS make database field names match API struct field names exactly
+- NEVER use different field names between database schema and API models
+- ALWAYS use proper serde mapping for camelCase conversion
+
+## Testing Requirements
+- ALWAYS run integration tests for API changes: `cargo test && cd src && npm test`
+- NEVER claim something is "fixed" without testing the actual user flow
+- ALWAYS test frontend-backend communication end-to-end
+
+## Before Any API Change Checklist
+- [ ] Check frontend API calls match backend function signatures
+- [ ] Verify parameter names are consistent (startDate → start_date mapping)
+- [ ] Confirm return types match frontend expectations
+- [ ] Test the actual user flow, not just unit tests
+- [ ] Update TypeScript interfaces if backend structs change
+
+## TypeScript Rules
+- TS bindings: Do not create manual TS types for backend-shared structs. Use `ts-rs` generated bindings only.
+- Generated files: Never edit files under `solid_frontend/src/api` (generated).
+
+## Code Quality Rules (NON-NEGOTIABLE)
+- ZERO WARNINGS POLICY: All code MUST compile with zero warnings.
+  - NEVER leave unused imports, variables, fields, or functions
+  - ALWAYS prefix unused items with underscore (_) if they must exist
+  - ALWAYS remove dead code instead of commenting it out
+  - ALWAYS fix useless comparisons and other compiler warnings
+  - This applies to ALL code: main library, binaries, tests, examples
+  - Run `cargo check` and `cargo test` to verify zero warnings before committing
+  - Warnings are bad developer experience and indicate sloppy code
+
+## NEVER DO THESE THINGS
+- ❌ Look for database in ROOT - it's in `src-tauri/db/stocks.db`
+- ❌ Put migrations in root - they belong in `src-tauri/db/migrations/`
+- ❌ Confuse frontend (src/) with backend (src-tauri/src/)
+- ❌ Create databases or migrations outside proper directories
+- ❌ Change API contracts without checking both sides
+- ❌ Use different field names between database and API models
+- ❌ Run direct SQL commands against production database

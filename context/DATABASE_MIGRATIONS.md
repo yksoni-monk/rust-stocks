@@ -49,9 +49,11 @@ src-tauri/db/
 
 ### 1. Automatic Backups
 - **Before any migration**: Automatic backup created
-- **Location**: `src-tauri/db/backups/`
-- **Naming**: `stocks_backup_YYYYMMDD_HHMMSS.db`
+- **Location**: `src-tauri/db/` (root of db directory)
+- **Naming**: `stocks.db.backup.YYYYMMDD_HHMMSS`
 - **Verification**: File size and integrity checks
+- **Auto-cleanup**: Keeps only the 2 most recent backups to save disk space
+- **Cleanup reporting**: Shows freed disk space when old backups are removed
 
 ### 2. Production Database Protection
 **Database Stats Monitoring:**
@@ -185,11 +187,14 @@ SELECT id, symbol, new_column FROM temp_migration_data;
 
 ### 1. Automatic Backup Restoration
 ```bash
-# List available backups
-ls -la src-tauri/db/backups/
+# List available backups (sorted by newest first)
+ls -t src-tauri/db/stocks.db.backup.*
 
-# Restore from backup
-cp src-tauri/db/backups/stocks_backup_YYYYMMDD_HHMMSS.db src-tauri/db/stocks.db
+# Restore from most recent backup
+cp src-tauri/db/stocks.db.backup.LATEST_TIMESTAMP src-tauri/db/stocks.db
+
+# Verify restoration worked
+cargo run --bin db_admin -- status
 ```
 
 ### 2. Migration Rollback Files
@@ -201,17 +206,56 @@ cp src-tauri/db/backups/stocks_backup_YYYYMMDD_HHMMSS.db src-tauri/db/stocks.db
 
 ### Database Administration
 ```bash
-# Run migrations with safety checks
-cargo run --bin db_admin migrate
-
-# Check database status
-cargo run --bin db_admin status
+# Check database status (always run first)
+cargo run --bin db_admin -- status
 
 # Create manual backup
-cargo run --bin db_admin backup
+cargo run --bin db_admin -- backup
+
+# Run migrations with safety checks (REQUIRES --confirm for production)
+cargo run --bin db_admin -- migrate --confirm
 
 # Verify data integrity
-cargo run --bin db_admin verify
+cargo run --bin db_admin -- verify
+```
+
+### Complete Migration Workflow Example
+
+```bash
+# 1. Navigate to project root
+cd /Users/yksoni/code/misc/rust-stocks/src-tauri
+
+# 2. Check current database status
+cargo run --bin db_admin -- status
+# Expected Output:
+# 📊 Database Status: db/stocks.db
+#    📈 Stocks: 5,892
+#    💹 Price records: 6,565,513
+#    🏢 Financial records: 50,673
+#    💾 Size: 4651.54 MB
+#    🚨 PRODUCTION DATABASE - Extra safeguards active
+
+# 3. Review pending migrations
+ls db/migrations/ | tail -5
+
+# 4. Apply migrations with confirmation (required for production)
+cargo run --bin db_admin -- migrate --confirm
+# Expected Output:
+# ✅ Database backup created: db/stocks.db.backup.20250923_045710
+# ✅ Backup verified: 4877496320 bytes (original: 4877496320 bytes)
+# 🧹 Cleaned up 4 old backup files, freed 18.2 GB of disk space
+# ⚠️  PRODUCTION DATABASE DETECTED:
+#    📊 Stocks: 5892
+#    📈 Price records: 6565513
+#    💾 Database size: 4651.54 MB
+#    🔒 Additional safeguards active
+# ✅ Database backup created: db/stocks.db.backup.20250923_045720
+# 🔒 Migration backup: db/stocks.db.backup.20250923_045720
+# ✅ Migrations completed successfully
+# ✅ Data integrity verified after migration
+
+# 5. Verify final status
+cargo run --bin db_admin -- status
 ```
 
 ### Manual Operations
@@ -252,6 +296,97 @@ sqlite3 src-tauri/db/stocks.db "SELECT * FROM schema_migrations ORDER BY version
 - Established proper chronological order
 - Backup created: `migrations_backup_20250922_185321/`
 
+## Troubleshooting
+
+### Common Issues and Solutions
+
+#### 1. "Database or disk is full"
+**Cause**: Insufficient disk space for backup creation
+**Solution**:
+```bash
+# Check disk space
+df -h
+
+# The auto-cleanup system now handles this automatically, but if needed:
+# List backup files
+ls -la src-tauri/db/*.backup*
+
+# Remove old backups manually (system keeps 2 newest automatically)
+rm src-tauri/db/stocks.db.backup.OLD_TIMESTAMP
+```
+
+#### 2. "Migration XXXXXX was previously applied but has been modified"
+**Cause**: Migration file checksum doesn't match what was previously applied
+**Solution**: This indicates inconsistent migration tracking. Contact development team.
+
+#### 3. "Duplicate column name" or "Table already exists"
+**Cause**: Migration trying to create objects that already exist
+**Solution**: Migration system may be inconsistent. The object exists but isn't tracked.
+```bash
+# Check what objects exist
+sqlite3 src-tauri/db/stocks.db ".schema TABLE_NAME"
+sqlite3 src-tauri/db/stocks.db "PRAGMA table_info(TABLE_NAME);"
+```
+
+#### 4. Migration hangs or takes too long
+**Cause**: Large table alterations on production database (2.5GB+)
+**Solution**:
+- Monitor system resources: `top` or Activity Monitor
+- Consider running during low-activity periods
+- Check for table locks: `cargo run --bin db_admin -- verify`
+
+#### 5. Out of disk space during migration
+**Cause**: Multiple large backups filling disk
+**Solution**: The system now auto-cleans old backups, but you can also:
+```bash
+# Check current backups (should only see 2 newest)
+ls -lah src-tauri/db/*.backup*
+
+# Check total disk usage
+du -sh src-tauri/db/
+```
+
+### Emergency Procedures
+
+#### Complete Database Restore
+If migrations cause serious issues:
+
+1. **Stop the application immediately**
+2. **Restore from most recent backup**:
+   ```bash
+   cd /Users/yksoni/code/misc/rust-stocks/src-tauri/db
+   # List available backups (newest first)
+   ls -t stocks.db.backup.* | head -3
+
+   # Restore from newest backup
+   cp stocks.db.backup.LATEST_TIMESTAMP stocks.db
+   ```
+3. **Verify restore**: `cargo run --bin db_admin -- status`
+4. **Contact development team** with error details
+
+#### Backup Verification
+To verify a backup is valid before restoring:
+```bash
+# Check backup file size (should be similar to original)
+ls -lah stocks.db*
+
+# Test backup database connection and basic query
+sqlite3 stocks.db.backup.TIMESTAMP "SELECT COUNT(*) FROM stocks;"
+
+# Compare stock counts between original and backup
+sqlite3 stocks.db "SELECT COUNT(*) FROM stocks;"
+sqlite3 stocks.db.backup.TIMESTAMP "SELECT COUNT(*) FROM stocks;"
+```
+
+### Migration System Recovery
+
+If the migration tracking system becomes completely inconsistent:
+
+1. **Contact development team** - don't attempt manual fixes
+2. **Preserve current database** - ensure you have working backups
+3. **Document the exact error messages** and steps that led to the issue
+4. **Check recent git history** for migration-related changes
+
 ## Monitoring and Maintenance
 
 ### Regular Checks
@@ -264,10 +399,18 @@ sqlite3 src-tauri/db/stocks.db "SELECT * FROM schema_migrations ORDER BY version
 - Total migration count
 - Database size growth
 - Query performance after schema changes
-- Backup success rate
+- Backup success rate and auto-cleanup efficiency
 - Migration execution time
+- Disk space usage (now automatically managed)
+
+### Recent Improvements (2025-09-23)
+- **Automatic Backup Cleanup**: System now keeps only 2 most recent backups
+- **Disk Space Management**: Automatically frees disk space after each backup
+- **Production Safety**: Enhanced safety checks for large databases
+- **Clear Error Messages**: Improved troubleshooting information
+- **Auto-cleanup Reporting**: Shows how much disk space was freed
 
 ---
 
-**Last Updated**: 2025-09-22
-**Next Review**: 2025-10-22
+**Last Updated**: 2025-09-23
+**Next Review**: 2025-10-23

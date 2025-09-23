@@ -4,19 +4,18 @@
 /// cash flow data from quarterly records for S&P 500 stocks. This fills the gap
 /// needed for complete Piotroski F-Score calculations.
 
-use anyhow::{Result, anyhow};
-use chrono::{NaiveDate, Datelike};
+use anyhow::Result;
+use chrono::NaiveDate;
 use clap::{Parser, Subcommand};
-use serde::{Deserialize, Serialize};
 use sqlx::{SqlitePool, Row};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{Mutex, Semaphore};
+use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 use tokio::time::interval;
-use tracing::{info, warn, debug, error};
+use tracing::{info, debug, error};
 use rust_stocks_tauri_lib::database::helpers::get_database_connection;
 
 #[derive(Parser)]
@@ -130,7 +129,7 @@ struct CalculatorConfig {
 
 impl ConcurrentTTMCalculator {
     async fn new(config: CalculatorConfig) -> Result<Self> {
-        let pool = get_database_connection().await?;
+        let pool = get_database_connection().await.map_err(|e| anyhow::anyhow!("{}", e))?;
         let stats = Arc::new(ProcessingStats::new());
         let semaphore = Arc::new(Semaphore::new(config.max_workers));
 
@@ -237,52 +236,65 @@ impl ConcurrentTTMCalculator {
         Ok(quarterly_data)
     }
 
-    /// Calculate TTM data from quarterly records
+    /// Calculate TTM data from quarterly records (rolling 4 quarters approach)
     fn calculate_ttm_data(&self, quarterly_data: Vec<CashFlowQuarterlyData>) -> Result<Vec<CashFlowTTMData>> {
         if quarterly_data.is_empty() {
             return Ok(Vec::new());
         }
 
-        let symbol = &quarterly_data[0].symbol;
+        let symbol = quarterly_data[0].symbol.clone();
         let stock_id = quarterly_data[0].stock_id;
 
-        // Group by fiscal year to find complete year sets
-        let mut by_year: HashMap<i32, Vec<CashFlowQuarterlyData>> = HashMap::new();
-        for record in quarterly_data {
-            by_year.entry(record.fiscal_year).or_default().push(record);
-        }
+        // Sort all quarters by fiscal year and quarter (most recent first)
+        let mut sorted_quarters = quarterly_data;
+        sorted_quarters.sort_by(|a, b| {
+            // Primary sort: fiscal year descending
+            let year_cmp = b.fiscal_year.cmp(&a.fiscal_year);
+            if year_cmp != std::cmp::Ordering::Equal {
+                return year_cmp;
+            }
+
+            // Secondary sort: quarter descending (Q3, Q2, Q1)
+            let order_a = match a.fiscal_period.as_str() {
+                "Q4" => 4, "Q3" => 3, "Q2" => 2, "Q1" => 1, _ => 0
+            };
+            let order_b = match b.fiscal_period.as_str() {
+                "Q4" => 4, "Q3" => 3, "Q2" => 2, "Q1" => 1, _ => 0
+            };
+            order_b.cmp(&order_a)
+        });
 
         let mut ttm_records = Vec::new();
 
-        // For each fiscal year with sufficient quarters, calculate TTM
-        for (fiscal_year, year_data) in by_year {
-            if year_data.len() < self.config.min_quarters {
-                debug!("⏭️  {} FY{}: Only {} quarters, skipping TTM", symbol, fiscal_year, year_data.len());
+        // Calculate rolling TTM for the most recent periods
+        // Use a sliding window of 4 quarters to create multiple TTM snapshots
+        for window_start in 0..sorted_quarters.len() {
+            if window_start + self.config.min_quarters > sorted_quarters.len() {
+                break; // Not enough quarters left for TTM
+            }
+
+            let window_quarters: Vec<_> = sorted_quarters.iter()
+                .skip(window_start)
+                .take(self.config.min_quarters)
+                .cloned()
+                .collect();
+
+            if window_quarters.len() < self.config.min_quarters {
                 continue;
             }
 
-            // Sort quarters properly (Q4, Q3, Q2, Q1)
-            let mut sorted_quarters = year_data;
-            sorted_quarters.sort_by(|a, b| {
-                let order_a = match a.fiscal_period.as_str() {
-                    "Q4" => 4, "Q3" => 3, "Q2" => 2, "Q1" => 1, _ => 0
-                };
-                let order_b = match b.fiscal_period.as_str() {
-                    "Q4" => 4, "Q3" => 3, "Q2" => 2, "Q1" => 1, _ => 0
-                };
-                order_b.cmp(&order_a)
-            });
+            // Use the most recent quarter's date and fiscal year as the TTM endpoint
+            let ttm_end_date = window_quarters[0].report_date;
+            let ttm_fiscal_year = window_quarters[0].fiscal_year;
 
-            // Calculate TTM by summing the 4 quarters
-            let ttm_end_date = sorted_quarters[0].report_date; // Most recent quarter date
-
-            let operating_cash_flow = Self::sum_optional_values(&sorted_quarters, |q| q.operating_cash_flow);
-            let investing_cash_flow = Self::sum_optional_values(&sorted_quarters, |q| q.investing_cash_flow);
-            let financing_cash_flow = Self::sum_optional_values(&sorted_quarters, |q| q.financing_cash_flow);
-            let net_cash_flow = Self::sum_optional_values(&sorted_quarters, |q| q.net_cash_flow);
-            let depreciation_expense = Self::sum_optional_values(&sorted_quarters, |q| q.depreciation_expense);
-            let dividends_paid = Self::sum_optional_values(&sorted_quarters, |q| q.dividends_paid);
-            let share_repurchases = Self::sum_optional_values(&sorted_quarters, |q| q.share_repurchases);
+            // Calculate TTM by summing the window quarters
+            let operating_cash_flow = Self::sum_optional_values(&window_quarters, |q| q.operating_cash_flow);
+            let investing_cash_flow = Self::sum_optional_values(&window_quarters, |q| q.investing_cash_flow);
+            let financing_cash_flow = Self::sum_optional_values(&window_quarters, |q| q.financing_cash_flow);
+            let net_cash_flow = Self::sum_optional_values(&window_quarters, |q| q.net_cash_flow);
+            let depreciation_expense = Self::sum_optional_values(&window_quarters, |q| q.depreciation_expense);
+            let dividends_paid = Self::sum_optional_values(&window_quarters, |q| q.dividends_paid);
+            let share_repurchases = Self::sum_optional_values(&window_quarters, |q| q.share_repurchases);
 
             // Calculate data quality score based on how many fields have data
             let total_fields = 7.0;
@@ -302,7 +314,7 @@ impl ConcurrentTTMCalculator {
                 stock_id,
                 symbol: symbol.clone(),
                 ttm_end_date,
-                fiscal_year,
+                fiscal_year: ttm_fiscal_year,
                 operating_cash_flow,
                 investing_cash_flow,
                 financing_cash_flow,
@@ -310,14 +322,18 @@ impl ConcurrentTTMCalculator {
                 depreciation_expense,
                 dividends_paid,
                 share_repurchases,
-                quarters_used: sorted_quarters.len(),
+                quarters_used: window_quarters.len(),
                 data_quality_score,
             };
 
-            debug!("✅ {} FY{}: TTM calculated with {} quarters, {:.1}% data quality",
-                   symbol, fiscal_year, sorted_quarters.len(), data_quality_score);
+            debug!("✅ {} TTM ending {}: calculated with {} quarters, {:.1}% data quality",
+                   symbol, ttm_end_date, window_quarters.len(), data_quality_score);
 
             ttm_records.push(ttm_record);
+
+            // For now, only calculate the most recent TTM to avoid duplicates
+            // TODO: In the future, we could store historical TTM snapshots
+            break;
         }
 
         Ok(ttm_records)
@@ -354,8 +370,8 @@ impl ConcurrentTTMCalculator {
                 INSERT OR REPLACE INTO cash_flow_statements
                 (stock_id, period_type, report_date, fiscal_year, fiscal_period,
                  operating_cash_flow, investing_cash_flow, financing_cash_flow, net_cash_flow,
-                 depreciation_expense, dividends_paid, share_repurchases, data_source, last_updated)
-                VALUES (?, 'TTM', ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, 'calculated_ttm', datetime('now'))
+                 depreciation_expense, dividends_paid, share_repurchases, data_source)
+                VALUES (?, 'TTM', ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, 'calculated_ttm')
                 "#
             )
             .bind(ttm_record.stock_id)
@@ -382,7 +398,7 @@ impl ConcurrentTTMCalculator {
 
     /// Process a single stock
     async fn process_stock(&self, stock_id: i64, symbol: String) -> Result<usize> {
-        let _permit = self.semaphore.acquire().await?;
+        // No rate limiting needed for local SQLite database operations
 
         debug!("🔄 Processing {}", symbol);
 

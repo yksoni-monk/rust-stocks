@@ -81,6 +81,8 @@ export default function ResultsPanel(props: ResultsPanelProps) {
     switch (type) {
       case 'garp_pe': return '🎯 GARP Analysis Results';
       case 'graham_value': return '💎 Graham Value Results';
+      case 'piotroski': return '🔍 Piotroski F-Score Results';
+      case 'oshaughnessy': return '💰 O\'Shaughnessy Value Results';
       case 'ps': return '📊 P/S Screening Results';
       case 'pe': return '📈 P/E Analysis Results';
       default: return '📋 Screening Results';
@@ -90,12 +92,19 @@ export default function ResultsPanel(props: ResultsPanelProps) {
   const getScreeningSummary = (type: ScreeningType, count: number) => {
     const garpCriteria = recommendationsStore.garpCriteria();
     const grahamCriteria = recommendationsStore.grahamCriteria();
+    const piotroskilCriteria = recommendationsStore.piotroskilCriteria();
+    const oshaughnessyCriteria = recommendationsStore.oshaughnessyCriteria();
+
     switch (type) {
-      case 'garp_pe': 
+      case 'garp_pe':
         return `Found ${count} stocks with PEG < ${garpCriteria.maxPegRatio} and revenue growth > ${garpCriteria.minRevenueGrowth}%`;
       case 'graham_value':
         return `Found ${count} Graham value stocks with P/E < ${grahamCriteria.maxPeRatio}, P/B < ${grahamCriteria.maxPbRatio}, and strong fundamentals`;
-      case 'ps': 
+      case 'piotroski':
+        return `Found ${count} quality stocks with F-Score ≥ ${piotroskilCriteria.minFScore} and data completeness ≥ ${piotroskilCriteria.minDataCompleteness}%`;
+      case 'oshaughnessy':
+        return `Found ${count} value stocks with composite ranking ≤ ${oshaughnessyCriteria.maxCompositePercentile}th percentile`;
+      case 'ps':
         return `Found ${count} undervalued stocks with low P/S ratios and revenue growth`;
       case 'pe': 
         return `Found ${count} historically undervalued stocks based on P/E analysis`;
@@ -394,6 +403,75 @@ function MetricsDisplay(props: MetricsDisplayProps) {
         </div>
       </Show>
       
+      <Show when={props.screeningType === 'piotroski'}>
+        <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[60px]">
+          <div class="text-lg font-bold text-green-600">
+            {(props.rec as any).f_score_complete || 'N/A'}/9
+          </div>
+          <div class="text-xs text-gray-500">F-Score</div>
+        </div>
+        <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[60px]">
+          <div class="text-sm font-bold text-blue-600">
+            {(props.rec as any).data_completeness_score || 'N/A'}%
+          </div>
+          <div class="text-xs text-gray-500">Data Quality</div>
+        </div>
+        <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[40px]">
+          <div class={`text-lg font-bold ${(props.rec as any).criterion_positive_net_income ? 'text-green-600' : 'text-red-500'}`}>
+            {(props.rec as any).criterion_positive_net_income ? '✓' : '✗'}
+          </div>
+          <div class="text-xs text-gray-500">Income</div>
+        </div>
+        <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[40px]">
+          <div class={`text-lg font-bold ${(props.rec as any).criterion_improving_roa ? 'text-green-600' : 'text-red-500'}`}>
+            {(props.rec as any).criterion_improving_roa ? '✓' : '✗'}
+          </div>
+          <div class="text-xs text-gray-500">ROA</div>
+        </div>
+        <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[40px]">
+          <div class={`text-lg font-bold ${(props.rec as any).criterion_decreasing_debt_ratio ? 'text-green-600' : 'text-red-500'}`}>
+            {(props.rec as any).criterion_decreasing_debt_ratio ? '✓' : '✗'}
+          </div>
+          <div class="text-xs text-gray-500">Debt</div>
+        </div>
+        <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[40px]">
+          <div class={`text-lg font-bold ${(props.rec as any).criterion_positive_operating_cash_flow ? 'text-green-600' : 'text-red-500'}`}>
+            {(props.rec as any).criterion_positive_operating_cash_flow ? '✓' : '✗'}
+          </div>
+          <div class="text-xs text-gray-500">Cash Flow</div>
+        </div>
+        <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[40px]">
+          <div class={`text-lg font-bold ${(props.rec as any).criterion_cash_flow_quality ? 'text-green-600' : 'text-red-500'}`}>
+            {(props.rec as any).criterion_cash_flow_quality ? '✓' : '✗'}
+          </div>
+          <div class="text-xs text-gray-500">CF Quality</div>
+        </div>
+        <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[40px]">
+          <div class={`text-lg font-bold ${(props.rec as any).criterion_improving_current_ratio ? 'text-green-600' : 'text-red-500'}`}>
+            {(props.rec as any).criterion_improving_current_ratio ? '✓' : '✗'}
+          </div>
+          <div class="text-xs text-gray-500">Current Ratio</div>
+        </div>
+        <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[40px]">
+          <div class={`text-lg font-bold ${(props.rec as any).criterion_no_dilution ? 'text-green-600' : 'text-red-500'}`}>
+            {(props.rec as any).criterion_no_dilution ? '✓' : '✗'}
+          </div>
+          <div class="text-xs text-gray-500">Shares</div>
+        </div>
+        <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[40px]">
+          <div class={`text-lg font-bold ${(props.rec as any).criterion_improving_gross_margin ? 'text-green-600' : 'text-red-500'}`}>
+            {(props.rec as any).criterion_improving_gross_margin ? '✓' : '✗'}
+          </div>
+          <div class="text-xs text-gray-500">Gross Margin</div>
+        </div>
+        <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[40px]">
+          <div class={`text-lg font-bold ${(props.rec as any).criterion_improving_asset_turnover ? 'text-green-600' : 'text-red-500'}`}>
+            {(props.rec as any).criterion_improving_asset_turnover ? '✓' : '✗'}
+          </div>
+          <div class="text-xs text-gray-500">Asset Turn</div>
+        </div>
+      </Show>
+
       <Show when={props.screeningType === 'pe'}>
         <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[60px]">
           <div class="text-lg font-bold text-gray-900">

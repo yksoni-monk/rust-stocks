@@ -36,6 +36,7 @@ interface CardStatusProps {
 
 function DataStatusCard(props: CardStatusProps) {
   const card = DATA_CARDS.find(c => c.id === props.cardId)!;
+  const [detailsExpanded, setDetailsExpanded] = createSignal(false);
 
   // Map our card IDs to the data source keys from the backend
   const getDataSourceKey = (cardId: string) => {
@@ -200,13 +201,26 @@ function DataStatusCard(props: CardStatusProps) {
           {formatMetrics().details.length > 0 && (
             <div class="text-xs text-gray-500">
               <div class="flex flex-wrap gap-1 mt-1">
-                {formatMetrics().details.slice(0, 4).map((detail, index) => (
+                {(detailsExpanded() ? formatMetrics().details : formatMetrics().details.slice(0, 4)).map((detail, index) => (
                   <span key={index} class="bg-gray-100 px-2 py-0.5 rounded text-xs">
                     {detail}
                   </span>
                 ))}
-                {formatMetrics().details.length > 4 && (
-                  <span class="text-gray-400">+{formatMetrics().details.length - 4} more</span>
+                {formatMetrics().details.length > 4 && !detailsExpanded() && (
+                  <button
+                    onClick={() => setDetailsExpanded(true)}
+                    class="text-blue-500 hover:text-blue-700 text-xs underline cursor-pointer"
+                  >
+                    +{formatMetrics().details.length - 4} more
+                  </button>
+                )}
+                {detailsExpanded() && formatMetrics().details.length > 4 && (
+                  <button
+                    onClick={() => setDetailsExpanded(false)}
+                    class="text-blue-500 hover:text-blue-700 text-xs underline cursor-pointer"
+                  >
+                    show less
+                  </button>
                 )}
               </div>
             </div>

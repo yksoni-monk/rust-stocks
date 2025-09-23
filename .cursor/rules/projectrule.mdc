@@ -1,13 +1,9 @@
+---
+alwaysApply: true
+---
+
 # Cursor Rules
 
-## Database Rules
-- CRITICAL: Database changes MUST use sqlx migrations only.
-  - NEVER run direct SQL (ALTER TABLE/UPDATE/CREATE/DROP) against the DB from the terminal or ad-hoc scripts.
-  - Use files under `db/migrations/` and run via `sqlx migrate run --database-url "sqlite:src-tauri/db/stocks.db" --source db/migrations`.
-  - If a manual hotfix is unavoidable, first create a migration file, then apply it via the migration runner. No exceptions.
-  - Update/validate dependent views (e.g., `v_data_freshness_summary`) in the same migration when schema changes affect them.
-  - Make a backup before migrations when touching critical tables (use the existing `DatabaseManager::create_backup`).
-  - After migration, compile and run a freshness check to validate (`cargo check` and app status call).
 
 ## Project Structure Rules
 - Working directory is ALWAYS ROOT: `/Users/yksoni/code/misc/rust-stocks`
@@ -16,6 +12,16 @@
 - Database is in `src-tauri/db/stocks.db` (2.5GB PRODUCTION DATABASE)
 - Migrations are in `src-tauri/db/migrations/`
 - Backups are in `src-tauri/db/backups/`
+- most project context is in .md files in 'context/'
+
+
+## Database Rules
+- CRITICAL: Database changes MUST use sqlx migrations only.
+  - NEVER run direct SQL (ALTER TABLE/UPDATE/CREATE/DROP) against the DB from the terminal or ad-hoc scripts.
+  - Use files under `db/migrations/` 
+  - check context/database_migrations.md to fully understand the migrations feature
+  - Make a backup before migrations when touching critical tables (use the existing `DatabaseManager::create_backup`).
+  - After migration, compile and run a freshness check to validate (`cargo check` and app status call).
 
 ## API Contract Discipline (NON-NEGOTIABLE)
 - NEVER modify backend function signatures without checking all frontend callers
@@ -60,3 +66,5 @@
 - ❌ Change API contracts without checking both sides
 - ❌ Use different field names between database and API models
 - ❌ Run direct SQL commands against production database
+# Cursor Rules
+

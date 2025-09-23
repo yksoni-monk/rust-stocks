@@ -130,6 +130,9 @@ struct BalanceSheetData {
     total_equity: Option<f64>,
     cash_and_equivalents: Option<f64>,
     shares_outstanding: Option<f64>,
+    // CRITICAL FIELDS for Piotroski F-Score calculations
+    current_assets: Option<f64>,
+    current_liabilities: Option<f64>,
 }
 
 #[derive(Debug)]
@@ -217,7 +220,18 @@ impl GaapFieldMapping {
             "CommonStockSharesOutstanding".to_string(),
             "CommonStockSharesIssued".to_string(),
         ]);
-        
+
+        // CRITICAL MISSING FIELDS for Piotroski F-Score (current assets/liabilities)
+        balance_sheet_fields.insert("current_assets".to_string(), vec![
+            "AssetsCurrent".to_string(),
+            "CurrentAssets".to_string(),
+        ]);
+
+        balance_sheet_fields.insert("current_liabilities".to_string(), vec![
+            "LiabilitiesCurrent".to_string(),
+            "CurrentLiabilities".to_string(),
+        ]);
+
         // Cash flow field mappings (priority order)
         let mut cash_flow_fields = HashMap::new();
         
@@ -889,6 +903,8 @@ fn extract_balance_sheet_for_period(
         total_equity: None,
         cash_and_equivalents: None,
         shares_outstanding: None,
+        current_assets: None,
+        current_liabilities: None,
     };
     
     // Extract total assets
@@ -925,7 +941,21 @@ fn extract_balance_sheet_for_period(
         &gaap_mapping.balance_sheet_fields["shares_outstanding"],
         period_info,
     );
-    
+
+    // CRITICAL: Extract current assets for Piotroski F-Score
+    balance_sheet.current_assets = extract_field_value_for_period(
+        gaap_facts,
+        &gaap_mapping.balance_sheet_fields["current_assets"],
+        period_info,
+    );
+
+    // CRITICAL: Extract current liabilities for Piotroski F-Score
+    balance_sheet.current_liabilities = extract_field_value_for_period(
+        gaap_facts,
+        &gaap_mapping.balance_sheet_fields["current_liabilities"],
+        period_info,
+    );
+
     Ok(balance_sheet)
 }
 
@@ -1073,9 +1103,9 @@ async fn insert_financial_data_to_db(db_pool: &SqlitePool, data: &ExtractedFinan
         
         sqlx::query(
             r#"
-            INSERT OR REPLACE INTO balance_sheets 
-            (stock_id, period_type, report_date, fiscal_year, fiscal_period, total_assets, total_debt, total_equity, cash_and_equivalents, shares_outstanding, data_source)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'edgar')
+            INSERT OR REPLACE INTO balance_sheets
+            (stock_id, period_type, report_date, fiscal_year, fiscal_period, total_assets, total_debt, total_equity, cash_and_equivalents, shares_outstanding, current_assets, current_liabilities, data_source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'edgar')
             "#
         )
         .bind(balance_sheet.stock_id)
@@ -1088,6 +1118,8 @@ async fn insert_financial_data_to_db(db_pool: &SqlitePool, data: &ExtractedFinan
         .bind(balance_sheet.total_equity)
         .bind(balance_sheet.cash_and_equivalents)
         .bind(balance_sheet.shares_outstanding)
+        .bind(balance_sheet.current_assets)
+        .bind(balance_sheet.current_liabilities)
         .execute(&mut *tx)
         .await?;
     }

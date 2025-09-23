@@ -22,6 +22,26 @@ export interface Recommendation {
   ps_ratio_ttm?: number;
   z_score?: number;
   reasoning: string;
+
+  // Piotroski F-Score fields (when screening type is 'piotroski')
+  stock_id?: number;
+  f_score_complete?: number;
+  data_completeness_score?: number;
+  criterion_positive_net_income?: number;
+  criterion_positive_operating_cash_flow?: number;
+  criterion_improving_roa?: number;
+  criterion_cash_flow_quality?: number;
+  criterion_decreasing_debt_ratio?: number;
+  criterion_improving_current_ratio?: number;
+  criterion_no_dilution?: number;
+  criterion_improving_gross_margin?: number;
+  criterion_improving_asset_turnover?: number;
+  current_roa?: number;
+  current_debt_ratio?: number;
+  current_current_ratio?: number;
+  current_gross_margin?: number;
+  current_asset_turnover?: number;
+  current_operating_cash_flow?: number;
 }
 
 export interface RecommendationStats {

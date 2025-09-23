@@ -406,67 +406,67 @@ function MetricsDisplay(props: MetricsDisplayProps) {
       <Show when={props.screeningType === 'piotroski'}>
         <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[60px]">
           <div class="text-lg font-bold text-green-600">
-            {(props.rec as any).f_score_complete || 'N/A'}/9
+            {props.rec.f_score_complete || 0}/9
           </div>
           <div class="text-xs text-gray-500">F-Score</div>
         </div>
         <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[60px]">
           <div class="text-sm font-bold text-blue-600">
-            {(props.rec as any).data_completeness_score || 'N/A'}%
+            {props.rec.data_completeness_score || 0}%
           </div>
           <div class="text-xs text-gray-500">Data Quality</div>
         </div>
         <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[40px]">
-          <div class={`text-lg font-bold ${(props.rec as any).criterion_positive_net_income ? 'text-green-600' : 'text-red-500'}`}>
-            {(props.rec as any).criterion_positive_net_income ? '✓' : '✗'}
+          <div class={`text-lg font-bold ${props.rec.criterion_positive_net_income ? 'text-green-600' : 'text-red-500'}`}>
+            {props.rec.criterion_positive_net_income ? '✓' : '✗'}
           </div>
           <div class="text-xs text-gray-500">Income</div>
         </div>
         <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[40px]">
-          <div class={`text-lg font-bold ${(props.rec as any).criterion_improving_roa ? 'text-green-600' : 'text-red-500'}`}>
-            {(props.rec as any).criterion_improving_roa ? '✓' : '✗'}
+          <div class={`text-lg font-bold ${props.rec.criterion_improving_roa ? 'text-green-600' : 'text-red-500'}`}>
+            {props.rec.criterion_improving_roa ? '✓' : '✗'}
           </div>
           <div class="text-xs text-gray-500">ROA</div>
         </div>
         <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[40px]">
-          <div class={`text-lg font-bold ${(props.rec as any).criterion_decreasing_debt_ratio ? 'text-green-600' : 'text-red-500'}`}>
-            {(props.rec as any).criterion_decreasing_debt_ratio ? '✓' : '✗'}
+          <div class={`text-lg font-bold ${props.rec.criterion_decreasing_debt_ratio ? 'text-green-600' : 'text-red-500'}`}>
+            {props.rec.criterion_decreasing_debt_ratio ? '✓' : '✗'}
           </div>
           <div class="text-xs text-gray-500">Debt</div>
         </div>
         <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[40px]">
-          <div class={`text-lg font-bold ${(props.rec as any).criterion_positive_operating_cash_flow ? 'text-green-600' : 'text-red-500'}`}>
-            {(props.rec as any).criterion_positive_operating_cash_flow ? '✓' : '✗'}
+          <div class={`text-lg font-bold ${props.rec.criterion_positive_operating_cash_flow ? 'text-green-600' : 'text-red-500'}`}>
+            {props.rec.criterion_positive_operating_cash_flow ? '✓' : '✗'}
           </div>
           <div class="text-xs text-gray-500">Cash Flow</div>
         </div>
         <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[40px]">
-          <div class={`text-lg font-bold ${(props.rec as any).criterion_cash_flow_quality ? 'text-green-600' : 'text-red-500'}`}>
-            {(props.rec as any).criterion_cash_flow_quality ? '✓' : '✗'}
+          <div class={`text-lg font-bold ${props.rec.criterion_cash_flow_quality ? 'text-green-600' : 'text-red-500'}`}>
+            {props.rec.criterion_cash_flow_quality ? '✓' : '✗'}
           </div>
           <div class="text-xs text-gray-500">CF Quality</div>
         </div>
         <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[40px]">
-          <div class={`text-lg font-bold ${(props.rec as any).criterion_improving_current_ratio ? 'text-green-600' : 'text-red-500'}`}>
-            {(props.rec as any).criterion_improving_current_ratio ? '✓' : '✗'}
+          <div class={`text-lg font-bold ${props.rec.criterion_improving_current_ratio ? 'text-green-600' : 'text-red-500'}`}>
+            {props.rec.criterion_improving_current_ratio ? '✓' : '✗'}
           </div>
           <div class="text-xs text-gray-500">Current Ratio</div>
         </div>
         <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[40px]">
-          <div class={`text-lg font-bold ${(props.rec as any).criterion_no_dilution ? 'text-green-600' : 'text-red-500'}`}>
-            {(props.rec as any).criterion_no_dilution ? '✓' : '✗'}
+          <div class={`text-lg font-bold ${props.rec.criterion_no_dilution ? 'text-green-600' : 'text-red-500'}`}>
+            {props.rec.criterion_no_dilution ? '✓' : '✗'}
           </div>
           <div class="text-xs text-gray-500">Shares</div>
         </div>
         <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[40px]">
-          <div class={`text-lg font-bold ${(props.rec as any).criterion_improving_gross_margin ? 'text-green-600' : 'text-red-500'}`}>
-            {(props.rec as any).criterion_improving_gross_margin ? '✓' : '✗'}
+          <div class={`text-lg font-bold ${props.rec.criterion_improving_gross_margin ? 'text-green-600' : 'text-red-500'}`}>
+            {props.rec.criterion_improving_gross_margin ? '✓' : '✗'}
           </div>
           <div class="text-xs text-gray-500">Gross Margin</div>
         </div>
         <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[40px]">
-          <div class={`text-lg font-bold ${(props.rec as any).criterion_improving_asset_turnover ? 'text-green-600' : 'text-red-500'}`}>
-            {(props.rec as any).criterion_improving_asset_turnover ? '✓' : '✗'}
+          <div class={`text-lg font-bold ${props.rec.criterion_improving_asset_turnover ? 'text-green-600' : 'text-red-500'}`}>
+            {props.rec.criterion_improving_asset_turnover ? '✓' : '✗'}
           </div>
           <div class="text-xs text-gray-500">Asset Turn</div>
         </div>

@@ -273,10 +273,10 @@ export function createRecommendationsStore() {
               current_pe_ratio: null,
               current_price: null,
               market_cap: null,
-              garp_score: stock.f_score, // Use F-Score as garp_score for compatibility
+              garp_score: stock.f_score_complete, // Fixed: use correct field name
               quality_score: stock.data_completeness_score,
               passes_garp_screening: stock.passes_screening === 1,
-              reasoning: `F-Score: ${stock.f_score}/6 | Data Quality: ${stock.data_completeness_score}% | ${stock.confidence_level} Confidence | Income: ${stock.criterion_positive_income ? '✓' : '✗'} | ROA: ${stock.criterion_improving_roa ? '✓' : '✗'} | Debt: ${stock.criterion_decreasing_debt ? '✓' : '✗'}`
+              reasoning: `F-Score: ${stock.f_score_complete}/9 | Data Quality: ${stock.data_completeness_score}% | Income: ${stock.criterion_positive_net_income ? '✓' : '✗'} | ROA: ${stock.criterion_improving_roa ? '✓' : '✗'} | Debt: ${stock.criterion_decreasing_debt_ratio ? '✓' : '✗'}`
             };
           } else if (currentScreeningType === 'oshaughnessy') {
             // O'Shaughnessy Value Composite transformation

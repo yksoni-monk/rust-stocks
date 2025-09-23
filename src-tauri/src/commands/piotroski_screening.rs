@@ -11,9 +11,6 @@ pub struct PiotoskiFScoreResult {
     pub current_net_income: Option<f64>,
     pub f_score_complete: i32,
     pub data_completeness_score: i32,
-    pub passes_screening: i32,
-    pub confidence_level: String,
-    pub f_score_interpretation: String,
     
     // Complete 9 criteria breakdown
     pub criterion_positive_net_income: i32,
@@ -85,9 +82,6 @@ async fn get_piotroski_screening_results_internal(
             current_net_income,
             f_score_complete,
             data_completeness_score,
-            passes_screening,
-            confidence_level,
-            f_score_interpretation,
             criterion_positive_net_income,
             criterion_positive_operating_cash_flow,
             criterion_improving_roa,
@@ -104,7 +98,7 @@ async fn get_piotroski_screening_results_internal(
             current_asset_turnover,
             current_operating_cash_flow,
             pb_ratio
-        FROM piotroski_screening_results
+        FROM piotroski_f_score_complete
         WHERE 1=1"
     );
 
@@ -175,9 +169,6 @@ impl sqlx::FromRow<'_, sqlx::sqlite::SqliteRow> for PiotoskiFScoreResult {
             current_net_income: row.try_get("current_net_income")?,
             f_score_complete: row.try_get("f_score_complete")?,
             data_completeness_score: row.try_get("data_completeness_score")?,
-            passes_screening: row.try_get("passes_screening")?,
-            confidence_level: row.try_get("confidence_level")?,
-            f_score_interpretation: row.try_get("f_score_interpretation")?,
             criterion_positive_net_income: row.try_get("criterion_positive_net_income")?,
             criterion_positive_operating_cash_flow: row.try_get("criterion_positive_operating_cash_flow")?,
             criterion_improving_roa: row.try_get("criterion_improving_roa")?,

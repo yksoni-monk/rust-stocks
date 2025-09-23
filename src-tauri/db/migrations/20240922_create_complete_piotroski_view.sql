@@ -1,0 +1,361 @@
+-- Migration: 20240922_create_complete_piotroski_view.sql
+-- Complete Piotroski F-Score implementation with all 9 criteria
+
+-- Drop existing views if they exist
+DROP VIEW IF EXISTS piotroski_screening_results;
+DROP VIEW IF EXISTS piotroski_f_score_complete;
+
+-- Complete Piotroski F-Score View with all 9 criteria
+CREATE VIEW piotroski_f_score_complete AS
+WITH financial_data AS (
+    SELECT
+        s.id as stock_id,
+        s.symbol,
+        s.sector,
+        s.industry,
+
+        -- Current period financials (TTM)
+        current_income.net_income as current_net_income,
+        current_income.revenue as current_revenue,
+        current_income.gross_profit as current_gross_profit,
+        current_income.cost_of_revenue as current_cost_of_revenue,
+        current_income.interest_expense as current_interest_expense,
+        current_income.shares_diluted as current_shares,
+        current_income.shares_diluted as current_shares_outstanding,
+        
+        -- Current balance sheet data
+        current_balance.total_assets as current_assets,
+        current_balance.total_debt as current_debt,
+        current_balance.total_equity as current_equity,
+        current_balance.current_assets as current_current_assets,
+        current_balance.current_liabilities as current_current_liabilities,
+        current_balance.short_term_debt as current_short_term_debt,
+        current_balance.long_term_debt as current_long_term_debt,
+
+        -- Prior period financials (previous TTM)
+        prior_income.net_income as prior_net_income,
+        prior_income.revenue as prior_revenue,
+        prior_income.gross_profit as prior_gross_profit,
+        prior_income.cost_of_revenue as prior_cost_of_revenue,
+        prior_income.interest_expense as prior_interest_expense,
+        prior_income.shares_diluted as prior_shares,
+        prior_income.shares_diluted as prior_shares_outstanding,
+        
+        -- Prior balance sheet data
+        prior_balance.total_assets as prior_assets,
+        prior_balance.total_debt as prior_debt,
+        prior_balance.total_equity as prior_equity,
+        prior_balance.current_assets as prior_current_assets,
+        prior_balance.current_liabilities as prior_current_liabilities,
+        prior_balance.short_term_debt as prior_short_term_debt,
+        prior_balance.long_term_debt as prior_long_term_debt,
+
+        -- Cash flow data (TTM)
+        current_cashflow.operating_cash_flow as current_operating_cash_flow,
+        current_cashflow.investing_cash_flow as current_investing_cash_flow,
+        current_cashflow.financing_cash_flow as current_financing_cash_flow,
+        current_cashflow.net_cash_flow as current_net_cash_flow,
+        
+        prior_cashflow.operating_cash_flow as prior_operating_cash_flow,
+        prior_cashflow.investing_cash_flow as prior_investing_cash_flow,
+        prior_cashflow.financing_cash_flow as prior_financing_cash_flow,
+        prior_cashflow.net_cash_flow as prior_net_cash_flow
+
+    FROM stocks s
+
+    -- Current TTM income data
+    LEFT JOIN (
+        SELECT stock_id, net_income, revenue, gross_profit, cost_of_revenue, 
+               interest_expense, shares_diluted, report_date,
+               ROW_NUMBER() OVER (PARTITION BY stock_id ORDER BY report_date DESC) as rn
+        FROM income_statements
+        WHERE period_type = 'TTM'
+    ) current_income ON s.id = current_income.stock_id AND current_income.rn = 1
+
+    -- Prior TTM income data
+    LEFT JOIN (
+        SELECT stock_id, net_income, revenue, gross_profit, cost_of_revenue,
+               interest_expense, shares_diluted, report_date,
+               ROW_NUMBER() OVER (PARTITION BY stock_id ORDER BY report_date DESC) as rn
+        FROM income_statements
+        WHERE period_type = 'TTM'
+    ) prior_income ON s.id = prior_income.stock_id AND prior_income.rn = 2
+
+    -- Current TTM balance data
+    LEFT JOIN (
+        SELECT stock_id, total_assets, total_debt, total_equity, 
+               current_assets, current_liabilities, short_term_debt, long_term_debt, report_date,
+               ROW_NUMBER() OVER (PARTITION BY stock_id ORDER BY report_date DESC) as rn
+        FROM balance_sheets
+        WHERE period_type = 'TTM'
+    ) current_balance ON s.id = current_balance.stock_id AND current_balance.rn = 1
+
+    -- Prior TTM balance data
+    LEFT JOIN (
+        SELECT stock_id, total_assets, total_debt, total_equity,
+               current_assets, current_liabilities, short_term_debt, long_term_debt, report_date,
+               ROW_NUMBER() OVER (PARTITION BY stock_id ORDER BY report_date DESC) as rn
+        FROM balance_sheets
+        WHERE period_type = 'TTM'
+    ) prior_balance ON s.id = prior_balance.stock_id AND prior_balance.rn = 2
+
+    -- Current TTM cash flow data
+    LEFT JOIN (
+        SELECT stock_id, operating_cash_flow, investing_cash_flow, 
+               financing_cash_flow, net_cash_flow, report_date,
+               ROW_NUMBER() OVER (PARTITION BY stock_id ORDER BY report_date DESC) as rn
+        FROM cash_flow_statements
+        WHERE period_type = 'TTM'
+    ) current_cashflow ON s.id = current_cashflow.stock_id AND current_cashflow.rn = 1
+
+    -- Prior TTM cash flow data
+    LEFT JOIN (
+        SELECT stock_id, operating_cash_flow, investing_cash_flow,
+               financing_cash_flow, net_cash_flow, report_date,
+               ROW_NUMBER() OVER (PARTITION BY stock_id ORDER BY report_date DESC) as rn
+        FROM cash_flow_statements
+        WHERE period_type = 'TTM'
+    ) prior_cashflow ON s.id = prior_cashflow.stock_id AND prior_cashflow.rn = 2
+),
+pb_ratios AS (
+    SELECT DISTINCT
+        dvr.stock_id,
+        FIRST_VALUE(dvr.price / CASE
+            WHEN latest_equity.total_equity > 0 AND latest_equity.shares_diluted > 0
+            THEN (latest_equity.total_equity / latest_equity.shares_diluted)
+            ELSE NULL
+        END) OVER (
+            PARTITION BY dvr.stock_id ORDER BY dvr.date DESC
+        ) as pb_ratio
+    FROM daily_valuation_ratios dvr
+    JOIN (
+        SELECT DISTINCT
+            b.stock_id,
+            b.total_equity,
+            i.shares_diluted
+        FROM balance_sheets b
+        JOIN income_statements i ON b.stock_id = i.stock_id
+            AND b.period_type = i.period_type
+            AND b.report_date = i.report_date
+        WHERE b.period_type = 'TTM'
+          AND b.total_equity > 0
+          AND i.shares_diluted > 0
+    ) latest_equity ON dvr.stock_id = latest_equity.stock_id
+    WHERE dvr.price IS NOT NULL
+)
+SELECT
+    fd.*,
+    pb.pb_ratio,
+
+    -- ============================================================================
+    -- COMPLETE PIOTROSKI F-SCORE (ALL 9 CRITERIA)
+    -- ============================================================================
+
+    -- PROFITABILITY (4 criteria)
+    -- 1. Positive Net Income
+    CASE WHEN current_net_income > 0 THEN 1 ELSE 0 END as criterion_positive_net_income,
+    
+    -- 2. Positive Operating Cash Flow
+    CASE WHEN current_operating_cash_flow > 0 THEN 1 ELSE 0 END as criterion_positive_operating_cash_flow,
+    
+    -- 3. Improving ROA (Return on Assets)
+    CASE
+        WHEN current_net_income / NULLIF(current_assets, 0) > 
+             prior_net_income / NULLIF(prior_assets, 0)
+             AND current_net_income IS NOT NULL AND prior_net_income IS NOT NULL
+             AND current_assets IS NOT NULL AND prior_assets IS NOT NULL THEN 1
+        ELSE 0
+    END as criterion_improving_roa,
+    
+    -- 4. Cash Flow Quality (Operating Cash Flow > Net Income)
+    CASE
+        WHEN current_operating_cash_flow > current_net_income
+             AND current_operating_cash_flow IS NOT NULL 
+             AND current_net_income IS NOT NULL THEN 1
+        ELSE 0
+    END as criterion_cash_flow_quality,
+
+    -- LEVERAGE/LIQUIDITY (3 criteria)
+    -- 5. Decreasing Debt-to-Assets Ratio
+    CASE
+        WHEN current_debt / NULLIF(current_assets, 0) < 
+             prior_debt / NULLIF(prior_assets, 0)
+             AND current_debt IS NOT NULL AND prior_debt IS NOT NULL
+             AND current_assets IS NOT NULL AND prior_assets IS NOT NULL THEN 1
+        ELSE 0
+    END as criterion_decreasing_debt_ratio,
+    
+    -- 6. Improving Current Ratio
+    CASE
+        WHEN current_current_assets / NULLIF(current_current_liabilities, 0) > 
+             prior_current_assets / NULLIF(prior_current_liabilities, 0)
+             AND current_current_assets IS NOT NULL AND prior_current_assets IS NOT NULL
+             AND current_current_liabilities IS NOT NULL AND prior_current_liabilities IS NOT NULL THEN 1
+        ELSE 0
+    END as criterion_improving_current_ratio,
+    
+    -- 7. No Share Dilution
+    CASE
+        WHEN current_shares_outstanding <= prior_shares_outstanding
+             AND current_shares_outstanding IS NOT NULL 
+             AND prior_shares_outstanding IS NOT NULL THEN 1
+        ELSE 0
+    END as criterion_no_dilution,
+
+    -- OPERATING EFFICIENCY (2 criteria)
+    -- 8. Improving Gross Margin
+    CASE
+        WHEN current_gross_profit / NULLIF(current_revenue, 0) > 
+             prior_gross_profit / NULLIF(prior_revenue, 0)
+             AND current_gross_profit IS NOT NULL AND prior_gross_profit IS NOT NULL
+             AND current_revenue IS NOT NULL AND prior_revenue IS NOT NULL THEN 1
+        ELSE 0
+    END as criterion_improving_gross_margin,
+    
+    -- 9. Improving Asset Turnover
+    CASE
+        WHEN current_revenue / NULLIF(current_assets, 0) > 
+             prior_revenue / NULLIF(prior_assets, 0)
+             AND current_revenue IS NOT NULL AND prior_revenue IS NOT NULL
+             AND current_assets IS NOT NULL AND prior_assets IS NOT NULL THEN 1
+        ELSE 0
+    END as criterion_improving_asset_turnover,
+
+    -- COMPLETE F-SCORE (0-9)
+    (CASE WHEN current_net_income > 0 THEN 1 ELSE 0 END +
+     CASE WHEN current_operating_cash_flow > 0 THEN 1 ELSE 0 END +
+     CASE
+         WHEN current_net_income / NULLIF(current_assets, 0) > 
+              prior_net_income / NULLIF(prior_assets, 0)
+              AND current_net_income IS NOT NULL AND prior_net_income IS NOT NULL
+              AND current_assets IS NOT NULL AND prior_assets IS NOT NULL THEN 1
+         ELSE 0
+     END +
+     CASE
+         WHEN current_operating_cash_flow > current_net_income
+              AND current_operating_cash_flow IS NOT NULL 
+              AND current_net_income IS NOT NULL THEN 1
+         ELSE 0
+     END +
+     CASE
+         WHEN current_debt / NULLIF(current_assets, 0) < 
+              prior_debt / NULLIF(prior_assets, 0)
+              AND current_debt IS NOT NULL AND prior_debt IS NOT NULL
+              AND current_assets IS NOT NULL AND prior_assets IS NOT NULL THEN 1
+         ELSE 0
+     END +
+     CASE
+         WHEN current_current_assets / NULLIF(current_current_liabilities, 0) > 
+              prior_current_assets / NULLIF(prior_current_liabilities, 0)
+              AND current_current_assets IS NOT NULL AND prior_current_assets IS NOT NULL
+              AND current_current_liabilities IS NOT NULL AND prior_current_liabilities IS NOT NULL THEN 1
+         ELSE 0
+     END +
+     CASE
+         WHEN current_shares_outstanding <= prior_shares_outstanding
+              AND current_shares_outstanding IS NOT NULL 
+              AND prior_shares_outstanding IS NOT NULL THEN 1
+         ELSE 0
+     END +
+     CASE
+         WHEN current_gross_profit / NULLIF(current_revenue, 0) > 
+              prior_gross_profit / NULLIF(prior_revenue, 0)
+              AND current_gross_profit IS NOT NULL AND prior_gross_profit IS NOT NULL
+              AND current_revenue IS NOT NULL AND prior_revenue IS NOT NULL THEN 1
+         ELSE 0
+     END +
+     CASE
+         WHEN current_revenue / NULLIF(current_assets, 0) > 
+              prior_revenue / NULLIF(prior_assets, 0)
+              AND current_revenue IS NOT NULL AND prior_revenue IS NOT NULL
+              AND current_assets IS NOT NULL AND prior_assets IS NOT NULL THEN 1
+         ELSE 0
+     END) as f_score_complete,
+
+    -- Data completeness assessment (more comprehensive)
+    CASE
+        WHEN current_net_income IS NOT NULL AND current_operating_cash_flow IS NOT NULL
+             AND current_assets IS NOT NULL AND prior_assets IS NOT NULL
+             AND current_debt IS NOT NULL AND prior_debt IS NOT NULL
+             AND current_current_assets IS NOT NULL AND prior_current_assets IS NOT NULL
+             AND current_current_liabilities IS NOT NULL AND prior_current_liabilities IS NOT NULL
+             AND current_shares_outstanding IS NOT NULL AND prior_shares_outstanding IS NOT NULL
+             AND current_gross_profit IS NOT NULL AND prior_gross_profit IS NOT NULL
+             AND current_revenue IS NOT NULL AND prior_revenue IS NOT NULL THEN 100
+        WHEN current_net_income IS NOT NULL AND current_operating_cash_flow IS NOT NULL
+             AND current_assets IS NOT NULL AND prior_assets IS NOT NULL
+             AND current_debt IS NOT NULL AND prior_debt IS NOT NULL THEN 75
+        WHEN current_net_income IS NOT NULL AND current_assets IS NOT NULL
+             AND current_debt IS NOT NULL THEN 50
+        ELSE 25
+    END as data_completeness_score,
+
+    -- Additional calculated metrics for display
+    CASE
+        WHEN current_assets > 0
+        THEN current_net_income / current_assets
+        ELSE NULL
+    END as current_roa,
+    
+    CASE
+        WHEN current_assets > 0
+        THEN current_debt / current_assets
+        ELSE NULL
+    END as current_debt_ratio,
+    
+    CASE
+        WHEN current_current_liabilities > 0
+        THEN current_current_assets / current_current_liabilities
+        ELSE NULL
+    END as current_current_ratio,
+    
+    CASE
+        WHEN current_revenue > 0 AND current_gross_profit IS NOT NULL
+        THEN current_gross_profit / current_revenue
+        ELSE NULL
+    END as current_gross_margin,
+    
+    CASE
+        WHEN current_assets > 0
+        THEN current_revenue / current_assets
+        ELSE NULL
+    END as current_asset_turnover
+
+FROM financial_data fd
+LEFT JOIN pb_ratios pb ON fd.stock_id = pb.stock_id
+WHERE fd.current_net_income IS NOT NULL
+  AND pb.pb_ratio IS NOT NULL
+  AND pb.pb_ratio <= 1.0; -- Piotroski value filter
+
+-- Complete Screening Results View
+CREATE VIEW piotroski_screening_results AS
+SELECT
+    *,
+    -- Screening criteria (complete 9-criteria implementation)
+    CASE
+        WHEN f_score_complete >= 7 -- High quality threshold
+             AND data_completeness_score >= 75
+             AND pb_ratio <= 1.0
+        THEN 1
+        ELSE 0
+    END as passes_screening,
+    
+    -- Confidence scoring
+    CASE
+        WHEN data_completeness_score >= 100 THEN 'High'
+        WHEN data_completeness_score >= 75 THEN 'Medium'
+        WHEN data_completeness_score >= 50 THEN 'Low'
+        ELSE 'Very Low'
+    END as confidence_level,
+    
+    -- F-Score interpretation
+    CASE
+        WHEN f_score_complete >= 8 THEN 'Excellent'
+        WHEN f_score_complete >= 6 THEN 'Good'
+        WHEN f_score_complete >= 4 THEN 'Average'
+        WHEN f_score_complete >= 2 THEN 'Poor'
+        ELSE 'Very Poor'
+    END as f_score_interpretation
+
+FROM piotroski_f_score_complete
+ORDER BY f_score_complete DESC, data_completeness_score DESC;

@@ -7,21 +7,33 @@ pub struct PiotoskiFScoreResult {
     pub stock_id: i64,
     pub symbol: String,
     pub sector: Option<String>,
+    pub industry: Option<String>,
     pub current_net_income: Option<f64>,
-    pub f_score: i32,
+    pub f_score_complete: i32,
     pub data_completeness_score: i32,
     pub passes_screening: i32,
     pub confidence_level: String,
-    pub criterion_positive_income: i32,
+    pub f_score_interpretation: String,
+    
+    // Complete 9 criteria breakdown
+    pub criterion_positive_net_income: i32,
+    pub criterion_positive_operating_cash_flow: i32,
     pub criterion_improving_roa: i32,
-    pub criterion_decreasing_debt: i32,
+    pub criterion_cash_flow_quality: i32,
+    pub criterion_decreasing_debt_ratio: i32,
+    pub criterion_improving_current_ratio: i32,
     pub criterion_no_dilution: i32,
-    pub criterion_improving_margin: i32,
-    pub criterion_improving_turnover: i32,
+    pub criterion_improving_gross_margin: i32,
+    pub criterion_improving_asset_turnover: i32,
+    
+    // Financial metrics
     pub current_roa: Option<f64>,
     pub current_debt_ratio: Option<f64>,
+    pub current_current_ratio: Option<f64>,
     pub current_gross_margin: Option<f64>,
     pub current_asset_turnover: Option<f64>,
+    pub current_operating_cash_flow: Option<f64>,
+    pub pb_ratio: Option<f64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -69,21 +81,29 @@ async fn get_piotroski_screening_results_internal(
             stock_id,
             symbol,
             sector,
+            industry,
             current_net_income,
-            f_score,
+            f_score_complete,
             data_completeness_score,
             passes_screening,
             confidence_level,
-            criterion_positive_income,
+            f_score_interpretation,
+            criterion_positive_net_income,
+            criterion_positive_operating_cash_flow,
             criterion_improving_roa,
-            criterion_decreasing_debt,
+            criterion_cash_flow_quality,
+            criterion_decreasing_debt_ratio,
+            criterion_improving_current_ratio,
             criterion_no_dilution,
-            criterion_improving_margin,
-            criterion_improving_turnover,
+            criterion_improving_gross_margin,
+            criterion_improving_asset_turnover,
             current_roa,
             current_debt_ratio,
+            current_current_ratio,
             current_gross_margin,
-            current_asset_turnover
+            current_asset_turnover,
+            current_operating_cash_flow,
+            pb_ratio
         FROM piotroski_screening_results
         WHERE 1=1"
     );
@@ -92,7 +112,7 @@ async fn get_piotroski_screening_results_internal(
 
     // Apply filters
     if let Some(min_f_score) = criteria.min_f_score {
-        query.push_str(" AND f_score >= ?");
+        query.push_str(" AND f_score_complete >= ?");
         params.push(min_f_score.to_string());
     }
 
@@ -123,7 +143,7 @@ async fn get_piotroski_screening_results_internal(
         }
     }
 
-    query.push_str(" ORDER BY f_score DESC, data_completeness_score DESC");
+    query.push_str(" ORDER BY f_score_complete DESC, data_completeness_score DESC");
 
     if let Some(limit_val) = limit {
         query.push_str(&format!(" LIMIT {}", limit_val));
@@ -151,21 +171,29 @@ impl sqlx::FromRow<'_, sqlx::sqlite::SqliteRow> for PiotoskiFScoreResult {
             stock_id: row.try_get("stock_id")?,
             symbol: row.try_get("symbol")?,
             sector: row.try_get("sector")?,
+            industry: row.try_get("industry")?,
             current_net_income: row.try_get("current_net_income")?,
-            f_score: row.try_get("f_score")?,
+            f_score_complete: row.try_get("f_score_complete")?,
             data_completeness_score: row.try_get("data_completeness_score")?,
             passes_screening: row.try_get("passes_screening")?,
             confidence_level: row.try_get("confidence_level")?,
-            criterion_positive_income: row.try_get("criterion_positive_income")?,
+            f_score_interpretation: row.try_get("f_score_interpretation")?,
+            criterion_positive_net_income: row.try_get("criterion_positive_net_income")?,
+            criterion_positive_operating_cash_flow: row.try_get("criterion_positive_operating_cash_flow")?,
             criterion_improving_roa: row.try_get("criterion_improving_roa")?,
-            criterion_decreasing_debt: row.try_get("criterion_decreasing_debt")?,
+            criterion_cash_flow_quality: row.try_get("criterion_cash_flow_quality")?,
+            criterion_decreasing_debt_ratio: row.try_get("criterion_decreasing_debt_ratio")?,
+            criterion_improving_current_ratio: row.try_get("criterion_improving_current_ratio")?,
             criterion_no_dilution: row.try_get("criterion_no_dilution")?,
-            criterion_improving_margin: row.try_get("criterion_improving_margin")?,
-            criterion_improving_turnover: row.try_get("criterion_improving_turnover")?,
+            criterion_improving_gross_margin: row.try_get("criterion_improving_gross_margin")?,
+            criterion_improving_asset_turnover: row.try_get("criterion_improving_asset_turnover")?,
             current_roa: row.try_get("current_roa")?,
             current_debt_ratio: row.try_get("current_debt_ratio")?,
+            current_current_ratio: row.try_get("current_current_ratio")?,
             current_gross_margin: row.try_get("current_gross_margin")?,
             current_asset_turnover: row.try_get("current_asset_turnover")?,
+            current_operating_cash_flow: row.try_get("current_operating_cash_flow")?,
+            pb_ratio: row.try_get("pb_ratio")?,
         })
     }
 }
@@ -177,10 +205,10 @@ pub async fn get_piotroski_statistics() -> Result<serde_json::Value, String> {
     let stats = sqlx::query(
         "SELECT
             COUNT(*) as total_stocks,
-            AVG(f_score) as avg_f_score,
+            AVG(f_score_complete) as avg_f_score,
             AVG(data_completeness_score) as avg_completeness,
-            COUNT(CASE WHEN f_score >= 4 THEN 1 END) as high_quality_stocks,
-            COUNT(CASE WHEN f_score >= 5 THEN 1 END) as excellent_stocks,
+            COUNT(CASE WHEN f_score_complete >= 6 THEN 1 END) as high_quality_stocks,
+            COUNT(CASE WHEN f_score_complete >= 7 THEN 1 END) as excellent_stocks,
             COUNT(CASE WHEN passes_screening = 1 THEN 1 END) as passing_stocks
         FROM piotroski_screening_results"
     )

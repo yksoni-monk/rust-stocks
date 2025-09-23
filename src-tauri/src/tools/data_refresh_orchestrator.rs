@@ -12,6 +12,7 @@ use crate::tools::data_freshness_checker::{DataStatusReader, SystemFreshnessRepo
 use crate::tools::ratio_calculator;
 use crate::tools::date_range_calculator::DateRangeCalculator;
 use crate::tools::edgar_extractor::EdgarDataExtractor;
+use crate::extractors::cash_flow_extractor::CashFlowExtractor;
 use crate::api::schwab_client::SchwabClient;
 use crate::api::StockDataProvider;
 use crate::models::Config;
@@ -79,6 +80,7 @@ pub struct DataRefreshManager {
     #[allow(dead_code)]
     date_calculator: DateRangeCalculator,
     _edgar_extractor: EdgarDataExtractor,
+    cash_flow_extractor: CashFlowExtractor,
     refresh_steps: HashMap<RefreshMode, Vec<RefreshStep>>,
 }
 
@@ -92,6 +94,7 @@ impl DataRefreshManager {
         let edgar_data_path = std::env::var("EDGAR_DATA_PATH")
             .unwrap_or_else(|_| "edgar_data".to_string());
         let edgar_extractor = EdgarDataExtractor::new(&edgar_data_path, pool.clone());
+        let cash_flow_extractor = CashFlowExtractor::new(pool.clone());
         let refresh_steps = Self::define_refresh_steps();
 
         Ok(Self {
@@ -99,6 +102,7 @@ impl DataRefreshManager {
             status_reader,
             date_calculator,
             _edgar_extractor: edgar_extractor,
+            cash_flow_extractor,
             refresh_steps,
         })
     }
@@ -265,6 +269,7 @@ impl DataRefreshManager {
         let records_processed = match step.data_source.as_str() {
             "daily_prices" => self.refresh_market_internal(session_id).await?,
             "financial_statements" => self.refresh_financials_internal(session_id).await?,
+            "cash_flow_statements" => self.refresh_cash_flow_internal(session_id).await?,
             "ps_evs_ratios" => self.refresh_ratios_internal(session_id).await?,
             _ => return Err(anyhow!("Unknown data source: {}", step.data_source)),
         };
@@ -533,6 +538,23 @@ impl DataRefreshManager {
         println!("✅ S&P 500 EDGAR financial data refresh completed - {} companies, {} records",
                 processed_companies, total_records);
         Ok(total_records)
+    }
+
+    /// Extract cash flow statements for complete Piotroski F-Score
+    async fn refresh_cash_flow_internal(&self, _session_id: &str) -> Result<i64> {
+        println!("💰 Extracting cash flow statements for Piotroski F-Score...");
+
+        // Use the cash flow extractor to process all S&P 500 stocks
+        let extraction_report = self.cash_flow_extractor.extract_all_sp500_cash_flow().await
+            .map_err(|e| anyhow!("Cash flow extraction failed: {}", e))?;
+
+        println!("✅ Cash flow extraction completed:");
+        println!("   📊 Total symbols: {}", extraction_report.total_symbols);
+        println!("   ✅ Successful: {}", extraction_report.successful_extractions);
+        println!("   ❌ Failed: {}", extraction_report.failed_extractions);
+        println!("   📈 Total records: {}", extraction_report.total_records);
+
+        Ok(extraction_report.total_records as i64)
     }
 
     /// Calculate all ratios and metrics for all algorithms
@@ -817,6 +839,14 @@ impl DataRefreshManager {
                 command: "internal".to_string(), // Internal function call
                 dependencies: vec![],
                 priority: 1,
+            },
+            RefreshStep {
+                name: "Extract cash flow statements".to_string(),
+                data_source: "cash_flow_statements".to_string(),
+                estimated_duration_minutes: 60,
+                command: "internal".to_string(), // Internal function call
+                dependencies: vec![],
+                priority: 2,
             },
         ]);
 

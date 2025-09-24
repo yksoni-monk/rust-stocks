@@ -796,22 +796,36 @@ fn extract_financial_statements(
 fn extract_available_periods(gaap_facts: &HashMap<String, EdgarConcept>) -> Result<Vec<PeriodInfo>> {
     let mut periods = Vec::new();
     let mut seen_periods = HashSet::new();
-    
+    let mut period_candidates: HashMap<String, Vec<PeriodInfo>> = HashMap::new();
+
     // Look through all fields to find available periods
     for (_field_name, concept) in gaap_facts {
         if let Some(usd_values) = concept.units.get("USD") {
             for fact_value in usd_values {
                 if let (Some(fy), Some(fp)) = (fact_value.fy, fact_value.fp.as_ref()) {
-                    let period_key = format!("{}-{}", fy, fp);
-                    if !seen_periods.contains(&period_key) {
-                        seen_periods.insert(period_key);
-                        periods.push(PeriodInfo {
-                            year: fy,
-                            period: fp.clone(),
-                            end_date: fact_value.end.clone(),
-                        });
-                    }
+                    // Use end_date + period as key to group multiple fiscal years for same period
+                    let period_key = format!("{}-{}", fact_value.end, fp);
+
+                    let period_info = PeriodInfo {
+                        year: fy,
+                        period: fp.clone(),
+                        end_date: fact_value.end.clone(),
+                    };
+
+                    period_candidates.entry(period_key).or_insert_with(Vec::new).push(period_info);
                 }
+            }
+        }
+    }
+
+    // For each unique period (end_date + period_type), choose the EARLIEST fiscal year
+    // This prioritizes original filings over restatements
+    for (_, candidates) in period_candidates {
+        if let Some(earliest_period) = candidates.into_iter().min_by_key(|p| p.year) {
+            let dedup_key = format!("{}-{}", earliest_period.year, earliest_period.period);
+            if !seen_periods.contains(&dedup_key) {
+                seen_periods.insert(dedup_key);
+                periods.push(earliest_period);
             }
         }
     }

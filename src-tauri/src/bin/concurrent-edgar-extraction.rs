@@ -752,34 +752,37 @@ fn extract_financial_statements(
     let periods = extract_available_periods(&edgar_data.facts.us_gaap)?;
     
     for period_info in periods {
-        // Extract income statement data for this period
-        if let Ok(income_stmt) = extract_income_statement_for_period(
-            &edgar_data.facts.us_gaap, 
-            stock_id, 
+        // Extract income statement data for this period - DO NOT SILENTLY SKIP
+        match extract_income_statement_for_period(
+            &edgar_data.facts.us_gaap,
+            stock_id,
             &period_info,
             gaap_mapping,
         ) {
-            income_statements.push(income_stmt);
+            Ok(income_stmt) => income_statements.push(income_stmt),
+            Err(e) => println!("WARNING: Failed to extract income statement for stock {} FY{}: {}", stock_id, period_info.year, e),
         }
-        
-        // Extract balance sheet data for this period
-        if let Ok(balance_sheet) = extract_balance_sheet_for_period(
-            &edgar_data.facts.us_gaap, 
-            stock_id, 
+
+        // Extract balance sheet data for this period - DO NOT SILENTLY SKIP
+        match extract_balance_sheet_for_period(
+            &edgar_data.facts.us_gaap,
+            stock_id,
             &period_info,
             gaap_mapping,
         ) {
-            balance_sheets.push(balance_sheet);
+            Ok(balance_sheet) => balance_sheets.push(balance_sheet),
+            Err(e) => println!("WARNING: Failed to extract balance sheet for stock {} FY{}: {}", stock_id, period_info.year, e),
         }
-        
-        // Extract cash flow statement data for this period
-        if let Ok(cash_flow_stmt) = extract_cash_flow_statement_for_period(
-            &edgar_data.facts.us_gaap, 
-            stock_id, 
+
+        // Extract cash flow statement data for this period - DO NOT SILENTLY SKIP
+        match extract_cash_flow_statement_for_period(
+            &edgar_data.facts.us_gaap,
+            stock_id,
             &period_info,
             gaap_mapping,
         ) {
-            cash_flow_statements.push(cash_flow_stmt);
+            Ok(cash_flow_stmt) => cash_flow_statements.push(cash_flow_stmt),
+            Err(e) => println!("WARNING: Failed to extract cash flow for stock {} FY{}: {}", stock_id, period_info.year, e),
         }
     }
     
@@ -1035,11 +1038,19 @@ fn extract_field_value_for_period(
     for field_name in field_priorities {
         if let Some(concept) = gaap_facts.get(field_name) {
             if let Some(usd_values) = concept.units.get("USD") {
-                // Find the value for this specific period
+                // Find the value for this specific period - be more flexible for historical data
                 for fact_value in usd_values {
-                    if fact_value.fy == Some(period_info.year) && 
-                       fact_value.fp.as_ref() == Some(&period_info.period) &&
-                       fact_value.end == period_info.end_date {
+                    // Match by fiscal year and period
+                    if fact_value.fy == Some(period_info.year) &&
+                       fact_value.fp.as_ref() == Some(&period_info.period) {
+                        return Some(fact_value.val);
+                    }
+                }
+
+                // Fallback: if no exact match, try matching just end date for the period
+                for fact_value in usd_values {
+                    if fact_value.end == period_info.end_date &&
+                       fact_value.fy == Some(period_info.year) {
                         return Some(fact_value.val);
                     }
                 }

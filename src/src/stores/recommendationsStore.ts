@@ -296,6 +296,27 @@ export function createRecommendationsStore() {
               garp_score: stock.f_score_complete, // Fixed: use correct field name
               quality_score: stock.data_completeness_score,
               passes_garp_screening: stock.passes_screening === 1,
+
+              // ✅ ADD ALL MISSING PIOTROSKI CRITERION FIELDS
+              stock_id: stock.stock_id,
+              f_score_complete: stock.f_score_complete,
+              data_completeness_score: stock.data_completeness_score,
+              criterion_positive_net_income: stock.criterion_positive_net_income,
+              criterion_positive_operating_cash_flow: stock.criterion_positive_operating_cash_flow,
+              criterion_improving_roa: stock.criterion_improving_roa,
+              criterion_cash_flow_quality: stock.criterion_cash_flow_quality,
+              criterion_decreasing_debt_ratio: stock.criterion_decreasing_debt_ratio,
+              criterion_improving_current_ratio: stock.criterion_improving_current_ratio,
+              criterion_no_dilution: stock.criterion_no_dilution,
+              criterion_improving_gross_margin: stock.criterion_improving_gross_margin,
+              criterion_improving_asset_turnover: stock.criterion_improving_asset_turnover,
+              current_roa: stock.current_roa,
+              current_debt_ratio: stock.current_debt_ratio,
+              current_current_ratio: stock.current_current_ratio,
+              current_gross_margin: stock.current_gross_margin,
+              current_asset_turnover: stock.current_asset_turnover,
+              current_operating_cash_flow: stock.current_operating_cash_flow,
+
               reasoning: `F-Score: ${stock.f_score_complete}/9 | Data Quality: ${stock.data_completeness_score}% | Income: ${stock.criterion_positive_net_income ? '✓' : '✗'} | ROA: ${stock.criterion_improving_roa ? '✓' : '✗'} | Debt: ${stock.criterion_decreasing_debt_ratio ? '✓' : '✗'}`
             };
           } else if (currentScreeningType === 'oshaughnessy') {

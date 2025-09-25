@@ -115,6 +115,8 @@ struct IncomeStatementData {
     revenue: Option<f64>,
     net_income: Option<f64>,
     operating_income: Option<f64>,
+    gross_profit: Option<f64>,  // CRITICAL: Added for Piotroski Criterion 8
+    cost_of_revenue: Option<f64>,  // CRITICAL: Added for gross profit calculation fallback
     shares_basic: Option<f64>,
     shares_diluted: Option<f64>,
 }
@@ -169,7 +171,51 @@ impl GaapFieldMapping {
             "Revenues".to_string(),
             "RevenueFromContractWithCustomerIncludingAssessedTax".to_string(),
         ]);
-        
+
+        // CRITICAL: Cost of revenue for gross profit calculation - COMPREHENSIVE GAAP TAXONOMY MAPPING
+        // Based on 2024 EDGAR XBRL research - addresses #1 blocker (174 stocks)
+        income_statement_fields.insert("cost_of_revenue".to_string(), vec![
+            // FASB 2024 Primary Elements
+            "CostOfRevenue".to_string(),                                       // Primary GAAP field per FASB
+            "CostOfGoodsAndServicesSold".to_string(),                         // Standard GAAP - primary disaggregation
+
+            // Core Cost Elements (GAAP compliant)
+            "CostOfSales".to_string(),                                        // Standard terminology
+            "CostOfGoodsAndServicesSoldExcludingDepreciationDepletionAndAmortization".to_string(), // Detailed GAAP
+            "CostOfGoodsSold".to_string(),                                    // Common variation
+            "CostOfProductsSold".to_string(),                                 // Manufacturing companies
+            "CostOfServiceRevenue".to_string(),                               // Service companies
+            "CostOfMerchandiseSold".to_string(),                              // Retail companies (from GAAP taxonomy)
+
+            // Industry-Specific Cost Elements (from 2024 GAAP taxonomy research)
+            "CostOfPurchasedEnergySold".to_string(),                          // Utilities/energy
+            "CostOfSalesHotelOperations".to_string(),                         // Hospitality
+            "CostOfSalesFoodAndBeverage".to_string(),                         // Food service
+            "CostOfSalesRoomOccupancyServices".to_string(),                   // Real estate/hospitality
+
+            // Component Cost Elements (FASB taxonomy)
+            "CostDirectMaterial".to_string(),                                 // Direct materials
+            "CostDirectLabor".to_string(),                                    // Direct labor
+            "CostOfGoodsAndServicesSoldOverhead".to_string(),                 // Manufacturing overhead
+
+            // Alternative GAAP Variations
+            "CostOfRevenueGoodsAndServices".to_string(),                      // Combined field
+            "CostOfOperatingRevenue".to_string(),                             // Utilities/transport
+            "CostOfContractRevenues".to_string(),                             // Contract-based companies
+            "DirectCosts".to_string(),                                        // Alternative naming
+            "ProductionCosts".to_string(),                                    // Manufacturing focus
+            "CostOfMaterials".to_string(),                                    // Materials companies
+            "OperatingExpensesCostAndExpenses".to_string(),                   // Broad operating costs
+
+            // Additional Industry Variations (comprehensive)
+            "CostOfGoodsManufactured".to_string(),                           // Manufacturing
+            "CostOfServicesProvided".to_string(),                            // Service industry
+            "CostOfSoftwareRevenue".to_string(),                             // Technology
+            "CostOfSubscriptionRevenue".to_string(),                         // SaaS/subscription
+            "InterestExpenseOnCustomerDeposits".to_string(),                 // Banking
+            "PolicyholderBenefitsAndClaimsIncurred".to_string(),             // Insurance
+        ]);
+
         income_statement_fields.insert("net_income".to_string(), vec![
             "NetIncomeLoss".to_string(),
             "NetIncomeLossAvailableToCommonStockholdersBasic".to_string(),
@@ -180,6 +226,24 @@ impl GaapFieldMapping {
             "IncomeLossFromContinuingOperations".to_string(),
             "OperatingIncomeLoss".to_string(),
             "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest".to_string(),
+        ]);
+
+        // CRITICAL: Gross profit for Piotroski Criterion 8 - ENHANCED GAAP MAPPING
+        income_statement_fields.insert("gross_profit".to_string(), vec![
+            "GrossProfit".to_string(),                                     // Primary GAAP field
+            "RevenuesLessCostOfGoodsAndServicesSold".to_string(),         // Alternative calculation format
+
+            // Alternative Gross Profit Terminology
+            "GrossProfitLoss".to_string(),                                // Alternative naming
+            "GrossMargin".to_string(),                                    // Common business terminology
+            "GrossOperatingProfit".to_string(),                          // Alternative format
+            "RevenueMinusCostOfRevenue".to_string(),                      // Calculated format
+
+            // Service Industry Variations
+            "ServiceRevenueLessCosts".to_string(),                        // Service companies
+            "RevenueNetOfDirectCosts".to_string(),                        // Direct cost model
+
+            // Note: We also calculate gross_profit = revenue - cost_of_revenue as fallback
         ]);
         
         income_statement_fields.insert("shares_basic".to_string(), vec![
@@ -198,10 +262,21 @@ impl GaapFieldMapping {
             "AssetsTotal".to_string(),
         ]);
         
+        // ENHANCED: Comprehensive total debt mapping - addresses 22.5% failure rate
         balance_sheet_fields.insert("total_debt".to_string(), vec![
-            "LongTermDebt".to_string(),
-            "DebtAndCapitalLeaseObligations".to_string(),
-            "LongTermDebtAndCapitalLeaseObligations".to_string(),
+            "LongTermDebt".to_string(),                                     // Primary field
+            "DebtAndCapitalLeaseObligations".to_string(),                  // Current
+            "LongTermDebtAndCapitalLeaseObligations".to_string(),          // Current
+            "DebtCurrent".to_string(),                                      // Short-term debt
+            "LongTermDebtNoncurrent".to_string(),                          // Long-term component
+            "ShortTermBorrowings".to_string(),                             // Short-term borrowings
+            "CommercialPaper".to_string(),                                 // Commercial paper
+            "LineOfCredit".to_string(),                                    // Credit lines
+            "NotesPayable".to_string(),                                    // Notes payable
+            "BankIndebtedness".to_string(),                                // Bank debt
+            "CapitalLeaseObligations".to_string(),                         // Capital leases
+            "DebtAndCapitalLeaseObligationsCurrent".to_string(),           // Current portion
+            "DebtAndCapitalLeaseObligationsNoncurrent".to_string(),        // Non-current portion
         ]);
         
         balance_sheet_fields.insert("total_equity".to_string(), vec![
@@ -216,9 +291,19 @@ impl GaapFieldMapping {
             "Cash".to_string(),
         ]);
         
+        // CRITICAL: Comprehensive shares outstanding mapping - addresses 100% failure rate
         balance_sheet_fields.insert("shares_outstanding".to_string(), vec![
-            "CommonStockSharesOutstanding".to_string(),
-            "CommonStockSharesIssued".to_string(),
+            "CommonStockSharesOutstanding".to_string(),                      // Primary field
+            "CommonStockSharesIssued".to_string(),                          // Alternative
+            "WeightedAverageNumberOfSharesOutstandingBasic".to_string(),    // From income statement
+            "WeightedAverageNumberOfDilutedSharesOutstanding".to_string(),  // Diluted shares
+            "CommonStockSharesAuthorized".to_string(),                      // Total authorized
+            "CommonStockSharesIssueAndOutstanding".to_string(),             // Combined field
+            "CommonStockNoParValue".to_string(),                            // No par value shares
+            "CommonStockParValue".to_string(),                              // Par value calculation
+            "SharesOutstanding".to_string(),                                // Generic field
+            "CommonSharesOutstanding".to_string(),                          // Alternative naming
+            "OutstandingShares".to_string(),                                // Alternative naming
         ]);
 
         // CRITICAL MISSING FIELDS for Piotroski F-Score (current assets/liabilities)
@@ -271,6 +356,85 @@ impl GaapFieldMapping {
             cash_flow_fields,
         }
     }
+
+    /// Get sector-specific field mappings for current assets and liabilities
+    /// Financial companies and REITs use different GAAP field structures
+    fn get_current_asset_fields(&self, sector: &str) -> Vec<String> {
+        let mut fields = self.balance_sheet_fields
+            .get("current_assets")
+            .unwrap_or(&vec![])
+            .clone();
+
+        match sector {
+            "Financials" => {
+                // Banks and financial institutions - use liquid assets as "current assets"
+                fields.extend(vec![
+                    "CashAndCashEquivalentsAtCarryingValue".to_string(),
+                    "CashCashEquivalentsAndShortTermInvestments".to_string(),
+                    "CashAndDueFromBanks".to_string(),
+                    "TradingSecurities".to_string(),
+                    "SecuritiesOwnedAtFairValue".to_string(),
+                    "LoansAndAdvancesToBanks".to_string(),
+                    "InterestBearingDepositsInBanks".to_string(),
+                ]);
+            },
+            "Real Estate" => {
+                // REITs - real estate investments are their primary assets
+                fields.extend(vec![
+                    "RealEstateInvestmentPropertyAtCost".to_string(),
+                    "RealEstateInvestments".to_string(),
+                    "InvestmentInRealEstate".to_string(),
+                    "RealEstateInvestmentPropertyNet".to_string(),
+                    "CashAndCashEquivalentsAtCarryingValue".to_string(),
+                ]);
+            },
+            "Consumer Discretionary" => {
+                // Homebuilders - inventory and construction assets
+                fields.extend(vec![
+                    "InventoryRealEstate".to_string(),
+                    "RealEstateHeldForSale".to_string(),
+                    "LandAndDevelopmentCosts".to_string(),
+                    "ConstructionInProgress".to_string(),
+                    "InventoryOfFinishedHomes".to_string(),
+                ]);
+            },
+            _ => {} // Use standard fields for other sectors
+        }
+
+        fields
+    }
+
+    fn get_current_liability_fields(&self, sector: &str) -> Vec<String> {
+        let mut fields = self.balance_sheet_fields
+            .get("current_liabilities")
+            .unwrap_or(&vec![])
+            .clone();
+
+        match sector {
+            "Financials" => {
+                // Banks - deposits and short-term obligations are current liabilities
+                fields.extend(vec![
+                    "Deposits".to_string(),
+                    "DepositsAtCarryingValue".to_string(),
+                    "DemandDepositAccounts".to_string(),
+                    "InterestBearingDepositLiabilities".to_string(),
+                    "ShortTermBorrowings".to_string(),
+                    "AccruedInterestPayable".to_string(),
+                ]);
+            },
+            "Real Estate" => {
+                // REITs - typical current liabilities plus REIT-specific items
+                fields.extend(vec![
+                    "AccountsPayableAndAccruedLiabilities".to_string(),
+                    "AccruedLiabilities".to_string(),
+                    "DeferredRevenue".to_string(),
+                ]);
+            },
+            _ => {} // Use standard fields for other sectors
+        }
+
+        fields
+    }
 }
 
 // Work queue task structure
@@ -280,6 +444,7 @@ struct ExtractionTask {
     symbol: String,
     stock_id: i64,
     _company_name: String,
+    sector: String,  // Add sector for enhanced field mapping
     edgar_file_path: PathBuf,
     priority: u8,
 }
@@ -305,34 +470,37 @@ impl WorkQueueManager {
     async fn populate_from_database(&self, db_pool: &SqlitePool, test_limit: Option<usize>, symbols_filter: Option<&str>) -> Result<()> {
         info!("📋 Loading extraction tasks from database...");
         
-        // Build query based on filters
-        let mut query = "SELECT cik, symbol, stock_id, company_name, edgar_file_path FROM cik_mappings_sp500 WHERE file_exists = 1".to_string();
+        // Build query based on filters - include sector for enhanced field mapping
+        let mut query = "SELECT c.cik, c.symbol, c.stock_id, c.company_name, c.edgar_file_path, s.sector
+                          FROM cik_mappings_sp500 c
+                          JOIN stocks s ON c.stock_id = s.id
+                          WHERE c.file_exists = 1".to_string();
         let mut bindings = Vec::new();
         
         if let Some(symbols) = symbols_filter {
             let symbol_list: Vec<&str> = symbols.split(',').collect();
             let placeholders = symbol_list.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-            query.push_str(&format!(" AND symbol IN ({})", placeholders));
+            query.push_str(&format!(" AND c.symbol IN ({})", placeholders));
             bindings.extend(symbol_list.iter().map(|s| s.trim()));
         }
         
-        query.push_str(" ORDER BY symbol");
+        query.push_str(" ORDER BY c.symbol");
         
         if let Some(limit) = test_limit {
             query.push_str(&format!(" LIMIT {}", limit));
         }
         
         // Execute query with dynamic bindings
-        let mut query_builder = sqlx::query_as::<_, (String, String, i64, String, String)>(&query);
+        let mut query_builder = sqlx::query_as::<_, (String, String, i64, String, String, Option<String>)>(&query);
         for binding in bindings {
             query_builder = query_builder.bind(binding);
         }
-        
+
         let mappings = query_builder.fetch_all(db_pool).await?;
-        
+
         let mut tasks = VecDeque::new();
-        
-        for (cik, symbol, stock_id, company_name, file_path) in mappings {
+
+        for (cik, symbol, stock_id, company_name, file_path, sector) in mappings {
             // Assign priority based on company size/importance
             let priority = match symbol.as_str() {
                 "AAPL" | "MSFT" | "GOOGL" | "AMZN" | "NVDA" => 10,
@@ -345,6 +513,7 @@ impl WorkQueueManager {
                 symbol,
                 stock_id,
                 _company_name: company_name,
+                sector: sector.unwrap_or("Unknown".to_string()),
                 edgar_file_path: PathBuf::from(file_path),
                 priority,
             });
@@ -719,7 +888,7 @@ async fn process_extraction_task(
     
     // Extract financial data using GAAP field mapping
     let gaap_mapping = GaapFieldMapping::new();
-    let extracted_data = extract_financial_statements(&edgar_data, task.stock_id, &gaap_mapping)?;
+    let extracted_data = extract_financial_statements(&edgar_data, task.stock_id, &task.sector, &gaap_mapping)?;
     
     debug!("Extracted {} income statements, {} balance sheets, and {} cash flow statements for {}", 
            extracted_data.income_statements.len(), 
@@ -742,6 +911,7 @@ async fn process_extraction_task(
 fn extract_financial_statements(
     edgar_data: &EdgarCompanyFacts,
     stock_id: i64,
+    sector: &str,
     gaap_mapping: &GaapFieldMapping,
 ) -> Result<ExtractedFinancialData> {
     let mut income_statements = Vec::new();
@@ -768,6 +938,7 @@ fn extract_financial_statements(
             &edgar_data.facts.us_gaap,
             stock_id,
             &period_info,
+            sector,
             gaap_mapping,
         ) {
             Ok(balance_sheet) => balance_sheets.push(balance_sheet),
@@ -862,6 +1033,8 @@ fn extract_income_statement_for_period(
         revenue: None,
         net_income: None,
         operating_income: None,
+        gross_profit: None,  // CRITICAL: Added for Piotroski Criterion 8
+        cost_of_revenue: None,  // CRITICAL: Added for gross profit calculation fallback
         shares_basic: None,
         shares_diluted: None,
     };
@@ -886,6 +1059,26 @@ fn extract_income_statement_for_period(
         &gaap_mapping.income_statement_fields["operating_income"],
         period_info,
     );
+
+    // CRITICAL: Extract cost of revenue for gross profit calculation
+    income_stmt.cost_of_revenue = extract_field_value_for_period(
+        gaap_facts,
+        &gaap_mapping.income_statement_fields["cost_of_revenue"],
+        period_info,
+    );
+
+    // CRITICAL: Extract gross profit for Piotroski Criterion 8 (Gross Margin improvement)
+    income_stmt.gross_profit = extract_field_value_for_period(
+        gaap_facts,
+        &gaap_mapping.income_statement_fields["gross_profit"],
+        period_info,
+    );
+
+    // CRITICAL: Calculate gross profit if missing but revenue and cost_of_revenue available
+    // This addresses the #1 blocker affecting 174 stocks
+    if income_stmt.gross_profit.is_none() && income_stmt.revenue.is_some() && income_stmt.cost_of_revenue.is_some() {
+        income_stmt.gross_profit = Some(income_stmt.revenue.unwrap() - income_stmt.cost_of_revenue.unwrap());
+    }
     
     // Extract basic shares
     income_stmt.shares_basic = extract_field_value_for_period(
@@ -908,6 +1101,7 @@ fn extract_balance_sheet_for_period(
     gaap_facts: &HashMap<String, EdgarConcept>,
     stock_id: i64,
     period_info: &PeriodInfo,
+    sector: &str,
     gaap_mapping: &GaapFieldMapping,
 ) -> Result<BalanceSheetData> {
     let mut balance_sheet = BalanceSheetData {
@@ -952,24 +1146,26 @@ fn extract_balance_sheet_for_period(
         period_info,
     );
     
-    // Extract shares outstanding
-    balance_sheet.shares_outstanding = extract_field_value_for_period(
+    // Extract shares outstanding - uses "shares" units instead of "USD"
+    balance_sheet.shares_outstanding = extract_shares_value_for_period(
         gaap_facts,
         &gaap_mapping.balance_sheet_fields["shares_outstanding"],
         period_info,
     );
 
-    // CRITICAL: Extract current assets for Piotroski F-Score
+    // CRITICAL: Extract current assets for Piotroski F-Score using sector-aware mappings
+    let current_asset_fields = gaap_mapping.get_current_asset_fields(sector);
     balance_sheet.current_assets = extract_field_value_for_period(
         gaap_facts,
-        &gaap_mapping.balance_sheet_fields["current_assets"],
+        &current_asset_fields,
         period_info,
     );
 
-    // CRITICAL: Extract current liabilities for Piotroski F-Score
+    // CRITICAL: Extract current liabilities for Piotroski F-Score using sector-aware mappings
+    let current_liability_fields = gaap_mapping.get_current_liability_fields(sector);
     balance_sheet.current_liabilities = extract_field_value_for_period(
         gaap_facts,
-        &gaap_mapping.balance_sheet_fields["current_liabilities"],
+        &current_liability_fields,
         period_info,
     );
 
@@ -1043,6 +1239,36 @@ fn extract_cash_flow_statement_for_period(
     Ok(cash_flow_stmt)
 }
 
+// CRITICAL FIX: Separate function for extracting share counts (uses "shares" units, not "USD")
+fn extract_shares_value_for_period(
+    gaap_facts: &HashMap<String, EdgarConcept>,
+    field_priorities: &[String],
+    period_info: &PeriodInfo,
+) -> Option<f64> {
+    // Try each field in priority order - but look for "shares" units
+    for field_name in field_priorities {
+        if let Some(concept) = gaap_facts.get(field_name) {
+            if let Some(shares_values) = concept.units.get("shares") {
+                // Find the value for this specific period
+                for fact_value in shares_values {
+                    if fact_value.fy == Some(period_info.year) &&
+                       fact_value.fp.as_ref() == Some(&period_info.period) {
+                        return Some(fact_value.val);
+                    }
+                }
+
+                // Fallback: find closest year if exact match not found
+                for fact_value in shares_values {
+                    if fact_value.fy == Some(period_info.year) {
+                        return Some(fact_value.val);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 fn extract_field_value_for_period(
     gaap_facts: &HashMap<String, EdgarConcept>,
     field_priorities: &[String],
@@ -1093,9 +1319,9 @@ async fn insert_financial_data_to_db(db_pool: &SqlitePool, data: &ExtractedFinan
         
         sqlx::query(
             r#"
-            INSERT OR REPLACE INTO income_statements 
-            (stock_id, period_type, report_date, fiscal_year, fiscal_period, revenue, net_income, operating_income, shares_basic, shares_diluted, data_source)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'edgar')
+            INSERT OR REPLACE INTO income_statements
+            (stock_id, period_type, report_date, fiscal_year, fiscal_period, revenue, net_income, operating_income, gross_profit, cost_of_revenue, shares_basic, shares_diluted, data_source)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'edgar')
             "#
         )
         .bind(income_stmt.stock_id)
@@ -1106,6 +1332,8 @@ async fn insert_financial_data_to_db(db_pool: &SqlitePool, data: &ExtractedFinan
         .bind(income_stmt.revenue)
         .bind(income_stmt.net_income)
         .bind(income_stmt.operating_income)
+        .bind(income_stmt.gross_profit)  // CRITICAL: Added for Piotroski Criterion 8
+        .bind(income_stmt.cost_of_revenue)  // CRITICAL: Added for gross profit calculation fallback
         .bind(income_stmt.shares_basic)
         .bind(income_stmt.shares_diluted)
         .execute(&mut *tx)

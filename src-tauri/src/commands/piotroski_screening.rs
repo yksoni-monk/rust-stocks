@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
 use sqlx::{SqlitePool, Row};
 use crate::database::helpers::get_database_connection;
+use ts_rs::TS;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct PiotoskiFScoreResult {
     pub stock_id: i64,
     pub symbol: String,
@@ -33,7 +35,8 @@ pub struct PiotoskiFScoreResult {
     pub pb_ratio: Option<f64>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct PiotroskilScreeningCriteria {
     pub min_f_score: Option<i32>,
     pub min_data_completeness: Option<i32>,

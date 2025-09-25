@@ -3,6 +3,7 @@ use ts_rs::TS;
 
 // Re-export types from other modules for ts-rs generation
 pub use crate::tools::data_freshness_checker::{SystemFreshnessReport, DataFreshnessStatus, FreshnessStatus, RefreshPriority, RefreshRecommendation, ScreeningReadiness};
+pub use crate::commands::piotroski_screening::{PiotoskiFScoreResult, PiotroskilScreeningCriteria};
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -78,6 +79,10 @@ mod ts_bindings_export_tests {
         RefreshPriority::export().unwrap();
         RefreshRecommendation::export().unwrap();
         ScreeningReadiness::export().unwrap();
+
+        // Piotroski F-Score types
+        PiotoskiFScoreResult::export().unwrap();
+        PiotroskilScreeningCriteria::export().unwrap();
     }
 }
 

@@ -34,12 +34,12 @@ export interface Recommendation {
   criterion_decreasing_debt_ratio?: number;
   criterion_improving_current_ratio?: number;
   criterion_no_dilution?: number;
-  criterion_improving_gross_margin?: number;
+  criterion_improving_net_margin?: number;
   criterion_improving_asset_turnover?: number;
   current_roa?: number;
   current_debt_ratio?: number;
   current_current_ratio?: number;
-  current_gross_margin?: number;
+  current_net_margin?: number;
   current_asset_turnover?: number;
   current_operating_cash_flow?: number;
 }
@@ -308,12 +308,12 @@ export function createRecommendationsStore() {
               criterion_decreasing_debt_ratio: stock.criterion_decreasing_debt_ratio,
               criterion_improving_current_ratio: stock.criterion_improving_current_ratio,
               criterion_no_dilution: stock.criterion_no_dilution,
-              criterion_improving_gross_margin: stock.criterion_improving_gross_margin,
+              criterion_improving_net_margin: stock.criterion_improving_net_margin,
               criterion_improving_asset_turnover: stock.criterion_improving_asset_turnover,
               current_roa: stock.current_roa,
               current_debt_ratio: stock.current_debt_ratio,
               current_current_ratio: stock.current_current_ratio,
-              current_gross_margin: stock.current_gross_margin,
+              current_net_margin: stock.current_net_margin,
               current_asset_turnover: stock.current_asset_turnover,
               current_operating_cash_flow: stock.current_operating_cash_flow,
 

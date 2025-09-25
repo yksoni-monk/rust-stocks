@@ -459,10 +459,10 @@ function MetricsDisplay(props: MetricsDisplayProps) {
           <div class="text-xs text-gray-500">Shares</div>
         </div>
         <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[40px]">
-          <div class={`text-lg font-bold ${props.rec.criterion_improving_gross_margin ? 'text-green-600' : 'text-red-500'}`}>
-            {props.rec.criterion_improving_gross_margin ? '✓' : '✗'}
+          <div class={`text-lg font-bold ${props.rec.criterion_improving_net_margin ? 'text-green-600' : 'text-red-500'}`}>
+            {props.rec.criterion_improving_net_margin ? '✓' : '✗'}
           </div>
-          <div class="text-xs text-gray-500">Gross Margin</div>
+          <div class="text-xs text-gray-500">Net Margin</div>
         </div>
         <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[40px]">
           <div class={`text-lg font-bold ${props.rec.criterion_improving_asset_turnover ? 'text-green-600' : 'text-red-500'}`}>

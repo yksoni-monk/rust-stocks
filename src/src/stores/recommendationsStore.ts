@@ -42,6 +42,22 @@ export interface Recommendation {
   current_net_margin?: number;
   current_asset_turnover?: number;
   current_operating_cash_flow?: number;
+
+  // NEW: Enhanced Piotroski confidence and weighted scoring
+  confidence_score?: number;
+  weighted_score?: number;
+  quality_tier?: string;
+  criteria_summary?: PiotroskilCriterion[];
+}
+
+export interface PiotroskilCriterion {
+  name: string;
+  category: string;
+  weight: number;
+  score: number;
+  confidence: number;
+  data_available: boolean;
+  description: string;
 }
 
 export interface RecommendationStats {

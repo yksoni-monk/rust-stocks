@@ -13,7 +13,7 @@ pub struct PiotoskiFScoreResult {
     pub current_net_income: Option<f64>,
     pub f_score_complete: i32,
     pub data_completeness_score: i32,
-    
+
     // Complete 9 criteria breakdown
     pub criterion_positive_net_income: i32,
     pub criterion_positive_operating_cash_flow: i32,
@@ -33,6 +33,24 @@ pub struct PiotoskiFScoreResult {
     pub current_asset_turnover: Option<f64>,
     pub current_operating_cash_flow: Option<f64>,
     pub pb_ratio: Option<f64>,
+
+    // NEW: Confidence and weighted scoring
+    pub confidence_score: f64,
+    pub weighted_score: f64,
+    pub quality_tier: String,
+    pub criteria_summary: Vec<PiotroskilCriterion>,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct PiotroskilCriterion {
+    pub name: String,
+    pub category: String,
+    pub weight: f64,
+    pub score: i32,
+    pub confidence: f64,
+    pub data_available: bool,
+    pub description: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, TS)]
@@ -164,14 +182,48 @@ async fn get_piotroski_screening_results_internal(
 impl sqlx::FromRow<'_, sqlx::sqlite::SqliteRow> for PiotoskiFScoreResult {
     fn from_row(row: &sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
         use sqlx::Row;
+
+        let f_score = row.try_get::<i32, _>("f_score_complete")?;
+        let completeness = row.try_get::<i32, _>("data_completeness_score")?;
+
+        // Calculate confidence and weighted score
+        let (confidence_score, weighted_score, quality_tier) = calculate_confidence_metrics(
+            f_score,
+            completeness,
+            &[
+                row.try_get("criterion_positive_net_income").unwrap_or(0),
+                row.try_get("criterion_positive_operating_cash_flow").unwrap_or(0),
+                row.try_get("criterion_improving_roa").unwrap_or(0),
+                row.try_get("criterion_cash_flow_quality").unwrap_or(0),
+                row.try_get("criterion_decreasing_debt_ratio").unwrap_or(0),
+                row.try_get("criterion_improving_current_ratio").unwrap_or(0),
+                row.try_get("criterion_no_dilution").unwrap_or(0),
+                row.try_get("criterion_improving_net_margin").unwrap_or(0),
+                row.try_get("criterion_improving_asset_turnover").unwrap_or(0),
+            ],
+            &[
+                row.try_get::<Option<f64>, _>("current_net_income")?.is_some(),
+                row.try_get::<Option<f64>, _>("current_operating_cash_flow")?.is_some(),
+                row.try_get::<Option<f64>, _>("current_roa")?.is_some(),
+                row.try_get::<Option<f64>, _>("current_operating_cash_flow")?.is_some(),
+                row.try_get::<Option<f64>, _>("current_debt_ratio")?.is_some(),
+                row.try_get::<Option<f64>, _>("current_current_ratio")?.is_some(),
+                true, // shares data generally available
+                row.try_get::<Option<f64>, _>("current_net_margin")?.is_some(),
+                row.try_get::<Option<f64>, _>("current_asset_turnover")?.is_some(),
+            ]
+        );
+
+        let criteria_summary = build_criteria_summary(&row)?;
+
         Ok(PiotoskiFScoreResult {
             stock_id: row.try_get("stock_id")?,
             symbol: row.try_get("symbol")?,
             sector: row.try_get("sector")?,
             industry: row.try_get("industry")?,
             current_net_income: row.try_get("current_net_income")?,
-            f_score_complete: row.try_get("f_score_complete")?,
-            data_completeness_score: row.try_get("data_completeness_score")?,
+            f_score_complete: f_score,
+            data_completeness_score: completeness,
             criterion_positive_net_income: row.try_get("criterion_positive_net_income")?,
             criterion_positive_operating_cash_flow: row.try_get("criterion_positive_operating_cash_flow")?,
             criterion_improving_roa: row.try_get("criterion_improving_roa")?,
@@ -188,8 +240,149 @@ impl sqlx::FromRow<'_, sqlx::sqlite::SqliteRow> for PiotoskiFScoreResult {
             current_asset_turnover: row.try_get("current_asset_turnover")?,
             current_operating_cash_flow: row.try_get("current_operating_cash_flow")?,
             pb_ratio: row.try_get("pb_ratio")?,
+            confidence_score,
+            weighted_score,
+            quality_tier,
+            criteria_summary,
         })
     }
+}
+
+// Piotroski factor weights based on empirical research and factor importance
+const PIOTROSKI_WEIGHTS: [f64; 9] = [
+    1.2,  // Positive Net Income - Critical profitability indicator
+    1.1,  // Positive Operating Cash Flow - Cash generation ability
+    1.0,  // Improving ROA - Asset efficiency trend
+    1.2,  // Cash Flow Quality - Earnings quality
+    0.9,  // Decreasing Debt Ratio - Leverage improvement
+    0.8,  // Improving Current Ratio - Liquidity improvement
+    0.8,  // No Share Dilution - Capital discipline
+    1.0,  // Improving Net Margin - Profitability trend
+    0.9,  // Improving Asset Turnover - Operational efficiency
+];
+
+const PIOTROSKI_NAMES: [&str; 9] = [
+    "Positive Net Income",
+    "Positive Operating Cash Flow",
+    "Improving ROA",
+    "Cash Flow Quality",
+    "Decreasing Debt Ratio",
+    "Improving Current Ratio",
+    "No Share Dilution",
+    "Improving Net Margin",
+    "Improving Asset Turnover",
+];
+
+const PIOTROSKI_CATEGORIES: [&str; 9] = [
+    "Profitability", "Profitability", "Profitability", "Profitability",
+    "Leverage", "Leverage", "Leverage",
+    "Operating Efficiency", "Operating Efficiency",
+];
+
+const PIOTROSKI_DESCRIPTIONS: [&str; 9] = [
+    "Company reported positive net income in the most recent fiscal year",
+    "Company generated positive operating cash flow in the most recent fiscal year",
+    "Return on Assets improved compared to the prior year",
+    "Operating cash flow exceeds net income, indicating good earnings quality",
+    "Debt-to-assets ratio decreased compared to the prior year",
+    "Current ratio improved compared to the prior year",
+    "Company did not issue additional shares (no dilution)",
+    "Net profit margin improved compared to the prior year",
+    "Asset turnover improved compared to the prior year",
+];
+
+fn calculate_confidence_metrics(
+    f_score: i32,
+    completeness: i32,
+    criteria_scores: &[i32; 9],
+    data_availability: &[bool; 9],
+) -> (f64, f64, String) {
+    // Calculate weighted score
+    let weighted_score: f64 = criteria_scores
+        .iter()
+        .zip(PIOTROSKI_WEIGHTS.iter())
+        .map(|(&score, &weight)| score as f64 * weight)
+        .sum();
+
+    let max_weighted_score: f64 = PIOTROSKI_WEIGHTS.iter().sum();
+    let normalized_weighted_score = (weighted_score / max_weighted_score) * 9.0;
+
+    // Calculate confidence based on data availability and consistency
+    let data_confidence = data_availability.iter().map(|&available| if available { 1.0 } else { 0.0 }).sum::<f64>() / 9.0;
+    let completeness_confidence = (completeness as f64) / 100.0;
+
+    // Penalize for inconsistent patterns (e.g., high score with low completeness)
+    let consistency_factor = if completeness < 70 && f_score > 6 {
+        0.8 // Reduce confidence for potentially incomplete high scores
+    } else if completeness > 90 {
+        1.1 // Boost confidence for very complete data
+    } else {
+        1.0
+    };
+
+    let confidence_score = (data_confidence * 0.6 + completeness_confidence * 0.4) * consistency_factor * 100.0;
+    let confidence_score = confidence_score.min(100.0).max(0.0);
+
+    // Determine quality tier
+    let quality_tier = match (f_score, confidence_score as i32) {
+        (8..=9, 85..) => "Elite",
+        (7..=9, 70..) => "High Quality",
+        (5..=6, 80..) => "Good",
+        (3..=6, 60..) => "Average",
+        (0..=4, 70..) => "Weak",
+        _ => "Insufficient Data",
+    }.to_string();
+
+    (confidence_score, normalized_weighted_score, quality_tier)
+}
+
+fn build_criteria_summary(row: &sqlx::sqlite::SqliteRow) -> Result<Vec<PiotroskilCriterion>, sqlx::Error> {
+    use sqlx::Row;
+
+    let criteria_scores = [
+        row.try_get("criterion_positive_net_income").unwrap_or(0),
+        row.try_get("criterion_positive_operating_cash_flow").unwrap_or(0),
+        row.try_get("criterion_improving_roa").unwrap_or(0),
+        row.try_get("criterion_cash_flow_quality").unwrap_or(0),
+        row.try_get("criterion_decreasing_debt_ratio").unwrap_or(0),
+        row.try_get("criterion_improving_current_ratio").unwrap_or(0),
+        row.try_get("criterion_no_dilution").unwrap_or(0),
+        row.try_get("criterion_improving_net_margin").unwrap_or(0),
+        row.try_get("criterion_improving_asset_turnover").unwrap_or(0),
+    ];
+
+    let data_availability = [
+        row.try_get::<Option<f64>, _>("current_net_income")?.is_some(),
+        row.try_get::<Option<f64>, _>("current_operating_cash_flow")?.is_some(),
+        row.try_get::<Option<f64>, _>("current_roa")?.is_some(),
+        row.try_get::<Option<f64>, _>("current_operating_cash_flow")?.is_some(),
+        row.try_get::<Option<f64>, _>("current_debt_ratio")?.is_some(),
+        row.try_get::<Option<f64>, _>("current_current_ratio")?.is_some(),
+        true, // shares data generally available
+        row.try_get::<Option<f64>, _>("current_net_margin")?.is_some(),
+        row.try_get::<Option<f64>, _>("current_asset_turnover")?.is_some(),
+    ];
+
+    let mut criteria = Vec::new();
+    for i in 0..9 {
+        let confidence = if data_availability[i] {
+            if PIOTROSKI_WEIGHTS[i] > 1.0 { 95.0 } else { 85.0 }
+        } else {
+            30.0
+        };
+
+        criteria.push(PiotroskilCriterion {
+            name: PIOTROSKI_NAMES[i].to_string(),
+            category: PIOTROSKI_CATEGORIES[i].to_string(),
+            weight: PIOTROSKI_WEIGHTS[i],
+            score: criteria_scores[i],
+            confidence,
+            data_available: data_availability[i],
+            description: PIOTROSKI_DESCRIPTIONS[i].to_string(),
+        });
+    }
+
+    Ok(criteria)
 }
 
 #[tauri::command]

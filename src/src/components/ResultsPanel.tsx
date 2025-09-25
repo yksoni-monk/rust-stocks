@@ -404,71 +404,125 @@ function MetricsDisplay(props: MetricsDisplayProps) {
       </Show>
       
       <Show when={props.screeningType === 'piotroski'}>
-        <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[60px]">
+        {/* Core Metrics */}
+        <div class="text-center bg-green-50 rounded-lg p-2 min-w-[60px]">
           <div class="text-lg font-bold text-green-600">
             {props.rec.f_score_complete || 0}/9
           </div>
           <div class="text-xs text-gray-500">F-Score</div>
         </div>
+
+        {/* NEW: Confidence Score */}
+        <div class="text-center bg-blue-50 rounded-lg p-2 min-w-[60px]">
+          <div class={`text-sm font-bold ${
+            (props.rec.confidence_score || 0) >= 85 ? 'text-blue-600' :
+            (props.rec.confidence_score || 0) >= 70 ? 'text-yellow-600' : 'text-red-500'
+          }`}>
+            {(props.rec.confidence_score || 0).toFixed(0)}%
+          </div>
+          <div class="text-xs text-gray-500">Confidence</div>
+        </div>
+
+        {/* NEW: Quality Tier */}
+        <div class="text-center bg-purple-50 rounded-lg p-2 min-w-[60px]">
+          <div class={`text-xs font-bold ${
+            props.rec.quality_tier === 'Elite' ? 'text-purple-600' :
+            props.rec.quality_tier === 'High Quality' ? 'text-green-600' :
+            props.rec.quality_tier === 'Good' ? 'text-blue-600' : 'text-gray-600'
+          }`}>
+            {props.rec.quality_tier || 'Unknown'}
+          </div>
+          <div class="text-xs text-gray-500">Tier</div>
+        </div>
+
+        {/* NEW: Weighted Score */}
+        <div class="text-center bg-orange-50 rounded-lg p-2 min-w-[60px]">
+          <div class="text-sm font-bold text-orange-600">
+            {(props.rec.weighted_score || 0).toFixed(1)}
+          </div>
+          <div class="text-xs text-gray-500">Weighted</div>
+        </div>
+
         <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[60px]">
           <div class="text-sm font-bold text-blue-600">
             {props.rec.data_completeness_score || 0}%
           </div>
           <div class="text-xs text-gray-500">Data Quality</div>
         </div>
-        <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[40px]">
+
+        {/* Profitability Factors (High Weight) */}
+        <div class="text-center bg-green-50 rounded-lg p-2 min-w-[40px] border border-green-200">
           <div class={`text-lg font-bold ${props.rec.criterion_positive_net_income ? 'text-green-600' : 'text-red-500'}`}>
             {props.rec.criterion_positive_net_income ? '✓' : '✗'}
           </div>
           <div class="text-xs text-gray-500">Income</div>
+          <div class="text-xs text-green-600 font-medium">1.2×</div>
         </div>
+
+        <div class="text-center bg-green-50 rounded-lg p-2 min-w-[40px] border border-green-200">
+          <div class={`text-lg font-bold ${props.rec.criterion_cash_flow_quality ? 'text-green-600' : 'text-red-500'}`}>
+            {props.rec.criterion_cash_flow_quality ? '✓' : '✗'}
+          </div>
+          <div class="text-xs text-gray-500">CF Quality</div>
+          <div class="text-xs text-green-600 font-medium">1.2×</div>
+        </div>
+
+        <div class="text-center bg-green-50 rounded-lg p-2 min-w-[40px] border border-green-100">
+          <div class={`text-lg font-bold ${props.rec.criterion_positive_operating_cash_flow ? 'text-green-600' : 'text-red-500'}`}>
+            {props.rec.criterion_positive_operating_cash_flow ? '✓' : '✗'}
+          </div>
+          <div class="text-xs text-gray-500">Cash Flow</div>
+          <div class="text-xs text-blue-600 font-medium">1.1×</div>
+        </div>
+
         <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[40px]">
           <div class={`text-lg font-bold ${props.rec.criterion_improving_roa ? 'text-green-600' : 'text-red-500'}`}>
             {props.rec.criterion_improving_roa ? '✓' : '✗'}
           </div>
           <div class="text-xs text-gray-500">ROA</div>
+          <div class="text-xs text-gray-600">1.0×</div>
         </div>
-        <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[40px]">
+
+        {/* Leverage Factors (Medium Weight) */}
+        <div class="text-center bg-yellow-50 rounded-lg p-2 min-w-[40px] border border-yellow-100">
           <div class={`text-lg font-bold ${props.rec.criterion_decreasing_debt_ratio ? 'text-green-600' : 'text-red-500'}`}>
             {props.rec.criterion_decreasing_debt_ratio ? '✓' : '✗'}
           </div>
           <div class="text-xs text-gray-500">Debt</div>
+          <div class="text-xs text-yellow-600">0.9×</div>
         </div>
-        <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[40px]">
-          <div class={`text-lg font-bold ${props.rec.criterion_positive_operating_cash_flow ? 'text-green-600' : 'text-red-500'}`}>
-            {props.rec.criterion_positive_operating_cash_flow ? '✓' : '✗'}
-          </div>
-          <div class="text-xs text-gray-500">Cash Flow</div>
-        </div>
-        <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[40px]">
-          <div class={`text-lg font-bold ${props.rec.criterion_cash_flow_quality ? 'text-green-600' : 'text-red-500'}`}>
-            {props.rec.criterion_cash_flow_quality ? '✓' : '✗'}
-          </div>
-          <div class="text-xs text-gray-500">CF Quality</div>
-        </div>
-        <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[40px]">
+
+        <div class="text-center bg-yellow-50 rounded-lg p-2 min-w-[40px] border border-yellow-100">
           <div class={`text-lg font-bold ${props.rec.criterion_improving_current_ratio ? 'text-green-600' : 'text-red-500'}`}>
             {props.rec.criterion_improving_current_ratio ? '✓' : '✗'}
           </div>
-          <div class="text-xs text-gray-500">Current Ratio</div>
+          <div class="text-xs text-gray-500">Current</div>
+          <div class="text-xs text-yellow-600">0.8×</div>
         </div>
-        <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[40px]">
+
+        <div class="text-center bg-yellow-50 rounded-lg p-2 min-w-[40px] border border-yellow-100">
           <div class={`text-lg font-bold ${props.rec.criterion_no_dilution ? 'text-green-600' : 'text-red-500'}`}>
             {props.rec.criterion_no_dilution ? '✓' : '✗'}
           </div>
           <div class="text-xs text-gray-500">Shares</div>
+          <div class="text-xs text-yellow-600">0.8×</div>
         </div>
-        <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[40px]">
+
+        {/* Efficiency Factors */}
+        <div class="text-center bg-blue-50 rounded-lg p-2 min-w-[40px] border border-blue-100">
           <div class={`text-lg font-bold ${props.rec.criterion_improving_net_margin ? 'text-green-600' : 'text-red-500'}`}>
             {props.rec.criterion_improving_net_margin ? '✓' : '✗'}
           </div>
           <div class="text-xs text-gray-500">Net Margin</div>
+          <div class="text-xs text-blue-600">1.0×</div>
         </div>
-        <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[40px]">
+
+        <div class="text-center bg-blue-50 rounded-lg p-2 min-w-[40px] border border-blue-100">
           <div class={`text-lg font-bold ${props.rec.criterion_improving_asset_turnover ? 'text-green-600' : 'text-red-500'}`}>
             {props.rec.criterion_improving_asset_turnover ? '✓' : '✗'}
           </div>
           <div class="text-xs text-gray-500">Asset Turn</div>
+          <div class="text-xs text-blue-600">0.9×</div>
         </div>
       </Show>
 

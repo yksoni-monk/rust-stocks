@@ -4,6 +4,7 @@ use crate::api::alpha_vantage_client::ConvertedDailyPrice;
 use std::sync::Arc;
 use std::str::FromStr;
 use tokio::sync::RwLock;
+use std::env;
 
 // Test database pool for injection during testing
 static TEST_DB_POOL: RwLock<Option<Arc<SqlitePool>>> = RwLock::const_new(None);
@@ -28,7 +29,41 @@ pub async fn clear_test_database_pool() {
     *test_pool = None;
 }
 
-/// Get database connection (test-aware)
+/// Get database URL from environment variables with fallback
+fn get_database_url() -> Result<String, String> {
+    // First try DATABASE_URL (SQLx standard)
+    if let Ok(url) = env::var("DATABASE_URL") {
+        return Ok(url);
+    }
+
+    // Fallback to DATABASE_PATH for backwards compatibility
+    if let Ok(path) = env::var("DATABASE_PATH") {
+        return Ok(format!("sqlite:{}", path));
+    }
+
+    // Final fallback to PROJECT_ROOT based path
+    if let Ok(project_root) = env::var("PROJECT_ROOT") {
+        let db_path = format!("{}/src-tauri/db/stocks.db", project_root);
+        return Ok(format!("sqlite:{}", db_path));
+    }
+
+    // Ultimate fallback - relative path (not recommended for production)
+    eprintln!("⚠️  WARNING: Using relative database path. Set DATABASE_URL or PROJECT_ROOT environment variables.");
+    Ok("sqlite:src-tauri/db/stocks.db".to_string())
+}
+
+/// Initialize environment variables from .env file
+fn init_env_vars() {
+    // Load .env file if it exists (dotenvy handles missing files gracefully)
+    if let Err(e) = dotenvy::dotenv() {
+        // Only log if it's not a "file not found" error
+        if !e.to_string().contains("No such file or directory") {
+            eprintln!("Warning: Failed to load .env file: {}", e);
+        }
+    }
+}
+
+/// Get database connection (test-aware and environment-configured)
 pub async fn get_database_connection() -> Result<SqlitePool, String> {
     // Check if we have a test database pool
     let test_pool = TEST_DB_POOL.read().await;
@@ -36,22 +71,30 @@ pub async fn get_database_connection() -> Result<SqlitePool, String> {
         return Ok((**pool_arc).clone());
     }
     drop(test_pool);
-    
+
+    // Initialize environment variables
+    init_env_vars();
+
+    // Get database URL from environment
+    let database_url = get_database_url()?;
+
+    println!("🔗 Connecting to database: {}", database_url.replace("sqlite:", "sqlite://"));
+
     // Use production database with WAL mode and connection pooling for better concurrency
-    let database_url = "sqlite:db/stocks.db";
     sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(20) // Allow multiple concurrent connections for production
         .min_connections(5)
         .acquire_timeout(std::time::Duration::from_secs(10))
         .idle_timeout(Some(std::time::Duration::from_secs(600)))
         .connect_with(
-            sqlx::sqlite::SqliteConnectOptions::from_str(database_url)
+            sqlx::sqlite::SqliteConnectOptions::from_str(&database_url)
                 .map_err(|e| format!("Database URL parsing failed: {}", e))?
                 .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
                 .busy_timeout(std::time::Duration::from_secs(30))
                 .synchronous(sqlx::sqlite::SqliteSynchronous::Normal)
+                .create_if_missing(false) // Don't create database automatically - it should exist
         ).await
-        .map_err(|e| format!("Database connection failed: {}", e))
+        .map_err(|e| format!("Database connection failed ({}): {}", database_url, e))
 }
 
 /// Insert daily price data from Alpha Vantage

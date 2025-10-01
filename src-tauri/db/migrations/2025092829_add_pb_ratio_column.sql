@@ -11,4 +11,4 @@ ON daily_valuation_ratios(pb_ratio_ttm);
 -- Update the multi-period index to include P/B ratio
 DROP INDEX IF EXISTS idx_daily_ratios_multi_period;
 CREATE INDEX IF NOT EXISTS idx_daily_ratios_multi_period 
-ON daily_valuation_ratios(stock_id, date, ps_ratio_ttm, evs_ratio_ttm, pb_ratio_ttm);
+ON daily_valuation_ratios(stock_id, date, ps_ratio_annual, evs_ratio_annual, pb_ratio_ttm);

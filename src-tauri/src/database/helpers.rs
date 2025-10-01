@@ -1,6 +1,5 @@
 use sqlx::{SqlitePool, Row};
 use chrono::NaiveDate;
-use crate::api::alpha_vantage_client::ConvertedDailyPrice;
 use std::sync::Arc;
 use std::str::FromStr;
 use tokio::sync::RwLock;
@@ -97,78 +96,6 @@ pub async fn get_database_connection() -> Result<SqlitePool, String> {
         .map_err(|e| format!("Database connection failed ({}): {}", database_url, e))
 }
 
-/// Insert daily price data from Alpha Vantage
-pub async fn insert_daily_price_data(
-    pool: &SqlitePool,
-    stock_id: i64,
-    price_data: &ConvertedDailyPrice,
-    data_source: &str,
-) -> Result<(), String> {
-    sqlx::query(
-        "INSERT OR REPLACE INTO daily_prices (
-            stock_id, date, open_price, high_price, low_price, close_price, volume,
-            data_source, last_updated
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
-    )
-    .bind(stock_id)
-    .bind(&price_data.date)
-    .bind(price_data.open)
-    .bind(price_data.high)
-    .bind(price_data.low)
-    .bind(price_data.close)
-    .bind(price_data.volume)
-    .bind(data_source)
-    .bind(chrono::Utc::now().naive_utc())
-    .execute(pool).await
-    .map_err(|e| format!("Failed to insert daily price data: {}", e))?;
-    
-    Ok(())
-}
-
-/// Batch insert daily price data for better performance
-pub async fn batch_insert_daily_prices(
-    pool: &SqlitePool,
-    stock_id: i64,
-    price_data: &[ConvertedDailyPrice],
-    data_source: &str,
-) -> Result<usize, String> {
-    let mut tx = pool.begin().await
-        .map_err(|e| format!("Failed to start transaction: {}", e))?;
-    
-    let mut inserted_count = 0;
-    let current_time = chrono::Utc::now().naive_utc();
-    
-    for price in price_data {
-        let result = sqlx::query(
-            "INSERT OR REPLACE INTO daily_prices (
-                stock_id, date, open_price, high_price, low_price, close_price, volume,
-                data_source, last_updated
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
-        )
-        .bind(stock_id)
-        .bind(&price.date)
-        .bind(price.open)
-        .bind(price.high)
-        .bind(price.low)
-        .bind(price.close)
-        .bind(price.volume)
-        .bind(data_source)
-        .bind(current_time)
-        .execute(&mut *tx).await;
-        
-        match result {
-            Ok(_) => inserted_count += 1,
-            Err(e) => {
-                eprintln!("Failed to insert price data for {}: {}", price.date, e);
-            }
-        }
-    }
-    
-    tx.commit().await
-        .map_err(|e| format!("Failed to commit transaction: {}", e))?;
-    
-    Ok(inserted_count)
-}
 
 /// Update P/E ratio for a specific stock and date
 pub async fn update_pe_ratio_for_date(

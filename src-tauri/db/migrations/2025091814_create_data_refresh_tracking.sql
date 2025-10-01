@@ -3,7 +3,7 @@
 -- Purpose: Track data refresh operations and freshness status for unified refresh system
 
 -- Table to track the status and history of data refresh operations
-CREATE TABLE data_refresh_status (
+CREATE TABLE IF NOT EXISTS data_refresh_status (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     data_source TEXT NOT NULL UNIQUE,           -- 'daily_prices', 'pe_ratios', 'financial_statements', etc.
     last_refresh_start DATETIME,
@@ -21,7 +21,7 @@ CREATE TABLE data_refresh_status (
 );
 
 -- Table to track individual refresh sessions and their progress
-CREATE TABLE refresh_progress (
+CREATE TABLE IF NOT EXISTS refresh_progress (
     session_id TEXT PRIMARY KEY,
     operation_type TEXT NOT NULL,               -- 'quick', 'standard', 'full'
     start_time DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -40,7 +40,7 @@ CREATE TABLE refresh_progress (
 );
 
 -- Table to store refresh configuration and scheduling
-CREATE TABLE refresh_configuration (
+CREATE TABLE IF NOT EXISTS refresh_configuration (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     data_source TEXT NOT NULL UNIQUE,
     refresh_frequency_hours INTEGER DEFAULT 24, -- How often to refresh (in hours)
@@ -55,24 +55,24 @@ CREATE TABLE refresh_configuration (
 );
 
 -- Indexes for performance
-CREATE INDEX idx_refresh_status_source ON data_refresh_status(data_source);
-CREATE INDEX idx_refresh_status_last_successful ON data_refresh_status(last_successful_refresh);
-CREATE INDEX idx_refresh_status_status ON data_refresh_status(refresh_status);
-CREATE INDEX idx_refresh_progress_status ON refresh_progress(status);
-CREATE INDEX idx_refresh_progress_start_time ON refresh_progress(start_time);
-CREATE INDEX idx_refresh_config_source ON refresh_configuration(data_source);
-CREATE INDEX idx_refresh_config_priority ON refresh_configuration(refresh_priority);
+CREATE INDEX IF NOT EXISTS idx_refresh_status_source ON data_refresh_status(data_source);
+CREATE INDEX IF NOT EXISTS idx_refresh_status_last_successful ON data_refresh_status(last_successful_refresh);
+CREATE INDEX IF NOT EXISTS idx_refresh_status_status ON data_refresh_status(refresh_status);
+CREATE INDEX IF NOT EXISTS idx_refresh_progress_status ON refresh_progress(status);
+CREATE INDEX IF NOT EXISTS idx_refresh_progress_start_time ON refresh_progress(start_time);
+CREATE INDEX IF NOT EXISTS idx_refresh_config_source ON refresh_configuration(data_source);
+CREATE INDEX IF NOT EXISTS idx_refresh_config_priority ON refresh_configuration(refresh_priority);
 
--- Insert default configuration for known data sources
-INSERT INTO refresh_configuration (data_source, refresh_frequency_hours, max_staleness_days, refresh_priority, estimated_duration_minutes, refresh_command) VALUES
+-- Insert default configuration for known data sources (skip if already exists)
+INSERT OR IGNORE INTO refresh_configuration (data_source, refresh_frequency_hours, max_staleness_days, refresh_priority, estimated_duration_minutes, refresh_command) VALUES
 ('daily_prices', 24, 7, 1, 15, 'import-schwab-prices'),
 ('pe_ratios', 24, 2, 2, 25, 'run_pe_calculation'),
 ('ps_evs_ratios', 168, 14, 3, 8, 'calculate-ratios'),
-('financial_statements', 720, 120, 4, 45, 'concurrent-edgar-extraction'),
+('financial_statements', 720, 120, 4, 45, 'edgar-api-client'),
 ('company_metadata', 8760, 365, 5, 2, 'update-company-metadata');
 
--- Insert initial status records for tracking
-INSERT INTO data_refresh_status (data_source, refresh_status) VALUES
+-- Insert initial status records for tracking (skip if already exists)
+INSERT OR IGNORE INTO data_refresh_status (data_source, refresh_status) VALUES
 ('daily_prices', 'unknown'),
 ('pe_ratios', 'unknown'),
 ('ps_evs_ratios', 'unknown'),
@@ -80,7 +80,7 @@ INSERT INTO data_refresh_status (data_source, refresh_status) VALUES
 ('company_metadata', 'unknown');
 
 -- Create view for easy monitoring of refresh status
-CREATE VIEW v_data_freshness_summary AS
+CREATE VIEW IF NOT EXISTS v_data_freshness_summary AS
 SELECT
     drs.data_source,
     drs.refresh_status,
@@ -123,7 +123,7 @@ LEFT JOIN refresh_configuration rc ON drs.data_source = rc.data_source
 ORDER BY rc.refresh_priority, drs.data_source;
 
 -- Create view for active refresh operations
-CREATE VIEW v_active_refresh_operations AS
+CREATE VIEW IF NOT EXISTS v_active_refresh_operations AS
 SELECT
     session_id,
     operation_type,

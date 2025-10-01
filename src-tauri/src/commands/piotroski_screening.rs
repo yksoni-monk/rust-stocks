@@ -107,12 +107,21 @@ pub async fn get_piotroski_screening_results_internal(
             current_asset_turnover,
             current_operating_cash_flow,
             pb_ratio,
-            passes_screening
+            CASE 
+                WHEN f_score_complete >= ? AND data_completeness_score >= ? THEN 1 
+                ELSE 0 
+            END as passes_screening
         FROM piotroski_screening_results
         WHERE 1=1"
     );
 
     let mut params = Vec::new();
+
+    // Add parameters for dynamic passes_screening calculation
+    let min_f_score = criteria.min_f_score.unwrap_or(6);
+    let min_completeness = criteria.min_data_completeness.unwrap_or(80);
+    params.push(min_f_score.to_string());
+    params.push(min_completeness.to_string());
 
     // Apply filters
     if let Some(min_f_score) = criteria.min_f_score {
@@ -125,9 +134,8 @@ pub async fn get_piotroski_screening_results_internal(
         params.push(min_completeness.to_string());
     }
 
-    if criteria.passes_screening_only.unwrap_or(false) {
-        query.push_str(" AND passes_screening = 1");
-    }
+    // Dynamic screening based on min_f_score instead of hardcoded passes_screening
+    // The passes_screening column is now calculated dynamically in the query
 
     if let Some(sectors) = &criteria.sectors {
         if !sectors.is_empty() {
@@ -235,7 +243,7 @@ pub async fn get_piotroski_statistics() -> Result<serde_json::Value, String> {
             AVG(data_completeness_score) as avg_completeness,
             COUNT(CASE WHEN f_score_complete >= 6 THEN 1 END) as high_quality_stocks,
             COUNT(CASE WHEN f_score_complete >= 7 THEN 1 END) as excellent_stocks,
-            COUNT(CASE WHEN passes_screening = 1 THEN 1 END) as passing_stocks
+            COUNT(CASE WHEN f_score_complete >= 6 AND data_completeness_score >= 80 THEN 1 END) as passing_stocks
         FROM piotroski_screening_results
         WHERE stock_id IN (SELECT id FROM stocks WHERE is_sp500 = 1)"
     )

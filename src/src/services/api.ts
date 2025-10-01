@@ -86,7 +86,7 @@ export const recommendationsAPI = {
     return await invoke('get_piotroski_screening_results', {
       stockTickers,
       criteria: criteria || {
-        minFScore: 7,
+        minFScore: 6,
         minDataCompleteness: 80,
         passesScreeningOnly: true
       },

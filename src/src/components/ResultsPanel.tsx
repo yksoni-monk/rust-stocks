@@ -240,8 +240,9 @@ export default function ResultsPanel(props: ResultsPanelProps) {
               <For each={recommendationsStore.recommendations()}>
                 {(rec) => (
                   <div class={`bg-white rounded-lg p-4 border-2 transition-all hover:shadow-md ${
-                    (recommendationsStore.screeningType() === 'piotroski' ? rec.passes_screening === 1 : false) 
-                      ? 'border-green-200 bg-green-50' : 'border-gray-200'
+                    rec.passes_screening === 1 
+                      ? (recommendationsStore.screeningType() === 'piotroski' ? 'border-green-200 bg-green-50' : 'border-purple-200 bg-purple-50')
+                      : 'border-gray-200'
                   }`}>
                     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                       {/* Stock Info */}
@@ -250,8 +251,10 @@ export default function ResultsPanel(props: ResultsPanelProps) {
                           <span class="text-lg font-bold text-gray-700">#{rec.rank}</span>
                           <span class="text-xl font-bold text-blue-600">{rec.symbol}</span>
                           <span class="text-gray-600">{rec.company_name}</span>
-                          <Show when={recommendationsStore.screeningType() === 'piotroski' ? rec.passes_screening === 1 : false}>
-                            <span class="bg-green-500 text-white text-xs px-2 py-1 rounded-full font-medium">
+                          <Show when={rec.passes_screening === 1}>
+                            <span class={`text-white text-xs px-2 py-1 rounded-full font-medium ${
+                              recommendationsStore.screeningType() === 'piotroski' ? 'bg-green-500' : 'bg-purple-500'
+                            }`}>
                               ✓ Recommended
                             </span>
                           </Show>

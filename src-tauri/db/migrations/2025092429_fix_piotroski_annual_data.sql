@@ -109,7 +109,8 @@ WITH financial_data AS (
         FROM cash_flow_statements
         WHERE period_type = 'Annual'
     ) prior_cashflow ON s.id = prior_cashflow.stock_id AND prior_cashflow.rn = 2
-);
+)
+SELECT * FROM financial_data;
 
 -- Create the complete Piotroski F-Score view using Annual data
 CREATE VIEW piotroski_f_score_complete AS

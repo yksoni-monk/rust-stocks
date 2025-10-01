@@ -105,7 +105,7 @@ export function createRecommendationsStore() {
   
 
   const [piotroskilCriteria, setPiotroskilCriteria] = createSignal<PiotroskilCriteria>({
-    minFScore: 7,
+    minFScore: 6,
     minDataCompleteness: 80,
     passesScreeningOnly: true,
     sectors: []

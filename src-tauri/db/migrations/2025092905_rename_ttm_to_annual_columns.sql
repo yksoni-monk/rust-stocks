@@ -30,8 +30,8 @@ INSERT INTO daily_valuation_ratios_new (
 )
 SELECT 
     stock_id, date, price, market_cap, enterprise_value,
-    ps_ratio_ttm, evs_ratio_ttm, pb_ratio_ttm, pcf_ratio_annual, 
-    ev_ebitda_ratio_annual, shareholder_yield_annual, revenue_ttm,
+    ps_ratio_annual, evs_ratio_annual, pb_ratio_annual, pcf_ratio_annual, 
+    ev_ebitda_ratio_annual, shareholder_yield_annual, revenue_annual,
     data_completeness_score, last_financial_update
 FROM daily_valuation_ratios;
 

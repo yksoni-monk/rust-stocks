@@ -5,9 +5,7 @@ use std::time::Duration;
 use crate::models::{SchwabQuote, SchwabPriceBar};
 
 pub mod schwab_client;
-pub mod alpha_vantage_client;
 pub use schwab_client::SchwabClient;
-pub use alpha_vantage_client::AlphaVantageClient;
 
 /// Simple rate limiter for API requests
 pub struct ApiRateLimiter {

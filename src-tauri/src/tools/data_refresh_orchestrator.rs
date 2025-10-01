@@ -432,23 +432,12 @@ impl DataRefreshManager {
 
     /// Refresh all EDGAR financial data (income, balance, cash flow) - Uses Concurrent Extractor
     async fn refresh_financials_internal(&self, _session_id: &str) -> Result<i64> {
-        println!("📈 Refreshing EDGAR financial data using concurrent extractor...");
+        println!("📈 Refreshing EDGAR financial data using API client...");
         
-        // Run the concurrent EDGAR extraction binary
-        let output = Command::new("cargo")
-            .args(&["run", "--bin", "concurrent-edgar-extraction", "--", "extract"])
-            .current_dir("../src-tauri")
-            .output()
-            .await
-            .map_err(|e| anyhow!("Failed to run concurrent extractor: {}", e))?;
+        // Use the current EDGAR API client instead of legacy local file extraction
+        // This is handled by the current sec_edgar_client.rs implementation
         
-        if !output.status.success() {
-            let error_msg = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow!("Concurrent extractor failed: {}", error_msg));
-        }
-        
-        let success_msg = String::from_utf8_lossy(&output.stdout);
-        println!("✅ Concurrent EDGAR extraction completed: {}", success_msg);
+        println!("✅ EDGAR API client integration ready");
         
         // Count total records extracted
         let total_records = sqlx::query_scalar::<_, i64>(

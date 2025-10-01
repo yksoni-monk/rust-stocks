@@ -6,10 +6,10 @@ A high-performance desktop application for stock analysis using Tauri (Rust back
 ## Current System Architecture
 
 ### Technology Stack
-- **Frontend**: React with JSX, modern JavaScript ES6+, expandable panels UI
+- **Frontend**: SolidJS with TypeScript, signal-based reactivity, expandable panels UI
 - **Backend**: Rust with Tauri framework 
 - **Database**: SQLite for local persistence
-- **Data Source**: SimFin CSV import system (offline-first)
+- **Data Source**: EDGAR API integration (current) + SimFin CSV import system (legacy)
 - **Future API Integration**: Charles Schwab API (for real-time quotes and options)
 - **Desktop Framework**: Tauri for cross-platform desktop application
 - **UI Framework**: Web-based interface rendered in Tauri webview
@@ -20,74 +20,70 @@ A high-performance desktop application for stock analysis using Tauri (Rust back
 ┌──────────────────────────────────────────────────────────────┐
 │                 Stock Analysis Desktop App                   │
 ├──────────────────────────────────────────────────────────────┤
-│  React Frontend (JSX) ←→ Tauri IPC ←→ Rust Backend          │
+│  SolidJS Frontend (TSX) ←→ Tauri IPC ←→ Rust Backend        │
 │         ↓                              ↓                     │
 │  [Expandable Panels UI]       [Tauri Commands]               │
 │  [Stock Row Management]       [Database Manager]             │
-│  [Data Visualization]         [SimFin Importer]              │
+│  [Data Visualization]         [EDGAR API Client]             │
 │  [User-Driven Analysis]       [Analysis Engine]              │
 │                              [Future: Schwab API]            │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-## Current Data Architecture - SimFin Offline System
+## Current Data Architecture - EDGAR API Integration
 
-The system uses SimFin CSV data for comprehensive historical stock analysis:
+The system uses SEC EDGAR API for comprehensive financial data with offline-first architecture:
 
-### SimFin Data Import System
+### EDGAR API Data System
 
 #### 1. Data Sources
-- **Daily Prices CSV**: `us-shareprices-daily.csv` (~6.2M records, 5,876+ stocks, 2019-2024)
-- **Quarterly Financials CSV**: `us-income-quarterly.csv` (~52k financial records)
-- **Coverage**: Professional-grade financial data for 5,000+ US companies
-- **Update Frequency**: Manual import of fresh CSV data
+- **SEC EDGAR Company Facts API**: Real-time financial statements (Income, Balance Sheet, Cash Flow)
+- **S&P 500 Coverage**: 503 stocks with comprehensive financial data
+- **Data Types**: Annual and Quarterly financial statements
+- **Update Frequency**: Real-time API calls with local caching
 
-#### 2. Import Process
-**Phase 1**: Stock Discovery
-- Extract unique stocks from daily prices CSV
-- Create stock records with SimFin IDs and symbols
+#### 2. Data Processing
+**Phase 1**: S&P 500 Symbol Management
+- Fetch S&P 500 symbols from GitHub repository
+- Maintain local symbol database with sector/industry classification
+- Update symbols quarterly
 
-**Phase 2**: Daily Price Import
-- Batch import of OHLCV data with shares outstanding
-- 10,000 record batches for performance
-- Progress tracking with real-time feedback
+**Phase 2**: EDGAR Financial Data Extraction
+- Real-time API calls to SEC EDGAR Company Facts API
+- Extract Income Statements, Balance Sheets, Cash Flow Statements
+- Store both Annual and Quarterly data for multi-year analysis
 
-**Phase 3**: Quarterly Financials Import
-- Comprehensive income statement data
-- Revenue, expenses, net income, shares outstanding
-- Fiscal year and period tracking
+**Phase 3**: Financial Ratio Calculations
+- Calculate Piotroski F-Score (9 criteria across profitability, leverage, efficiency)
+- Calculate O'Shaughnessy Value Composite (6 metrics: P/B, P/S, P/CF, P/E, EV/EBITDA, Shareholder Yield)
+- Multi-year comparisons for trend analysis
 
-**Phase 4**: EPS Calculation
-- Automated EPS calculation: Net Income ÷ Diluted Shares Outstanding
-- Stored in quarterly_financials table
+**Phase 4**: Data Quality Assessment
+- Calculate data completeness scores
+- Validate financial statement consistency
+- Generate data freshness reports
 
-**Phase 5**: P/E Ratio Calculation
-- Automated P/E calculation: Close Price ÷ Latest Available EPS
-- Applied to all historical daily prices
-
-**Phase 6**: Performance Indexing
-- Create database indexes for fast queries
-- Optimize for analysis and visualization
+**Phase 5**: Performance Optimization
+- Create database indexes for fast screening queries
+- Optimize for real-time analysis and visualization
 
 #### 3. Current Data Coverage
-**Price Data:**
-- Open, High, Low, Close prices (daily)
-- Volume and shares outstanding
-- Complete historical coverage 2019-2024
-- ~6.2M price records across 5,876+ stocks
+**Financial Data:**
+- Income Statements: Revenue, Net Income, Operating Income, Gross Profit
+- Balance Sheets: Total Assets, Total Equity, Current Assets, Current Liabilities
+- Cash Flow Statements: Operating Cash Flow, Investing Cash Flow, Financing Cash Flow
+- Multi-year coverage: 5+ years of historical data for trend analysis
 
-**Fundamental Data:**
-- Revenue and cost metrics
-- Operating and net income
-- Shares basic and diluted
-- Calculated EPS values
-- Calculated P/E ratios
-- Comprehensive quarterly coverage
+**Screening Algorithms:**
+- Piotroski F-Score: 9-criteria financial strength scoring
+- O'Shaughnessy Value: 6-metric value composite screening
+- Data completeness scoring for quality assessment
+- Real-time screening with dynamic criteria
 
-### Current Database Schema (SimFin-Based)
+### Current Database Schema (EDGAR-Based)
 
 ```sql
--- Stocks table with SimFin integration
+-- Stocks table with S&P 500 integration
 CREATE TABLE stocks (
     id INTEGER PRIMARY KEY,
     symbol TEXT UNIQUE NOT NULL,
@@ -101,100 +97,65 @@ CREATE TABLE stocks (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     currency TEXT DEFAULT 'USD',
     shares_outstanding INTEGER,
-    simfin_id INTEGER  -- SimFin unique identifier
+    is_sp500 INTEGER DEFAULT 0  -- S&P 500 flag
 );
 
--- Daily prices with calculated fundamentals
-CREATE TABLE daily_prices (
+-- Financial statements from EDGAR API
+CREATE TABLE financial_statements (
     id INTEGER PRIMARY KEY,
     stock_id INTEGER NOT NULL,
-    date DATE NOT NULL,
-    open_price REAL NOT NULL,
-    high_price REAL NOT NULL,
-    low_price REAL NOT NULL,
-    close_price REAL NOT NULL,
-    volume INTEGER,
-    
-    -- Calculated fundamental ratios
-    pe_ratio REAL,           -- Calculated: Close Price ÷ Latest EPS
-    market_cap REAL,
-    dividend_yield REAL,
-    eps REAL,
-    beta REAL,
-    week_52_high REAL,
-    week_52_low REAL,
-    pb_ratio REAL,
-    ps_ratio REAL,
-    shares_outstanding REAL,
-    profit_margin REAL,
-    operating_margin REAL,
-    return_on_equity REAL,
-    return_on_assets REAL,
-    debt_to_equity REAL,
-    dividend_per_share REAL,
-    
-    data_source TEXT DEFAULT 'simfin',  -- Track data source
-    last_updated DATETIME,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (stock_id) REFERENCES stocks(id),
-    UNIQUE(stock_id, date)
-);
-
--- Quarterly financials from SimFin
-CREATE TABLE quarterly_financials (
-    id INTEGER PRIMARY KEY,
-    stock_id INTEGER NOT NULL,
-    simfin_id INTEGER NOT NULL,
-    currency TEXT NOT NULL DEFAULT 'USD',
-    fiscal_year INTEGER NOT NULL,
-    fiscal_period TEXT NOT NULL, -- Q1, Q2, Q3, Q4
+    statement_type TEXT NOT NULL, -- 'income', 'balance', 'cash_flow'
+    period_type TEXT NOT NULL,    -- 'Annual', 'Quarterly'
+    fiscal_year INTEGER,
+    fiscal_period TEXT,           -- 'Q1', 'Q2', 'Q3', 'Q4' for quarterly
     report_date DATE NOT NULL,
-    publish_date DATE,
-    restated_date DATE,
     
-    -- Share Information
-    shares_basic INTEGER,
-    shares_diluted INTEGER,
+    -- Financial metrics (JSON blob for flexibility)
+    metrics TEXT NOT NULL,        -- JSON containing all financial data
     
-    -- Income Statement Metrics
-    revenue REAL,
-    cost_of_revenue REAL,
-    gross_profit REAL,
-    operating_expenses REAL,
-    selling_general_admin REAL,
-    research_development REAL,
-    depreciation_amortization REAL,
-    operating_income REAL,
-    non_operating_income REAL,
-    interest_expense_net REAL,
-    pretax_income_adj REAL,
-    pretax_income REAL,
-    income_tax_expense REAL,
-    income_continuing_ops REAL,
-    net_extraordinary_gains REAL,
-    net_income REAL,
-    net_income_common REAL,
-    
-    -- Calculated EPS
-    eps_calculated REAL, -- Net Income ÷ Diluted Shares Outstanding
-    eps_calculation_date DATETIME,
+    -- EDGAR metadata
+    edgar_accession TEXT,
+    edgar_form TEXT,
+    edgar_filed_date DATE,
     
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (stock_id) REFERENCES stocks(id),
-    UNIQUE(stock_id, fiscal_year, fiscal_period)
+    UNIQUE(stock_id, statement_type, period_type, fiscal_year, fiscal_period)
 );
 
--- Earnings data and processing status tables
-CREATE TABLE earnings_data (...);
-CREATE TABLE processing_status (...);
+-- Screening results and calculated metrics
+CREATE TABLE screening_results (
+    id INTEGER PRIMARY KEY,
+    stock_id INTEGER NOT NULL,
+    screening_type TEXT NOT NULL, -- 'piotroski', 'oshaughnessy'
+    
+    -- Piotroski F-Score results
+    f_score_complete INTEGER,
+    profitability_score INTEGER,
+    leverage_score INTEGER,
+    efficiency_score INTEGER,
+    
+    -- O'Shaughnessy Value results
+    composite_score REAL,
+    composite_percentile REAL,
+    overall_rank INTEGER,
+    
+    -- Data quality
+    data_completeness_score INTEGER,
+    passes_screening INTEGER, -- 0 or 1
+    
+    -- Metadata
+    calculated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (stock_id) REFERENCES stocks(id),
+    UNIQUE(stock_id, screening_type)
+);
 
 -- Performance indexes for fast analysis
-CREATE INDEX idx_stocks_simfin_id ON stocks(simfin_id);
-CREATE INDEX idx_daily_prices_stock_date ON daily_prices(stock_id, date);
-CREATE INDEX idx_daily_prices_pe_ratio ON daily_prices(pe_ratio);
-CREATE INDEX idx_quarterly_financials_eps ON quarterly_financials(eps_calculated);
-CREATE INDEX idx_quarterly_financials_stock_period ON quarterly_financials(stock_id, fiscal_year, fiscal_period);
+CREATE INDEX idx_stocks_sp500 ON stocks(is_sp500);
+CREATE INDEX idx_financial_statements_stock_type ON financial_statements(stock_id, statement_type);
+CREATE INDEX idx_financial_statements_period ON financial_statements(period_type, fiscal_year, fiscal_period);
+CREATE INDEX idx_screening_results_type ON screening_results(screening_type);
+CREATE INDEX idx_screening_results_score ON screening_results(f_score_complete, composite_score);
 ```
 
 ### Future Schema Extensions (Schwab API)
@@ -230,12 +191,12 @@ CREATE TABLE option_chains (
 );
 ```
 
-## Frontend Architecture (Updated - SolidJS)
+## Frontend Architecture (SolidJS)
 
-**Status**: ✅ **Migrated to SolidJS** (September 2025) - Solved React infinite re-rendering issues
+**Status**: ✅ **SolidJS Implementation** (September 2025) - Modern reactive frontend
 
 ### Technology Stack
-- **UI Framework**: SolidJS 1.9.9 (migrated from React 19.1.1)
+- **UI Framework**: SolidJS 1.9.9 with TypeScript
 - **Build Tool**: Vite 7.1.5 with vite-plugin-solid
 - **Styling**: Tailwind CSS 3.4.0
 - **Language**: TypeScript with JSX preserve mode
@@ -249,25 +210,23 @@ CREATE TABLE option_chains (
 - **Performance**: Direct DOM updates without virtual DOM overhead
 
 ### Key Components
-- `App.tsx` - Main application with search, filtering, and panel management
-- `StockRow.tsx` - Individual stock display with expandable analysis
-- `RecommendationsPanel.tsx` - Stock screening algorithms (GARP, P/S, P/E)
-- `AnalysisPanel.tsx` - Detailed stock analysis and historical data
-- `DataFetchingPanel.tsx` - System status and database statistics
+- `App.tsx` - Main application with screening interface
+- `HeroSection.tsx` - Screening method selection and criteria
+- `ResultsPanel.tsx` - Stock screening results display
+- `StockBrowser.tsx` - Individual stock analysis
+- `SimpleDataManagement.tsx` - Data refresh and system status
 
 ### State Stores
-- `stockStore.ts` - Stock data, search, pagination, S&P 500 filtering
 - `recommendationsStore.ts` - Screening algorithms, criteria, results
+- `dataRefreshStore.ts` - Data refresh status and operations
 - `uiStore.ts` - Panel visibility, modals, notifications
 
-### Migration Benefits
-- **Eliminated infinite re-rendering loops** that plagued React implementation
-- **50% smaller bundle size** (50KB vs 80KB+)
-- **Fine-grained reactivity** - only update what actually changes
-- **Simplified state management** - no useEffect dependency hell
-- **Better TypeScript integration** and development experience
-
-*For detailed documentation, see `context/SOLIDJS_FRONTEND_ARCHITECTURE.md` and `context/FRONTEND_MIGRATION_HISTORY.md`*
+### Key Features
+- **Piotroski F-Score Screening**: 9-criteria financial strength analysis
+- **O'Shaughnessy Value Screening**: 6-metric value composite analysis
+- **Real-time Results**: Dynamic screening with configurable criteria
+- **Data Quality Indicators**: Completeness scores and freshness status
+- **Responsive Design**: Modern UI with smooth animations
 
 ## Event-Driven Data Refresh Architecture
 

@@ -1,13 +1,14 @@
 # Rust Stocks Analysis System
 
-🚨 **CLAUDE: PRODUCTION DATABASE IS `src-tauri/db/stocks.db` (2.5GB)** 🚨
+🚨 **PRODUCTION DATABASE IS `src-tauri/db/stocks.db` (2.5GB)** 🚨
 
-A high-performance desktop application for stock analysis using Tauri (Rust backend + React frontend) with offline-first architecture. Features comprehensive stock data from SimFin, expandable panels UI, and enterprise-grade database safeguards.
+A high-performance desktop application for stock analysis using Tauri (Rust backend + SolidJS frontend) with EDGAR API integration. Features comprehensive financial data, advanced screening algorithms, and enterprise-grade database safeguards.
 
-## 📊 P/S & EV/S Ratio System (COMPLETED)
-✅ **3,294 P/S and EV/S ratios** calculated for stocks where P/E ratios are invalid due to negative earnings
-✅ **54,160 TTM financial statements** imported from SimFin data
-✅ **96.4% data completeness** - production ready
+## 📊 Advanced Screening Algorithms (PRODUCTION READY)
+✅ **Piotroski F-Score**: 9-criteria financial strength scoring for S&P 500 stocks
+✅ **O'Shaughnessy Value**: 6-metric value composite screening with dynamic ranking
+✅ **EDGAR API Integration**: Real-time financial data from SEC filings
+✅ **Data Quality Assessment**: Completeness scoring and freshness monitoring
 
 ## 🚀 Quick Start - Desktop Application
 
@@ -15,91 +16,153 @@ A high-performance desktop application for stock analysis using Tauri (Rust back
 # Clone and run the Tauri desktop application
 git clone <repo>
 cd rust-stocks
-npm run tauri:dev
+npm run tauri dev
 ```
 
-**That's it!** The modern desktop application with expandable panels UI will open automatically.
+**That's it!** The modern desktop application with advanced screening algorithms will open automatically.
 
 ## 🎯 Project Overview
 
 This system provides comprehensive stock market data analysis capabilities, featuring:
-- ✅ **Offline-First Architecture**: 5,876+ stocks with comprehensive historical data (2019-2024)
-- ✅ **SimFin Data Integration**: Professional-grade financial data with automated import
-- ✅ **Expandable Panels UI**: Modern single-page interface with contextual expansion
-- ✅ **User-Driven Analysis**: Dynamic metric selection (P/E, EPS, Price, Volume, etc.)
+- ✅ **EDGAR API Integration**: Real-time financial data from SEC filings
+- ✅ **Advanced Screening Algorithms**: Piotroski F-Score and O'Shaughnessy Value methods
+- ✅ **SolidJS Frontend**: Modern reactive UI with TypeScript
+- ✅ **S&P 500 Focus**: Comprehensive coverage of 503 S&P 500 stocks
 - ✅ **Enterprise Database Safeguards**: Production-grade backup and migration system
-- ✅ **High-Performance Processing**: 6.2M price records + 52k+ financial records
-- ✅ **S&P 500 Support**: Integrated filtering and offline symbol management
+- ✅ **Data Quality Assessment**: Completeness scoring and freshness monitoring
+- ✅ **Dynamic Screening**: Configurable criteria with real-time results
 
 ## 🎯 Product Features
 
-### 📊 Value Screening & Analysis
-- **Dual Screening Methods**: P/E ratio (historical) and P/S ratio (TTM) based value screening
-- **P/S Ratio Screening**: Find undervalued stocks with customizable P/S thresholds (0.1-5.0)
-- **P/E Historical Analysis**: Identify stocks trading near historical P/E minimums  
-- **Value Recommendations**: AI-powered scoring system with value/risk assessment
-- **Real-Time Statistics**: Live stats showing screening results and data quality metrics
+### 📊 Advanced Screening & Analysis
+- **Piotroski F-Score**: 9-criteria financial strength scoring (profitability, leverage, efficiency)
+- **O'Shaughnessy Value**: 6-metric value composite screening (P/B, P/S, P/CF, P/E, EV/EBITDA, Shareholder Yield)
+- **Dynamic Criteria**: Configurable screening thresholds with real-time updates
+- **Data Quality Scoring**: Completeness assessment for reliable analysis
+- **S&P 500 Focus**: Comprehensive coverage of 503 S&P 500 stocks
 
 ### 📈 Interactive Stock Analysis
-- **Multi-Metric Visualization**: Price history, P/E trends, P/S ratios, EV/S ratios, volume analysis
-- **Mix Mode Charts**: Dual-axis visualization (Price + P/E, P/S + EV/S) for comprehensive analysis
-- **Historical Data Range**: 2019-2024 daily price data with quarterly financial statements
-- **Chart Export**: Export visualizations and data for external analysis
-- **Date Range Selection**: Flexible time period analysis for any stock
+- **Screening Results Display**: Real-time results with detailed metrics and reasoning
+- **Data Quality Indicators**: Completeness scores and freshness status
+- **Individual Stock Analysis**: Detailed financial metrics and historical data
+- **Export Capabilities**: Export screening results and analysis data
+- **Responsive Design**: Modern UI with smooth animations and professional styling
 
-### 🔍 Advanced Search & Filtering  
-- **Smart Stock Search**: Search by symbol or company name with real-time results
-- **S&P 500 Filtering**: Toggle between all 5,876+ stocks or S&P 500 subset (503 stocks)
-- **Data Status Indicators**: Visual indicators showing stocks with complete data (📊) vs limited data (📋)
-- **Paginated Results**: Efficient loading of large datasets with customizable page sizes
-- **Multiple Panel Support**: Compare multiple stocks side-by-side in expandable panels
+### 🔍 Data Management & System Status
+- **Data Refresh System**: Real-time data updates from EDGAR API
+- **System Status Monitoring**: Data freshness and completeness tracking
+- **S&P 500 Symbol Management**: Automatic symbol updates and sector classification
+- **Database Health Monitoring**: Production database safeguards and backup system
+- **Error Handling**: Comprehensive error reporting and recovery mechanisms
 
 ### 💼 Professional Data Integration
-- **SimFin Financial Data**: Professional-grade financial statements and ratios
-- **TTM Calculations**: Trailing twelve months data for P/S, EV/S ratios (3,294+ ratios available)
-- **96.4% Data Completeness**: High-quality dataset with comprehensive coverage
-- **Offline-First Architecture**: Full functionality without internet connectivity
-- **Enterprise Database**: 2.5GB production database with automated backup system
+- **SEC EDGAR API**: Real-time financial data from official SEC filings
+- **Multi-Year Financial Data**: 5+ years of historical financial statements
+- **Data Quality Assessment**: Completeness scoring and validation
+- **Production Database**: 2.5GB database with enterprise-grade safeguards
+- **Automated Backup System**: Timestamped backups with integrity verification
 
 ### 🖥️ Modern Desktop Experience
-- **Tauri Desktop App**: Native performance with web technologies (Rust + React)
-- **Expandable Panels UI**: Single-page interface with contextual expansion
+- **Tauri Desktop App**: Native performance with web technologies (Rust + SolidJS)
+- **SolidJS Frontend**: Modern reactive UI with TypeScript
 - **Responsive Design**: Smooth animations and professional user interface
 - **Cross-Platform**: Windows, macOS, and Linux support
-- **Real-Time Updates**: Live data loading with loading states and error handling
+- **Real-Time Updates**: Live screening results with dynamic criteria updates
 
 ### 📤 Data Export & Integration
-- **Multiple Export Formats**: CSV and JSON export for any analysis view
-- **Recommendation Reports**: Export value screening results with detailed metrics
-- **Chart Data Export**: Export underlying data from any visualization
+- **Screening Results Export**: Export Piotroski and O'Shaughnessy screening results
+- **Financial Data Export**: Export underlying financial statement data
+- **Data Quality Reports**: Export completeness and freshness reports
 - **Future API Integration**: Charles Schwab API integration planned for real-time quotes
 
-## 🛠️ Setup & Data Import
+## 🛠️ Setup & Installation
 
 ### Prerequisites
 - **Node.js and npm** (for Tauri desktop application)
 - **Rust** (latest stable version)
-- **SimFin CSV data files** (for comprehensive stock data)
 - **SQLite** (bundled with the application)
+- **Python 3** (for Schwab API authentication)
+- **Schwab API credentials** (from [Schwab Developer Portal](https://developer.schwab.com/))
 
 ### Setup
 1. Clone the repository
-2. Download SimFin data files (us-shareprices-daily.csv, us-income-quarterly.csv)
-3. Import data using the SimFin importer:
+2. Install dependencies:
    ```bash
-   cargo run --bin import-simfin -- \
-     --prices ~/simfin_data/us-shareprices-daily.csv \
-     --income ~/simfin_data/us-income-quarterly.csv \
-     --db stocks.db
+   npm install
    ```
-4. Build the project:
+3. Configure environment variables:
+   ```bash
+   cp .env.example .env
+   # Edit .env with your actual Schwab API credentials
+   ```
+4. Install Python dependencies for Schwab API:
+   ```bash
+   pip install schwab-py
+   ```
+5. Authenticate with Schwab API:
+   ```bash
+   python3 refresh_token.py --auth
+   ```
+6. Build the project:
    ```bash
    cargo build --release
    ```
-5. Run the desktop application:
+7. Run the desktop application:
    ```bash
    npm run tauri:dev
    ```
+
+The application will automatically fetch S&P 500 symbols and connect to the EDGAR API for financial data.
+
+### First-Time Setup (Database Initialization)
+If you're running the project for the first time, you'll need to initialize the database:
+
+1. **Check database status**:
+   ```bash
+   cd src-tauri
+   cargo run --bin db_admin -- status
+   ```
+
+2. **Run database migrations** (if needed):
+   ```bash
+   cd src-tauri
+   cargo run --bin db_admin -- migrate --confirm
+   ```
+
+3. **Refresh data** (to populate with S&P 500 data):
+   ```bash
+   cd src-tauri
+   cargo run --bin refresh_data -- financials
+   cargo run --bin refresh_data -- ratios
+   ```
+
+**Note**: The first data refresh may take 15-30 minutes as it downloads financial data from the SEC EDGAR API for all S&P 500 stocks.
+
+### Schwab API Setup
+To use the market data refresh functionality, you'll need to set up Schwab API credentials:
+
+1. **Get Schwab API credentials**:
+   - Visit [Schwab Developer Portal](https://developer.schwab.com/)
+   - Create an account and register your application
+   - Copy your API Key and App Secret
+
+2. **Configure credentials**:
+   - Edit `.env` file with your actual Schwab API credentials
+   - Update `PROJECT_ROOT` with your actual project path
+
+3. **Authenticate** (one-time setup):
+   ```bash
+   python3 refresh_token.py --auth
+   ```
+   - Follow the browser authentication flow
+   - Paste the redirect URL when prompted
+
+4. **Refresh tokens** (as needed):
+   ```bash
+   python3 refresh_token.py --refresh
+   ```
+
+**Note**: Schwab API tokens expire and need periodic refresh. The system will automatically refresh tokens when needed.
 
 ## 🔒 Database Administration & Safety
 
@@ -142,125 +205,70 @@ cargo run --bin db_admin -- verify
 - 🚨 **Rollback Support**: Easy restoration from timestamped backups
 - 📊 **Health Monitoring**: Real-time database statistics and alerts
 
-## 📊 SimFin Data Import System
+## 📊 EDGAR API Data System
 
-### Import Process Overview
-The system uses a 6-phase automated import process:
+### Data Processing Overview
+The system uses real-time EDGAR API integration with automated data processing:
 
-1. **Phase 1**: Extract unique stocks from daily prices CSV
-2. **Phase 2**: Import daily price records (OHLCV + shares outstanding)
-3. **Phase 3**: Import quarterly financial statements 
-4. **Phase 4**: Calculate EPS (Net Income ÷ Diluted Shares Outstanding)
-5. **Phase 5**: Calculate P/E ratios (Close Price ÷ Latest Available EPS)
-6. **Phase 6**: Create performance indexes for fast queries
-
-### Import Commands
-
-#### Recommended Usage (From Project Root)
-```bash
-# Full import from project root directory
-cargo run --bin import-simfin -- \
-  --prices ~/simfin_data/us-shareprices-daily.csv \
-  --income ~/simfin_data/us-income-quarterly.csv \
-  --db stocks.db
-
-# With custom batch size for performance tuning
-cargo run --bin import-simfin -- \
-  --prices ~/simfin_data/us-shareprices-daily.csv \
-  --income ~/simfin_data/us-income-quarterly.csv \
-  --db stocks.db \
-  --batch-size 5000
-
-# Show help and all available options
-cargo run --bin import-simfin -- --help
-```
-
-#### Alternative: Direct Method (From src-tauri Directory)
-```bash
-cd src-tauri
-cargo run --bin import_simfin -- \
-  --prices ~/simfin_data/us-shareprices-daily.csv \
-  --income ~/simfin_data/us-income-quarterly.csv \
-  --db ../stocks.db
-```
-
-#### Command Parameter Details
-- `cargo run --bin import-simfin` - Runs the SimFin import tool
-- `--` - **IMPORTANT**: Separates Cargo's arguments from application arguments
-- `--prices [file]` - Path to daily prices CSV (semicolon-delimited)
-- `--income [file]` - Path to quarterly income CSV (semicolon-delimited)  
-- `--db [file]` - Path to SQLite database (optional, defaults to `./stocks.db`)
-- `--batch-size [size]` - Records per batch (optional, defaults to 10,000)
-
-### Expected Performance & Data
-- **Processing Time**: 15-30 minutes for full dataset
-- **Daily Prices**: ~6.2M records, 5,876+ stocks, 2019-2024
-- **Quarterly Income**: ~52k financial records with comprehensive metrics
-- **Final Database Size**: 2-3 GB
-- **Stock Coverage**: 5,876+ companies with complete historical data
+1. **S&P 500 Symbol Management**: Automatic symbol updates from GitHub repository
+2. **EDGAR Financial Data Extraction**: Real-time API calls to SEC Company Facts API
+3. **Financial Ratio Calculations**: Piotroski F-Score and O'Shaughnessy Value calculations
+4. **Data Quality Assessment**: Completeness scoring and validation
+5. **Performance Optimization**: Database indexing for fast screening queries
 
 ### Data Sources & Quality
-- **SimFin**: High-quality financial data for 5,000+ companies
-- **Coverage**: US stocks with comprehensive historical data
-- **Frequency**: Daily prices, quarterly financials
-- **Quality**: Professional-grade data used by financial institutions
-- **Format**: Semicolon-delimited CSV files (SimFin standard)
+- **SEC EDGAR API**: Official financial data from SEC filings
+- **Coverage**: S&P 500 stocks with comprehensive financial data
+- **Frequency**: Real-time API calls with local caching
+- **Quality**: Official SEC data used by financial institutions
+- **Format**: JSON API responses with structured financial data
 
-### Troubleshooting
+### Data Refresh Commands
 
-#### Command Issues
+#### Data Refresh (From src-tauri directory)
 ```bash
-# If command not found, ensure you're in the right directory
-cd /Users/yksoni/code/misc/rust-stocks
+cd src-tauri
 
-# Build the binary first if needed
-cargo build --bin import_simfin
+# Refresh all data (market, financials, ratios)
+cargo run --bin refresh_data -- all
+
+# Refresh specific data types
+cargo run --bin refresh_data -- market
+cargo run --bin refresh_data -- financials
+cargo run --bin refresh_data -- ratios
+
+# Show help and all available options
+cargo run --bin refresh_data -- --help
 ```
 
-#### CSV Format Issues
-- Ensure CSVs use semicolon (`;`) delimiters (SimFin format)
-- Check that file paths are correct and files exist
-- Verify CSV headers match expected SimFin format
-
-#### Database Issues
-- Ensure database schema is compatible (use db_admin tool)
-- Check disk space (need ~3GB free for import + processing)
-- Make sure no other processes are using the database file
-- Use backup system before importing: `cargo run --bin db_admin -- backup`
-
-#### Alternative Binary Usage
-```bash
-# Build and run directly (if needed)
-cargo build --bin import_simfin
-./target/debug/import_simfin \
-  --prices ~/simfin_data/us-shareprices-daily.csv \
-  --income ~/simfin_data/us-income-quarterly.csv \
-  --db stocks.db
-```
+### Expected Performance & Data
+- **Processing Time**: 5-15 minutes for full S&P 500 refresh
+- **Financial Data**: ~503 stocks with comprehensive financial statements
+- **Database Size**: 2.5GB with complete historical data
+- **Stock Coverage**: S&P 500 companies with 5+ years of data
 
 ## 🎨 Application Features
 
 ### Modern Desktop Interface
-- **Expandable Panels UI**: Single-page interface with contextual expansion
-- **User-Driven Analysis**: Dynamic metric selection (P/E, EPS, Price, Volume, etc.)
-- **S&P 500 Filtering**: Toggle between all stocks and S&P 500 subset
-- **Real-Time Search**: Search stocks by symbol or company name  
-- **Paginated Loading**: Efficient loading of large datasets
-- **Visual Indicators**: 📊 for stocks with data, 📋 for no data
-- **Multiple Panel Support**: Compare stocks side-by-side
+- **SolidJS Frontend**: Modern reactive UI with TypeScript
+- **Screening Interface**: Piotroski F-Score and O'Shaughnessy Value methods
+- **Real-Time Results**: Dynamic screening with configurable criteria
+- **Data Quality Indicators**: Completeness scores and freshness status
+- **Responsive Design**: Smooth animations and professional styling
+- **Cross-Platform**: Desktop application for Windows, macOS, Linux
 
 ### Stock Analysis Capabilities
-- **Price History Visualization**: Interactive charts with historical data
-- **Fundamental Analysis**: P/E ratios, EPS, market cap, financial metrics
-- **Comparative Analysis**: Multiple stocks expanded simultaneously
-- **Data Export**: CSV and JSON export for any selected view
-- **Offline Operation**: Full functionality without internet connectivity
+- **Advanced Screening**: 9-criteria Piotroski F-Score and 6-metric O'Shaughnessy Value
+- **Data Quality Assessment**: Completeness scoring and validation
+- **Individual Stock Analysis**: Detailed financial metrics and historical data
+- **Export Capabilities**: Export screening results and analysis data
+- **Real-Time Updates**: Live data refresh from EDGAR API
 
 ### Technical Features
-- **High Performance**: Handles 6.2M+ price records smoothly
-- **Professional UI**: Smooth animations and responsive design
+- **High Performance**: Handles S&P 500 screening with real-time results
+- **Professional UI**: Modern design with smooth animations
 - **Production Ready**: Enterprise-grade database safeguards
-- **Cross-Platform**: Desktop application for Windows, macOS, Linux
+- **TypeScript Integration**: Full type safety across frontend and backend
 
 ## 🛠️ Available Commands
 
@@ -269,18 +277,28 @@ cargo build --bin import_simfin
 # Run desktop application  
 npm run tauri:dev
 
-# Run database admin tool
+# Run database admin tool (from src-tauri directory)
+cd src-tauri
 cargo run --bin db_admin -- status
 cargo run --bin db_admin -- backup  
 cargo run --bin db_admin -- migrate --confirm
 cargo run --bin db_admin -- verify
 
-# Import SimFin data
-cargo run --bin import-simfin -- --help
+# Data refresh commands (from src-tauri directory)
+cd src-tauri
+cargo run --bin refresh_data -- --help
+cargo run --bin refresh_data -- financials
+cargo run --bin refresh_data -- ratios
+
+# Schwab API token management
+python3 refresh_token.py --auth    # Initial authentication
+python3 refresh_token.py --refresh # Refresh expired tokens
 ```
 
-### Database Commands  
+### Database Commands (from src-tauri directory)
 ```bash
+cd src-tauri
+
 # Check database status
 cargo run --bin db_admin -- status
 
@@ -297,18 +315,18 @@ cargo run --bin db_admin -- verify
 ## 🏗️ Architecture
 
 ### Technology Stack
-- **Frontend**: React with JSX, expandable panels UI
+- **Frontend**: SolidJS with TypeScript, reactive UI
 - **Backend**: Rust with Tauri framework
 - **Database**: SQLite with professional-grade safeguards
-- **Data Source**: SimFin CSV import system (offline-first)
+- **Data Source**: SEC EDGAR API integration (real-time)
 - **Future Integration**: Charles Schwab API (for real-time quotes and options)
 
 ### Key Components
-- **SimFin Importer**: 6-phase automated data import
+- **EDGAR API Client**: Real-time financial data extraction
 - **Database Manager**: Enterprise-grade backup and migration system
-- **Expandable Panels UI**: Modern single-page interface
-- **Analysis Engine**: Dynamic metric calculations and visualizations
-- **S&P 500 Integration**: Offline symbol management and filtering
+- **Screening Engine**: Piotroski F-Score and O'Shaughnessy Value algorithms
+- **Data Quality System**: Completeness scoring and validation
+- **S&P 500 Integration**: Symbol management and sector classification
 
 ## 📚 Documentation
 
@@ -316,14 +334,14 @@ All documentation is centralized in this README for simplicity:
 
 - **Setup & Installation**: See sections above for complete setup guide
 - **Database Administration**: Enterprise-grade backup and migration tools
-- **SimFin Data Import**: Comprehensive import system with troubleshooting
-- **Application Features**: Modern expandable panels UI and analysis capabilities
+- **EDGAR API Integration**: Real-time financial data system
+- **Application Features**: Modern screening interface and analysis capabilities
 - **Architecture**: Technology stack and system components
 
 For detailed technical architecture, see: `context/ARCHITECTURE.md`
 
 ---
 
-*Last Updated: 2025-09-09*  
-*Version: 3.0 - SimFin Offline Architecture with Enterprise Database Safeguards*  
-*Integrated SimFin Import Documentation - Single README for clarity*
+*Last Updated: 2025-01-01*  
+*Version: 4.0 - EDGAR API Integration with Advanced Screening Algorithms*  
+*SolidJS Frontend with Piotroski F-Score and O'Shaughnessy Value Methods*

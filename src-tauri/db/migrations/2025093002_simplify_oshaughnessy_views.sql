@@ -4,6 +4,8 @@
 DROP VIEW IF EXISTS oshaughnessy_ranking_complete;
 DROP VIEW IF EXISTS oshaughnessy_ranking_simple;
 DROP VIEW IF EXISTS oshaughnessy_value_composite_simple;
+DROP VIEW IF EXISTS oshaughnessy_ranking;
+DROP VIEW IF EXISTS oshaughnessy_value_composite;
 
 -- Single O'Shaughnessy Value Composite view with all 6 metrics
 CREATE VIEW oshaughnessy_value_composite AS
@@ -96,12 +98,12 @@ WITH ranked AS (
   FROM oshaughnessy_value_composite
 )
 SELECT *,
-  -- Composite score (average of available ranks)
-  (COALESCE(pe_rank,0) + COALESCE(pb_rank,0) + COALESCE(ps_rank,0) + COALESCE(evs_rank,0) + COALESCE(ebitda_rank,0) + COALESCE(yield_rank,0))
-    / (CASE WHEN metrics_available = 0 THEN 1 ELSE metrics_available END) as composite_score,
-  -- Percentile ranking
-  ROUND(((COALESCE(pe_rank,0) + COALESCE(pb_rank,0) + COALESCE(ps_rank,0) + COALESCE(evs_rank,0) + COALESCE(ebitda_rank,0) + COALESCE(yield_rank,0))
-    / (CASE WHEN metrics_available = 0 THEN 1 ELSE metrics_available END) / total_stocks) * 100, 1) as composite_percentile,
+  -- Composite score (average of available ranks) - cast to REAL
+  CAST((COALESCE(pe_rank,0) + COALESCE(pb_rank,0) + COALESCE(ps_rank,0) + COALESCE(evs_rank,0) + COALESCE(ebitda_rank,0) + COALESCE(yield_rank,0))
+    / (CASE WHEN metrics_available = 0 THEN 1 ELSE metrics_available END) AS REAL) as composite_score,
+  -- Percentile ranking - cast to REAL
+  CAST(ROUND(((COALESCE(pe_rank,0) + COALESCE(pb_rank,0) + COALESCE(ps_rank,0) + COALESCE(evs_rank,0) + COALESCE(ebitda_rank,0) + COALESCE(yield_rank,0))
+    / (CASE WHEN metrics_available = 0 THEN 1 ELSE metrics_available END) / total_stocks) * 100, 1) AS REAL) as composite_percentile,
   -- Overall ranking
   RANK() OVER (ORDER BY 
     (COALESCE(pe_rank,0) + COALESCE(pb_rank,0) + COALESCE(ps_rank,0) + COALESCE(evs_rank,0) + COALESCE(ebitda_rank,0) + COALESCE(yield_rank,0))

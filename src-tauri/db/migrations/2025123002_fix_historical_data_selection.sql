@@ -7,6 +7,7 @@
 -- Drop existing views
 DROP VIEW IF EXISTS piotroski_f_score_complete;
 DROP VIEW IF EXISTS piotroski_screening_results;
+DROP VIEW IF EXISTS piotroski_multi_year_data;
 
 -- Create the multi-year data view with improved historical data selection
 CREATE VIEW piotroski_multi_year_data AS
@@ -307,8 +308,6 @@ SELECT
     current_asset_turnover,
     current_operating_cash_flow,
     pb_ratio,
-    CASE
-        WHEN f_score_complete >= 7 THEN 1
-        ELSE 0
-    END as passes_screening
+    -- passes_screening is now calculated dynamically in the API based on criteria
+    NULL as passes_screening
 FROM piotroski_f_score_complete;

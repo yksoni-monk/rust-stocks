@@ -19,17 +19,11 @@ path = "src/main.rs"
 
 # CLI Tools (moved from root workspace)
 
-[[bin]]
-name = "import-ttm"
-path = "src/bin/import_ttm.rs"
 
 [[bin]]
 name = "calculate-ratios"
 path = "src/bin/calculate_ratios.rs"
 
-[[bin]]
-name = "import_simfin"
-path = "src/bin/import_simfin.rs"
 
 [[bin]]
 name = "db_admin"
@@ -39,13 +33,7 @@ path = "src/bin/db_admin.rs"
 name = "import-schwab-prices"
 path = "src/bin/import-schwab-prices.rs"
 
-[[bin]]
-name = "populate-cik-mappings"
-path = "src/bin/populate-cik-mappings.rs"
 
-[[bin]]
-name = "concurrent-edgar-extraction"
-path = "src/bin/concurrent-edgar-extraction.rs"
 
 
 

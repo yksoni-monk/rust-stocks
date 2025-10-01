@@ -231,7 +231,7 @@ pub async fn get_oshaughnessy_statistics() -> Result<serde_json::Value, String> 
             COUNT(CASE WHEN composite_percentile <= 10 THEN 1 END) as top_10_percent,
             COUNT(CASE WHEN composite_percentile <= 20 THEN 1 END) as top_20_percent,
             COUNT(CASE WHEN passes_screening = 1 THEN 1 END) as passing_stocks
-        FROM oshaughnessy_ranking_simple"
+        FROM oshaughnessy_ranking"
     )
     .fetch_one(&pool)
     .await

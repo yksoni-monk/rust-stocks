@@ -29,6 +29,18 @@ alwaysApply: true
   - Always check for environment variables first: `std::env::var("DATABASE_URL")` or `std::env::var("DATABASE_PATH")`
   - If environment variables are not set, return an error - do not use fallback paths
 
+## Migration Rules (NON-NEGOTIABLE)
+- CRITICAL: NEVER modify an applied migration file - this breaks checksum validation
+- ALWAYS create new migrations for schema changes using `sqlx migrate add`
+- ALWAYS test migrations on a backup database first before production
+- ALWAYS backup the database before running migrations on production data
+- ALWAYS verify migration status with `sqlx migrate info` before and after changes
+- ALWAYS use descriptive migration names that explain the change
+- NEVER delete migration files once they've been applied to any database
+- NEVER edit migration files after they've been applied (creates checksum mismatches)
+- ALWAYS run `sqlx migrate run` to apply new migrations in chronological order
+- ALWAYS validate that all migrations are installed with `sqlx migrate info`
+
 ## API Contract Discipline (NON-NEGOTIABLE)
 - NEVER modify backend function signatures without checking all frontend callers
 - ALWAYS use consistent naming: `snake_case` in Rust, map to `camelCase` in frontend
@@ -79,5 +91,9 @@ alwaysApply: true
 - ❌ Run direct SQL commands against production database
 - ❌ Use hardcoded database paths - always use DATABASE_URL or DATABASE_PATH environment variables
 - ❌ Use relative paths like `"sqlite:./db/stocks.db"` or `"sqlite:src-tauri/db/stocks.db"` - use environment variables only
+- ❌ Modify applied migration files - this breaks checksum validation and causes migration failures
+- ❌ Edit migration files after they've been applied to any database
+- ❌ Delete migration files once they've been applied
+- ❌ Run migrations without backing up the database first
 # Cursor Rules
 

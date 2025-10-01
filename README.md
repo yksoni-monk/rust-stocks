@@ -128,6 +128,8 @@ If you're running the project for the first time, you'll need to initialize the 
    cd src-tauri
    cargo run --bin db_admin -- migrate --confirm
    ```
+   
+   **About Migrations**: The project uses `sqlx` migrations to manage database schema changes. All 36 migrations will be applied in chronological order to build the complete database schema from scratch. Each migration is tracked in the `_sqlx_migrations` table with a checksum to ensure integrity. Once applied, migrations should never be modified.
 
 3. **Refresh data** (to populate with S&P 500 data):
    ```bash
@@ -183,6 +185,45 @@ cargo run --bin db_admin -- migrate --confirm
 # Verify database integrity
 cargo run --bin db_admin -- verify
 ```
+
+### Database Migrations
+
+The project uses **`sqlx` migrations** for all database schema changes. This provides:
+
+- **Version Control**: Every schema change is tracked in timestamped migration files
+- **Checksum Validation**: Each migration has a SHA-256 checksum to ensure integrity
+- **Sequential Application**: Migrations run in chronological order
+- **Idempotency**: Re-running migrations has no effect if already applied
+- **Rollback Protection**: Applied migrations should never be modified
+
+#### Migration Workflow
+
+**For New Databases** (first-time setup):
+```bash
+cd src-tauri
+sqlx migrate run --database-url "sqlite:db/stocks.db" --source db/migrations
+```
+All 36 migrations will execute in order to create the complete schema.
+
+**For Existing Databases**:
+```bash
+cd src-tauri
+sqlx migrate info --database-url "sqlite:db/stocks.db" --source db/migrations
+```
+This shows which migrations are installed. Only new migrations will be applied.
+
+**Creating New Migrations**:
+```bash
+cd src-tauri
+sqlx migrate add --source db/migrations descriptive_name
+```
+This creates a new migration file with a timestamp prefix.
+
+**Important Rules**:
+- ❌ **NEVER modify** an applied migration file (breaks checksum)
+- ✅ **Always create** new migrations for schema changes
+- ✅ **Test migrations** on a backup database first
+- ✅ **Backup first** before running migrations on production data
 
 #### Automatic Backup System
 - **Production Detection**: Automatically detects databases >50MB or >1000 stocks

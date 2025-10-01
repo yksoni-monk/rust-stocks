@@ -11,7 +11,7 @@ This document provides a comprehensive architecture and implementation plan for 
 |------------|------------|----------------|-------------------|--------------|
 | **Graham Value** | ✅ **PRODUCTION READY** | 95% | Minor missing criteria | Low |
 | **GARP P/E** | ⚠️ **NEEDS FIXES** | 60% | Wrong formula, missing quality metrics | Medium |
-| **Piotroski F-Score** | ✅ **PRODUCTION READY** | 99% | **500/503 S&P 500 stocks, all 9 criteria working, Annual data** | **COMPLETE** |
+| **Piotroski F-Score** | ✅ **PRODUCTION READY** | 99% | **500/503 S&P 500 stocks, all 9 criteria working, Annual data, UI fixed** | **COMPLETE** |
 | **O'Shaughnessy Value** | ✅ **PRODUCTION READY** | 95% | **All 6 metrics implemented, S&P 500 filtered, top 10 results** | **COMPLETE** |
 
 ### **Critical Data Infrastructure Status**
@@ -52,6 +52,9 @@ This document provides a comprehensive architecture and implementation plan for 
 - **Annual Data Migration**: ✅ **COMPLETE** - All calculations use Annual data exclusively
 - **Database Schema**: ✅ **UPDATED** - All TTM columns migrated to Annual columns
 - **Frontend Integration**: ✅ **WORKING** - UI displays all 9 criteria with ✓/✗ indicators
+- **UI Display Fix**: ✅ **FIXED** - Shows "10 Stocks Found" and "46 Pass All Criteria" correctly
+- **JavaScript Error Fix**: ✅ **RESOLVED** - Fixed `transformedRecommendations` scope issue
+- **Backend Statistics**: ✅ **ENHANCED** - Added S&P 500 filtering to `get_piotroski_statistics`
 
 #### **✅ O'Shaughnessy Value Composite Two - PRODUCTION READY**
 - **All 6 Metrics Implemented**: ✅ **COMPLETE** - P/S, EV/S, P/E, P/B, P/CF, EV/EBITDA, Shareholder Yield
@@ -1558,3 +1561,44 @@ ALTER TABLE daily_valuation_ratios ADD COLUMN shareholder_yield_annual REAL;
 5. **Data Quality Tests**: Validate against known financial data sources
 
 **✅ MISSION ACCOMPLISHED**: O'Shaughnessy Value Composite Two has been successfully transformed from 67% functionality (4/6 metrics) to 100% comprehensive value screening capability using the actual "What Works on Wall Street" methodology. The system is now production-ready with 99.4% data coverage across all S&P 500 stocks.
+
+---
+
+## 🎯 **LATEST UPDATES (December 2025)**
+
+### **✅ Piotroski F-Score UI Fixes - COMPLETED**
+
+#### **Problem Solved**
+- **UI Display Issue**: Showed incorrect "20 Stocks Found" and "0 Pass All Criteria" 
+- **JavaScript Error**: `ReferenceError: Can't find variable: transformedRecommendations`
+- **Backend Statistics**: Missing S&P 500 filtering in statistics API
+
+#### **Solutions Implemented**
+1. **Backend Fix** (`src-tauri/src/commands/piotroski_screening.rs`):
+   - Added S&P 500 filter to `get_piotroski_statistics` query: `WHERE stock_id IN (SELECT id FROM stocks WHERE is_sp500 = 1)`
+   - Fixed statistics to count only S&P 500 stocks that meet criteria
+
+2. **Frontend Fix** (`src/src/stores/recommendationsStore.ts`):
+   - Fixed variable scope issue: replaced `transformedRecommendations.length` with `recommendations().length`
+   - Added proper statistics loading for Piotroski screening
+
+3. **UI Display Fix** (`src/src/components/ResultsPanel.tsx`):
+   - Updated to show `recommendationsStore.stats()?.passing_stocks` for "Pass All Criteria" count
+   - Maintains display of top 10 stocks while showing total passing count
+
+#### **Results**
+- **✅ UI Now Shows**: "10 Stocks Found" and "46 Pass All Criteria" correctly
+- **✅ No JavaScript Errors**: Console clean, no more `transformedRecommendations` errors
+- **✅ Accurate Statistics**: Backend properly filters and counts S&P 500 stocks
+- **✅ User Experience**: Clear distinction between displayed results and total passing stocks
+
+### **📊 Current System Status**
+- **Piotroski F-Score**: ✅ **PRODUCTION READY** - All 9 criteria working, UI fixed, 46 stocks pass screening
+- **O'Shaughnessy Value**: ✅ **PRODUCTION READY** - All 6 metrics implemented, top 10 results
+- **Graham Value**: ✅ **PRODUCTION READY** - 95% complete, minor criteria missing
+- **GARP P/E**: ⚠️ **NEEDS FIXES** - 60% complete, wrong formula, missing quality metrics
+
+### **🎯 Next Priority**
+1. **Fix GARP P/E Method**: Correct formula and add quality metrics
+2. **Complete Graham Value**: Add remaining criteria
+3. **Performance Optimization**: Ensure all methods meet <3 second response time

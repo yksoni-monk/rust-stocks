@@ -38,8 +38,8 @@ impl Default for RatioCalculationStats {
 struct FinancialData {
     stock_id: i64,
     symbol: String,
-    latest_ttm_revenue: Option<f64>,
-    latest_ttm_report_date: Option<NaiveDate>,
+    latest_annual_revenue: Option<f64>,
+    latest_annual_report_date: Option<NaiveDate>,
     latest_price: Option<f64>,
     #[allow(dead_code)] // May be needed for future price date validation
     latest_price_date: Option<NaiveDate>,
@@ -59,9 +59,9 @@ struct FinancialData {
 struct CalculatedRatios {
     market_cap: Option<f64>,
     enterprise_value: Option<f64>,
-    ps_ratio_ttm: Option<f64>,
-    evs_ratio_ttm: Option<f64>,
-    pb_ratio_ttm: Option<f64>,
+    ps_ratio_annual: Option<f64>,
+    evs_ratio_annual: Option<f64>,
+    pb_ratio_annual: Option<f64>,
     pcf_ratio_annual: Option<f64>,
     ev_ebitda_ratio_annual: Option<f64>,
     shareholder_yield_annual: Option<f64>,
@@ -149,7 +149,7 @@ pub async fn calculate_historical_ps_evs_pb_pcf_ev_ebitda_ratios(pool: &SqlitePo
         
         let ratios = calculate_stock_ratios(&data);
         
-        match store_calculated_ratios(pool, &data, &ratios, data.latest_ttm_report_date.unwrap()).await {
+        match store_calculated_ratios(pool, &data, &ratios, data.latest_annual_report_date.unwrap()).await {
             Ok(stored_stats) => {
                 stats.ps_ratios_calculated += stored_stats.ps_ratios_calculated;
                 stats.evs_ratios_calculated += stored_stats.evs_ratios_calculated;
@@ -173,7 +173,7 @@ pub async fn calculate_historical_ps_evs_pb_pcf_ev_ebitda_ratios(pool: &SqlitePo
     Ok(stats)
 }
 
-/// Fetch financial data for all stocks with TTM data
+/// Fetch financial data for all stocks with Annual data
 async fn fetch_financial_data(pool: &SqlitePool) -> Result<Vec<FinancialData>> {
     println!("  📊 Fetching financial data...");
     
@@ -185,10 +185,10 @@ async fn fetch_financial_data(pool: &SqlitePool) -> Result<Vec<FinancialData>> {
             -- Latest Annual financial data (for O'Shaughnessy methodology)
             (SELECT revenue FROM income_statements i 
              WHERE i.stock_id = s.id AND i.period_type = 'Annual' 
-             ORDER BY i.report_date DESC LIMIT 1) as latest_ttm_revenue,
+             ORDER BY i.report_date DESC LIMIT 1) as latest_annual_revenue,
             (SELECT report_date FROM income_statements i 
              WHERE i.stock_id = s.id AND i.period_type = 'Annual' 
-             ORDER BY i.report_date DESC LIMIT 1) as latest_ttm_report_date,
+             ORDER BY i.report_date DESC LIMIT 1) as latest_annual_report_date,
              
             -- Latest Annual cash flow data for P/CF calculation
             (SELECT net_income FROM income_statements i 
@@ -218,21 +218,21 @@ async fn fetch_financial_data(pool: &SqlitePool) -> Result<Vec<FinancialData>> {
                  i.report_date DESC 
              LIMIT 1) as shares_outstanding,
              
-            -- Latest balance sheet data for EV and P/B calculation
+            -- Latest balance sheet data for EV and P/B calculation (Annual only)
             (SELECT cash_and_equivalents FROM balance_sheets b
-             WHERE b.stock_id = s.id AND b.period_type IN ('TTM', 'Annual')
+             WHERE b.stock_id = s.id AND b.period_type = 'Annual'
              ORDER BY 
                  CASE WHEN b.data_source = 'sec_edgar_json' THEN 0 ELSE 1 END,
                  b.report_date DESC 
              LIMIT 1) as cash_and_equivalents,
             (SELECT total_debt FROM balance_sheets b
-             WHERE b.stock_id = s.id AND b.period_type IN ('TTM', 'Annual')
+             WHERE b.stock_id = s.id AND b.period_type = 'Annual'
              ORDER BY 
                  CASE WHEN b.data_source = 'sec_edgar_json' THEN 0 ELSE 1 END,
                  b.report_date DESC 
              LIMIT 1) as total_debt,
             (SELECT total_equity FROM balance_sheets b
-             WHERE b.stock_id = s.id AND b.period_type IN ('TTM', 'Annual')
+             WHERE b.stock_id = s.id AND b.period_type = 'Annual'
              ORDER BY 
                  CASE WHEN b.data_source = 'sec_edgar_json' THEN 0 ELSE 1 END,
                  b.report_date DESC 
@@ -279,8 +279,8 @@ async fn fetch_financial_data(pool: &SqlitePool) -> Result<Vec<FinancialData>> {
         let data = FinancialData {
             stock_id: row.get("stock_id"),
             symbol: row.get("symbol"),
-            latest_ttm_revenue: row.get("latest_ttm_revenue"),
-            latest_ttm_report_date: row.get("latest_ttm_report_date"),
+            latest_annual_revenue: row.get("latest_annual_revenue"),
+            latest_annual_report_date: row.get("latest_annual_report_date"),
             latest_price: row.get("latest_price"),
             latest_price_date: row.get("latest_price_date"),
             shares_outstanding: row.get("shares_outstanding"),
@@ -309,10 +309,10 @@ async fn fetch_historical_financial_data(pool: &SqlitePool) -> Result<Vec<Financ
         SELECT 
             s.id as stock_id,
             s.symbol,
-            i.revenue as latest_ttm_revenue,
-            i.report_date as latest_ttm_report_date,
+            i.revenue as latest_annual_revenue,
+            i.report_date as latest_annual_report_date,
             
-            -- Get price data closest to the TTM report date
+            -- Get price data closest to the Annual report date
             (SELECT close_price FROM daily_prices dp 
              WHERE dp.stock_id = s.id AND dp.date <= i.report_date
              ORDER BY dp.date DESC LIMIT 1) as latest_price,
@@ -321,23 +321,23 @@ async fn fetch_historical_financial_data(pool: &SqlitePool) -> Result<Vec<Financ
              ORDER BY dp.date DESC LIMIT 1) as latest_price_date,
             i.shares_diluted as shares_outstanding,
              
-            -- Get balance sheet data closest to the TTM report date (prioritize SEC EDGAR data)
+            -- Get balance sheet data closest to the Annual report date (Annual only)
             (SELECT cash_and_equivalents FROM balance_sheets b
-             WHERE b.stock_id = s.id AND b.period_type IN ('TTM', 'Annual')
+             WHERE b.stock_id = s.id AND b.period_type = 'Annual'
              AND b.report_date <= i.report_date
              ORDER BY 
                  CASE WHEN b.data_source = 'sec_edgar_json' THEN 0 ELSE 1 END,
                  b.report_date DESC 
              LIMIT 1) as cash_and_equivalents,
             (SELECT total_debt FROM balance_sheets b
-             WHERE b.stock_id = s.id AND b.period_type IN ('TTM', 'Annual')
+             WHERE b.stock_id = s.id AND b.period_type = 'Annual'
              AND b.report_date <= i.report_date
              ORDER BY 
                  CASE WHEN b.data_source = 'sec_edgar_json' THEN 0 ELSE 1 END,
                  b.report_date DESC 
              LIMIT 1) as total_debt,
             (SELECT total_equity FROM balance_sheets b
-             WHERE b.stock_id = s.id AND b.period_type IN ('TTM', 'Annual')
+             WHERE b.stock_id = s.id AND b.period_type = 'Annual'
              AND b.report_date <= i.report_date
              ORDER BY 
                  CASE WHEN b.data_source = 'sec_edgar_json' THEN 0 ELSE 1 END,
@@ -345,7 +345,7 @@ async fn fetch_historical_financial_data(pool: &SqlitePool) -> Result<Vec<Financ
              LIMIT 1) as total_equity
         FROM stocks s
         JOIN income_statements i ON s.id = i.stock_id
-        WHERE i.period_type = 'TTM' 
+        WHERE i.period_type = 'Annual' 
         AND i.revenue IS NOT NULL 
         AND i.revenue > 0
         ORDER BY s.symbol, i.report_date DESC
@@ -358,8 +358,8 @@ async fn fetch_historical_financial_data(pool: &SqlitePool) -> Result<Vec<Financ
         let data = FinancialData {
             stock_id: row.get("stock_id"),
             symbol: row.get("symbol"),
-            latest_ttm_revenue: row.get("latest_ttm_revenue"),
-            latest_ttm_report_date: row.get("latest_ttm_report_date"),
+            latest_annual_revenue: row.get("latest_annual_revenue"),
+            latest_annual_report_date: row.get("latest_annual_report_date"),
             latest_price: row.get("latest_price"),
             latest_price_date: row.get("latest_price_date"),
             shares_outstanding: row.get("shares_outstanding"),
@@ -376,7 +376,7 @@ async fn fetch_historical_financial_data(pool: &SqlitePool) -> Result<Vec<Financ
         financial_data.push(data);
     }
     
-    println!("  ✅ Found {} historical TTM financial records", financial_data.len());
+    println!("  ✅ Found {} historical Annual financial records", financial_data.len());
     Ok(financial_data)
 }
 
@@ -385,9 +385,9 @@ fn calculate_stock_ratios(data: &FinancialData) -> CalculatedRatios {
     let mut ratios = CalculatedRatios {
         market_cap: None,
         enterprise_value: None,
-        ps_ratio_ttm: None,
-        evs_ratio_ttm: None,
-        pb_ratio_ttm: None,
+        ps_ratio_annual: None,
+        evs_ratio_annual: None,
+        pb_ratio_annual: None,
         pcf_ratio_annual: None,
         ev_ebitda_ratio_annual: None,
         shareholder_yield_annual: None,
@@ -410,18 +410,18 @@ fn calculate_stock_ratios(data: &FinancialData) -> CalculatedRatios {
         ratios.data_completeness_score += 25; // 25 points for enterprise value
     }
 
-    // Calculate P/S Ratio = Market Cap / TTM Revenue
-    if let (Some(market_cap), Some(revenue)) = (ratios.market_cap, data.latest_ttm_revenue) {
+    // Calculate P/S Ratio = Market Cap / Annual Revenue
+    if let (Some(market_cap), Some(revenue)) = (ratios.market_cap, data.latest_annual_revenue) {
         if revenue > 0.0 {
-            ratios.ps_ratio_ttm = Some(market_cap / revenue);
+            ratios.ps_ratio_annual = Some(market_cap / revenue);
             ratios.data_completeness_score += 20; // 20 points for P/S ratio
         }
     }
 
-    // Calculate EV/S Ratio = Enterprise Value / TTM Revenue
-    if let (Some(enterprise_value), Some(revenue)) = (ratios.enterprise_value, data.latest_ttm_revenue) {
+    // Calculate EV/S Ratio = Enterprise Value / Annual Revenue
+    if let (Some(enterprise_value), Some(revenue)) = (ratios.enterprise_value, data.latest_annual_revenue) {
         if revenue > 0.0 {
-            ratios.evs_ratio_ttm = Some(enterprise_value / revenue);
+            ratios.evs_ratio_annual = Some(enterprise_value / revenue);
             ratios.data_completeness_score += 20; // 20 points for EV/S ratio
         }
     }
@@ -429,7 +429,7 @@ fn calculate_stock_ratios(data: &FinancialData) -> CalculatedRatios {
     // Calculate P/B Ratio = Market Cap / Total Equity (Book Value)
     if let (Some(market_cap), Some(equity)) = (ratios.market_cap, data.total_equity) {
         if equity > 0.0 {
-            ratios.pb_ratio_ttm = Some(market_cap / equity);
+            ratios.pb_ratio_annual = Some(market_cap / equity);
             ratios.data_completeness_score += 20; // 20 points for P/B ratio
         }
     }
@@ -491,7 +491,7 @@ async fn store_calculated_ratios(
         r#"
         INSERT OR REPLACE INTO daily_valuation_ratios (
             stock_id, date, price, market_cap, enterprise_value,
-            ps_ratio_ttm, evs_ratio_ttm, pb_ratio_ttm, pcf_ratio_annual, ev_ebitda_ratio_annual, shareholder_yield_annual, revenue_ttm,
+            ps_ratio_annual, evs_ratio_annual, pb_ratio_annual, pcf_ratio_annual, ev_ebitda_ratio_annual, shareholder_yield_annual, revenue_annual,
             data_completeness_score, last_financial_update
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14
@@ -503,23 +503,23 @@ async fn store_calculated_ratios(
     .bind(data.latest_price)
     .bind(ratios.market_cap)
     .bind(ratios.enterprise_value)
-    .bind(ratios.ps_ratio_ttm)
-    .bind(ratios.evs_ratio_ttm)
-    .bind(ratios.pb_ratio_ttm)
+    .bind(ratios.ps_ratio_annual)
+    .bind(ratios.evs_ratio_annual)
+    .bind(ratios.pb_ratio_annual)
     .bind(ratios.pcf_ratio_annual)
     .bind(ratios.ev_ebitda_ratio_annual)
     .bind(ratios.shareholder_yield_annual)
-    .bind(data.latest_ttm_revenue)
+    .bind(data.latest_annual_revenue)
     .bind(ratios.data_completeness_score)
-    .bind(data.latest_ttm_report_date)
+    .bind(data.latest_annual_report_date)
     .execute(pool)
     .await;
 
     match result {
         Ok(_) => {
-            if ratios.ps_ratio_ttm.is_some() { stats.ps_ratios_calculated = 1; }
-            if ratios.evs_ratio_ttm.is_some() { stats.evs_ratios_calculated = 1; }
-            if ratios.pb_ratio_ttm.is_some() { stats.pb_ratios_calculated = 1; }
+            if ratios.ps_ratio_annual.is_some() { stats.ps_ratios_calculated = 1; }
+            if ratios.evs_ratio_annual.is_some() { stats.evs_ratios_calculated = 1; }
+            if ratios.pb_ratio_annual.is_some() { stats.pb_ratios_calculated = 1; }
             if ratios.pcf_ratio_annual.is_some() { stats.pcf_ratios_calculated = 1; }
             if ratios.ev_ebitda_ratio_annual.is_some() { stats.ev_ebitda_ratios_calculated = 1; }
             if ratios.shareholder_yield_annual.is_some() { stats.shareholder_yield_ratios_calculated = 1; }
@@ -536,12 +536,12 @@ async fn store_calculated_ratios(
 pub async fn calculate_ratios_for_negative_earnings_stocks(pool: &SqlitePool) -> Result<RatioCalculationStats> {
     println!("🔍 Identifying stocks with negative earnings where P/E ratios are invalid...");
     
-    // First, identify stocks with negative net income in their latest TTM data
+    // First, identify stocks with negative net income in their latest Annual data
     let negative_earnings_query = r#"
         SELECT s.id, s.symbol, i.net_income
         FROM stocks s
         JOIN income_statements i ON s.id = i.stock_id
-        WHERE i.period_type = 'TTM'
+        WHERE i.period_type = 'Annual'
         AND i.net_income < 0
         AND i.report_date = (
             SELECT MAX(report_date) 
@@ -581,9 +581,9 @@ pub async fn generate_ratio_summary_report(pool: &SqlitePool) -> Result<()> {
     let ratios_count = sqlx::query(
         "SELECT 
             COUNT(*) as total_records,
-            COUNT(ps_ratio_ttm) as ps_ratios,
-            COUNT(evs_ratio_ttm) as evs_ratios,
-            COUNT(pb_ratio_ttm) as pb_ratios,
+            COUNT(ps_ratio_annual) as ps_ratios,
+            COUNT(evs_ratio_annual) as evs_ratios,
+            COUNT(pb_ratio_annual) as pb_ratios,
             COUNT(market_cap) as market_caps,
             COUNT(enterprise_value) as enterprise_values,
             AVG(data_completeness_score) as avg_completeness
@@ -613,10 +613,10 @@ pub async fn generate_ratio_summary_report(pool: &SqlitePool) -> Result<()> {
     println!("\n💰 SAMPLE P/S AND EV/S RATIOS:");
     let sample_ratios = sqlx::query(
         r#"
-        SELECT s.symbol, dvr.ps_ratio_ttm, dvr.evs_ratio_ttm, dvr.market_cap, dvr.revenue_ttm
+        SELECT s.symbol, dvr.ps_ratio_annual, dvr.evs_ratio_annual, dvr.market_cap, dvr.revenue_annual
         FROM daily_valuation_ratios dvr
         JOIN stocks s ON s.id = dvr.stock_id
-        WHERE dvr.ps_ratio_ttm IS NOT NULL
+        WHERE dvr.ps_ratio_annual IS NOT NULL
         ORDER BY s.symbol
         LIMIT 10
         "#
@@ -626,10 +626,10 @@ pub async fn generate_ratio_summary_report(pool: &SqlitePool) -> Result<()> {
     
     for row in sample_ratios {
         let symbol: String = row.get("symbol");
-        let ps_ratio: Option<f64> = row.get("ps_ratio_ttm");
-        let evs_ratio: Option<f64> = row.get("evs_ratio_ttm");
+        let ps_ratio: Option<f64> = row.get("ps_ratio_annual");
+        let evs_ratio: Option<f64> = row.get("evs_ratio_annual");
         let market_cap: Option<f64> = row.get("market_cap");
-        let revenue: Option<f64> = row.get("revenue_ttm");
+        let revenue: Option<f64> = row.get("revenue_annual");
         
         println!("  {} - P/S: {:.2}, EV/S: {:.2}, Market Cap: ${:.1}B, Revenue: ${:.1}B", 
             symbol,

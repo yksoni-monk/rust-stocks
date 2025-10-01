@@ -108,7 +108,7 @@ async fn get_oshaughnessy_screening_results_internal(
             ebitda_rank,
             yield_rank,
             metrics_available
-        FROM oshaughnessy_ranking_complete
+        FROM oshaughnessy_ranking
         WHERE 1=1"
     );
 

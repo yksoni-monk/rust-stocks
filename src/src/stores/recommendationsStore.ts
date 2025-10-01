@@ -52,6 +52,7 @@ export interface Recommendation {
 
   // Simple Piotroski data availability (no fake confidence)
   criteria_met?: number;  // How many of the 9 criteria are actually met (0-9)
+  passes_screening?: number;  // 1 if passes screening criteria, 0 otherwise
 }
 
 export interface RecommendationStats {
@@ -60,6 +61,13 @@ export interface RecommendationStats {
   value_stocks_found: number;
   average_value_score?: number;
   average_risk_score?: number;
+  // Piotroski-specific stats
+  total_stocks?: number;
+  avg_f_score?: number;
+  avg_completeness?: number;
+  high_quality_stocks?: number;
+  excellent_stocks?: number;
+  passing_stocks?: number;
 }
 
 export type ScreeningType = 'garp_pe' | 'graham_value' | 'piotroski' | 'oshaughnessy';
@@ -171,7 +179,7 @@ export function createRecommendationsStore() {
   
   // Screening configuration
   const [screeningType, setScreeningType] = createSignal<ScreeningType>('garp_pe');
-  const [limit, setLimit] = createSignal(20);
+  const [limit, setLimit] = createSignal(10);
   
   // Criteria for different screening types
   const [garpCriteria, setGarpCriteria] = createSignal<GarpCriteria>({
@@ -185,9 +193,9 @@ export function createRecommendationsStore() {
   });
 
   const [piotroskilCriteria, setPiotroskilCriteria] = createSignal<PiotroskilCriteria>({
-    minFScore: 3,
-    minDataCompleteness: 50,
-    passesScreeningOnly: false,
+    minFScore: 7,
+    minDataCompleteness: 80,
+    passesScreeningOnly: true,
     sectors: []
   });
 
@@ -306,6 +314,7 @@ export function createRecommendationsStore() {
               garp_score: stock.f_score_complete, // Fixed: use correct field name
               quality_score: stock.data_completeness_score,
               passes_garp_screening: stock.passes_screening === 1,
+              passes_screening: stock.passes_screening,
 
               // ✅ ADD ALL MISSING PIOTROSKI CRITERION FIELDS
               stock_id: stock.stock_id,
@@ -326,6 +335,7 @@ export function createRecommendationsStore() {
               current_net_margin: stock.current_net_margin,
               current_asset_turnover: stock.current_asset_turnover,
               current_operating_cash_flow: stock.current_operating_cash_flow,
+              criteria_met: stock.criteria_met,
 
               reasoning: `F-Score: ${stock.f_score_complete}/9 | Data Quality: ${stock.data_completeness_score}% | Income: ${stock.criterion_positive_net_income ? '✓' : '✗'} | ROA: ${stock.criterion_improving_roa ? '✓' : '✗'} | Debt: ${stock.criterion_decreasing_debt_ratio ? '✓' : '✗'}`
             };
@@ -385,6 +395,26 @@ export function createRecommendationsStore() {
       } else {
         setRecommendations([]);
         setStats(null);
+      }
+
+      // Load statistics for Piotroski screening
+      if (currentScreeningType === 'piotroski') {
+        try {
+          const piotroskiStats = await recommendationsAPI.getPiotroskilStatistics();
+          setStats({
+            total_sp500_stocks: 500,
+            stocks_with_pe_data: 0,
+            value_stocks_found: recommendations().length,
+            total_stocks: piotroskiStats.total_stocks,
+            avg_f_score: piotroskiStats.avg_f_score,
+            avg_completeness: piotroskiStats.avg_completeness,
+            high_quality_stocks: piotroskiStats.high_quality_stocks,
+            excellent_stocks: piotroskiStats.excellent_stocks,
+            passing_stocks: piotroskiStats.passing_stocks,
+          });
+        } catch (err) {
+          console.warn('Failed to load Piotroski statistics:', err);
+        }
       }
       
     } catch (err) {

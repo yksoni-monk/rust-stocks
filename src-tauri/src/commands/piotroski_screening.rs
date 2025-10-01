@@ -36,6 +36,7 @@ pub struct PiotoskiFScoreResult {
 
     // Data availability transparency
     pub criteria_met: i32,  // How many of the 9 criteria are actually met (0-9)
+    pub passes_screening: i32,  // 1 if passes screening criteria, 0 otherwise
 }
 
 // Removed fake confidence scoring - Piotroski is simple 0-9 binary scoring
@@ -82,7 +83,7 @@ pub async fn get_piotroski_screening_results_internal(
     let criteria = criteria.unwrap_or_default();
 
     let mut query = String::from(
-        "SELECT
+        "SELECT 
             stock_id,
             symbol,
             sector,
@@ -105,8 +106,9 @@ pub async fn get_piotroski_screening_results_internal(
             current_net_margin,
             current_asset_turnover,
             current_operating_cash_flow,
-            pb_ratio
-        FROM piotroski_f_score_complete
+            pb_ratio,
+            passes_screening
+        FROM piotroski_screening_results
         WHERE 1=1"
     );
 
@@ -209,6 +211,7 @@ pub async fn get_piotroski_screening_results_internal(
             current_operating_cash_flow: row.try_get::<Option<f64>, _>("current_operating_cash_flow").ok().flatten(),
             pb_ratio: row.try_get::<Option<f64>, _>("pb_ratio").ok().flatten(),
             criteria_met,
+            passes_screening: row.try_get::<i64, _>("passes_screening").unwrap_or(0) as i32,
         };
 
         results.push(result);
@@ -233,7 +236,8 @@ pub async fn get_piotroski_statistics() -> Result<serde_json::Value, String> {
             COUNT(CASE WHEN f_score_complete >= 6 THEN 1 END) as high_quality_stocks,
             COUNT(CASE WHEN f_score_complete >= 7 THEN 1 END) as excellent_stocks,
             COUNT(CASE WHEN passes_screening = 1 THEN 1 END) as passing_stocks
-        FROM piotroski_screening_results"
+        FROM piotroski_screening_results
+        WHERE stock_id IN (SELECT id FROM stocks WHERE is_sp500 = 1)"
     )
     .fetch_one(&pool)
     .await

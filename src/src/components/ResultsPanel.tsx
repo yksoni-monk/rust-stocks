@@ -223,7 +223,10 @@ export default function ResultsPanel(props: ResultsPanelProps) {
                   </div>
                   <div>
                     <div class="text-2xl font-bold text-blue-600">
-                      {recommendationsStore.recommendations().filter(r => r.passes_garp_screening).length}
+                      {recommendationsStore.screeningType() === 'piotroski' 
+                        ? (recommendationsStore.stats()?.passing_stocks || recommendationsStore.recommendations().filter(r => r.passes_screening === 1).length)
+                        : recommendationsStore.recommendations().filter(r => r.passes_garp_screening).length
+                      }
                     </div>
                     <div class="text-sm text-gray-600">Pass All Criteria</div>
                   </div>
@@ -291,7 +294,8 @@ export default function ResultsPanel(props: ResultsPanelProps) {
               <For each={recommendationsStore.recommendations()}>
                 {(rec) => (
                   <div class={`bg-white rounded-lg p-4 border-2 transition-all hover:shadow-md ${
-                    rec.passes_garp_screening ? 'border-green-200 bg-green-50' : 'border-gray-200'
+                    (recommendationsStore.screeningType() === 'piotroski' ? rec.passes_screening === 1 : rec.passes_garp_screening) 
+                      ? 'border-green-200 bg-green-50' : 'border-gray-200'
                   }`}>
                     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                       {/* Stock Info */}
@@ -300,7 +304,7 @@ export default function ResultsPanel(props: ResultsPanelProps) {
                           <span class="text-lg font-bold text-gray-700">#{rec.rank}</span>
                           <span class="text-xl font-bold text-blue-600">{rec.symbol}</span>
                           <span class="text-gray-600">{rec.company_name}</span>
-                          <Show when={rec.passes_garp_screening}>
+                          <Show when={recommendationsStore.screeningType() === 'piotroski' ? rec.passes_screening === 1 : rec.passes_garp_screening}>
                             <span class="bg-green-500 text-white text-xs px-2 py-1 rounded-full font-medium">
                               ✓ Recommended
                             </span>

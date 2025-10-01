@@ -71,6 +71,8 @@ pub struct BalanceSheetData {
     pub short_term_debt: Option<f64>,
     pub long_term_debt: Option<f64>,
     pub total_debt: Option<f64>,
+    pub current_assets: Option<f64>,
+    pub current_liabilities: Option<f64>,
     pub share_repurchases: Option<f64>,
     pub data_source: String,
 }
@@ -275,6 +277,23 @@ impl SecEdgarClient {
         let current_year = Utc::now().year();
         let fiscal_year = current_year - 1; // Most recent completed fiscal year
         
+        // Calculate total debt from components if not directly available
+        let short_term_debt = balance_sheet_data.get("ShortTermDebt")
+            .or(balance_sheet_data.get("DebtCurrent"))
+            .copied();
+        let long_term_debt = balance_sheet_data.get("LongTermDebt").copied();
+        let total_debt = balance_sheet_data.get("TotalDebt")
+            .copied()
+            .or_else(|| {
+                // Calculate from components if available
+                match (short_term_debt, long_term_debt) {
+                    (Some(st), Some(lt)) => Some(st + lt),
+                    (Some(st), None) => Some(st),
+                    (None, Some(lt)) => Some(lt),
+                    (None, None) => None,
+                }
+            });
+        
         // Store balance sheet data
         let balance_sheet_result = self.store_balance_sheet_data(&BalanceSheetData {
             stock_id,
@@ -285,9 +304,11 @@ impl SecEdgarClient {
             total_liabilities: balance_sheet_data.get("Liabilities").copied(),
             total_equity: balance_sheet_data.get("StockholdersEquity").copied(),
             cash_and_equivalents: balance_sheet_data.get("CashAndCashEquivalentsAtCarryingValue").copied(),
-            short_term_debt: balance_sheet_data.get("ShortTermDebt").copied(),
-            long_term_debt: balance_sheet_data.get("LongTermDebt").copied(),
-            total_debt: balance_sheet_data.get("Debt").copied(),
+            short_term_debt,
+            long_term_debt,
+            total_debt,
+            current_assets: balance_sheet_data.get("AssetsCurrent").copied(),
+            current_liabilities: balance_sheet_data.get("LiabilitiesCurrent").copied(),
             share_repurchases: balance_sheet_data.get("ShareRepurchases").copied(),
             data_source: "sec_edgar_json".to_string(),
         }).await;
@@ -321,9 +342,11 @@ impl SecEdgarClient {
             total_liabilities: balance_sheet_data.get("Liabilities").copied(),
             total_equity: balance_sheet_data.get("StockholdersEquity").copied(),
             cash_and_equivalents: balance_sheet_data.get("CashAndCashEquivalentsAtCarryingValue").copied(),
-            short_term_debt: balance_sheet_data.get("ShortTermDebt").copied(),
-            long_term_debt: balance_sheet_data.get("LongTermDebt").copied(),
-            total_debt: balance_sheet_data.get("Debt").copied(),
+            short_term_debt,
+            long_term_debt,
+            total_debt,
+            current_assets: balance_sheet_data.get("AssetsCurrent").copied(),
+            current_liabilities: balance_sheet_data.get("LiabilitiesCurrent").copied(),
             share_repurchases: balance_sheet_data.get("ShareRepurchases").copied(),
             data_source: "sec_edgar_json".to_string(),
         }))
@@ -341,9 +364,16 @@ impl SecEdgarClient {
             ("LiabilitiesCurrent", "LiabilitiesCurrent"),
             ("StockholdersEquity", "StockholdersEquity"),
             ("CashAndCashEquivalentsAtCarryingValue", "CashAndCashEquivalentsAtCarryingValue"),
+            // Debt fields - try multiple XBRL concepts
             ("ShortTermDebt", "ShortTermDebt"),
+            ("DebtCurrent", "DebtCurrent"),
+            ("LongTermDebtCurrent", "DebtCurrent"),
+            ("LongTermDebtNoncurrent", "LongTermDebt"),
             ("LongTermDebt", "LongTermDebt"),
-            ("Debt", "Debt"),
+            ("LongTermDebtAndCapitalLeaseObligations", "LongTermDebt"),
+            ("LongTermDebtAndCapitalLeaseObligationsNoncurrent", "LongTermDebt"),
+            ("Debt", "TotalDebt"),
+            ("DebtAndCapitalLeaseObligations", "TotalDebt"),
             ("PaymentsForRepurchaseOfCommonStock", "ShareRepurchases"),
         ];
 
@@ -562,9 +592,10 @@ impl SecEdgarClient {
                 stock_id, period_type, report_date, fiscal_year,
                 total_assets, total_liabilities, total_equity,
                 cash_and_equivalents, short_term_debt, long_term_debt, total_debt,
+                current_assets, current_liabilities,
                 share_repurchases, data_source, created_at
             ) VALUES (
-                ?1, 'Annual', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, CURRENT_TIMESTAMP
+                ?1, 'Annual', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, CURRENT_TIMESTAMP
             )
         "#;
 
@@ -579,6 +610,8 @@ impl SecEdgarClient {
             .bind(data.short_term_debt)
             .bind(data.long_term_debt)
             .bind(data.total_debt)
+            .bind(data.current_assets)
+            .bind(data.current_liabilities)
             .bind(data.share_repurchases)
             .bind(&data.data_source)
             .execute(&self.pool)

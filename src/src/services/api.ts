@@ -105,11 +105,11 @@ export const recommendationsAPI = {
     return await invoke('get_piotroski_screening_results', {
       stockTickers,
       criteria: criteria || {
-        minFScore: 3,
-        minDataCompleteness: 50,
-        passesScreeningOnly: false
+        minFScore: 7,
+        minDataCompleteness: 80,
+        passesScreeningOnly: true
       },
-      limit: limit || 50
+      limit: limit || 10
     });
   },
 

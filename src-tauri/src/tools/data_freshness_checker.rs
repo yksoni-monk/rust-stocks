@@ -330,7 +330,7 @@ impl DataStatusReader {
         })
     }
 
-    async fn generate_financial_data_summary(&self, records_count: i64, latest_date: &Option<String>) -> Result<DataSummary> {
+    async fn generate_financial_data_summary(&self, _records_count: i64, latest_date: &Option<String>) -> Result<DataSummary> {
         // Get detailed financial data stats
         let stats_query = r#"
             SELECT
@@ -394,7 +394,7 @@ impl DataStatusReader {
         })
     }
 
-    async fn generate_ratios_summary(&self, records_count: i64, latest_date: &Option<String>) -> Result<DataSummary> {
+    async fn generate_ratios_summary(&self, _records_count: i64, latest_date: &Option<String>) -> Result<DataSummary> {
         // Get detailed ratios stats
         let stats_query = r#"
             SELECT
@@ -449,7 +449,7 @@ impl DataStatusReader {
         })
     }
 
-    async fn generate_cash_flow_summary(&self, records_count: i64, latest_date: &Option<String>) -> Result<DataSummary> {
+    async fn generate_cash_flow_summary(&self, _records_count: i64, latest_date: &Option<String>) -> Result<DataSummary> {
         let stats_query = r#"
             SELECT
                 MIN(report_date) as earliest_date,

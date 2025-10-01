@@ -95,6 +95,23 @@ pub struct IncomeStatementData {
     pub data_source: String,
 }
 
+/// Cash flow statement data extracted from SEC filing
+#[derive(Debug, Clone)]
+pub struct CashFlowData {
+    pub stock_id: i64,
+    pub symbol: String,
+    pub report_date: NaiveDate,
+    pub fiscal_year: i32,
+    pub depreciation_expense: Option<f64>,
+    pub amortization_expense: Option<f64>,
+    pub dividends_paid: Option<f64>,
+    pub share_repurchases: Option<f64>,
+    pub operating_cash_flow: Option<f64>,
+    pub investing_cash_flow: Option<f64>,
+    pub financing_cash_flow: Option<f64>,
+    pub data_source: String,
+}
+
 impl SecEdgarClient {
     /// Create a new SEC EDGAR client
     pub fn new(pool: SqlitePool) -> Self {
@@ -246,7 +263,10 @@ impl SecEdgarClient {
         // Extract balance sheet data from JSON
         let balance_sheet_data = self.parse_company_facts_json(&json, symbol)?;
         
-        if balance_sheet_data.is_empty() {
+        // Extract cash flow data from JSON
+        let cash_flow_data = self.parse_cash_flow_json(&json, symbol)?;
+        
+        if balance_sheet_data.is_empty() && cash_flow_data.is_empty() {
             println!("    ⚠️ No balance sheet data found for {}", symbol);
             return Ok(None);
         }
@@ -255,6 +275,43 @@ impl SecEdgarClient {
         let current_year = Utc::now().year();
         let fiscal_year = current_year - 1; // Most recent completed fiscal year
         
+        // Store balance sheet data
+        let balance_sheet_result = self.store_balance_sheet_data(&BalanceSheetData {
+            stock_id,
+            symbol: symbol.to_string(),
+            report_date: NaiveDate::from_ymd_opt(fiscal_year, 12, 31).unwrap_or_default(),
+            fiscal_year,
+            total_assets: balance_sheet_data.get("Assets").copied(),
+            total_liabilities: balance_sheet_data.get("Liabilities").copied(),
+            total_equity: balance_sheet_data.get("StockholdersEquity").copied(),
+            cash_and_equivalents: balance_sheet_data.get("CashAndCashEquivalentsAtCarryingValue").copied(),
+            short_term_debt: balance_sheet_data.get("ShortTermDebt").copied(),
+            long_term_debt: balance_sheet_data.get("LongTermDebt").copied(),
+            total_debt: balance_sheet_data.get("Debt").copied(),
+            share_repurchases: balance_sheet_data.get("ShareRepurchases").copied(),
+            data_source: "sec_edgar_json".to_string(),
+        }).await;
+
+        // Store cash flow data
+        let cash_flow_result = self.store_cash_flow_data(&CashFlowData {
+            stock_id,
+            symbol: symbol.to_string(),
+            report_date: NaiveDate::from_ymd_opt(fiscal_year, 12, 31).unwrap_or_default(),
+            fiscal_year,
+            depreciation_expense: cash_flow_data.get("depreciation_expense").copied(),
+            amortization_expense: cash_flow_data.get("amortization_expense").copied(),
+            dividends_paid: cash_flow_data.get("dividends_paid").copied(),
+            share_repurchases: cash_flow_data.get("share_repurchases").copied(),
+            operating_cash_flow: cash_flow_data.get("operating_cash_flow").copied(),
+            investing_cash_flow: cash_flow_data.get("investing_cash_flow").copied(),
+            financing_cash_flow: cash_flow_data.get("financing_cash_flow").copied(),
+            data_source: "sec_edgar_json".to_string(),
+        }).await;
+
+        if balance_sheet_result.is_err() || cash_flow_result.is_err() {
+            println!("    ⚠️ Failed to store data for {}", symbol);
+        }
+
         Ok(Some(BalanceSheetData {
             stock_id,
             symbol: symbol.to_string(),
@@ -273,7 +330,7 @@ impl SecEdgarClient {
     }
 
     /// Parse Company Facts JSON to extract balance sheet data
-    fn parse_company_facts_json(&self, json: &serde_json::Value, symbol: &str) -> Result<HashMap<String, f64>> {
+    fn parse_company_facts_json(&self, json: &serde_json::Value, _symbol: &str) -> Result<HashMap<String, f64>> {
         let mut balance_sheet_data = HashMap::new();
         
         // Balance sheet field mappings (US GAAP taxonomy)
@@ -316,8 +373,54 @@ impl SecEdgarClient {
         Ok(balance_sheet_data)
     }
 
+    /// Parse Company Facts JSON to extract cash flow statement data
+    fn parse_cash_flow_json(&self, json: &serde_json::Value, _symbol: &str) -> Result<HashMap<String, f64>> {
+        let mut cash_flow_data = HashMap::new();
+        
+        // Cash flow statement field mappings (US GAAP taxonomy)
+        let field_mappings = [
+            ("DepreciationAndAmortization", "depreciation_and_amortization"),
+            ("Depreciation", "depreciation_expense"),
+            ("DepreciationExpense", "depreciation_expense"),
+            ("DepreciationOfPropertyPlantAndEquipment", "depreciation_expense"),
+            ("AmortizationOfIntangibleAssets", "amortization_expense"),
+            ("Amortization", "amortization_expense"),
+            ("AmortizationExpense", "amortization_expense"),
+            ("PaymentsOfDividends", "dividends_paid"),
+            ("PaymentsForRepurchaseOfCommonStock", "share_repurchases"),
+            ("NetCashProvidedByUsedInOperatingActivities", "operating_cash_flow"),
+            ("NetCashProvidedByUsedInInvestingActivities", "investing_cash_flow"),
+            ("NetCashProvidedByUsedInFinancingActivities", "financing_cash_flow"),
+        ];
+
+        // Navigate to the facts section
+        if let Some(facts) = json.get("facts").and_then(|f| f.get("us-gaap")) {
+            for (field_name, our_field) in &field_mappings {
+                if let Some(field_data) = facts.get(field_name) {
+                    if let Some(units) = field_data.get("units") {
+                        if let Some(usd_data) = units.get("USD") {
+                            if let Some(values) = usd_data.as_array() {
+                                // Get the most recent value
+                                if let Some(latest_value) = values.last() {
+                                    if let Some(val) = latest_value.get("val").and_then(|v| v.as_f64()) {
+                                        if val != 0.0 {
+                                            cash_flow_data.insert(our_field.to_string(), val);
+                                            println!("    💰 Found {}: ${:.0}M", field_name, val / 1_000_000.0);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(cash_flow_data)
+    }
+
     /// Parse Company Facts JSON to extract income statement data including shares outstanding
-    fn parse_income_statement_json(&self, json: &serde_json::Value, symbol: &str) -> Result<HashMap<String, f64>> {
+    fn parse_income_statement_json(&self, json: &serde_json::Value, _symbol: &str) -> Result<HashMap<String, f64>> {
         let mut income_data = HashMap::new();
         
         // Income statement field mappings (US GAAP taxonomy)
@@ -327,6 +430,8 @@ impl SecEdgarClient {
             ("SalesRevenueNet", "revenue"),
             ("NetIncomeLoss", "net_income"),
             ("OperatingIncomeLoss", "operating_income"),
+            ("IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest", "operating_income"),
+            ("IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments", "operating_income"),
             ("GrossProfit", "gross_profit"),
             ("CostOfGoodsAndServicesSold", "cost_of_revenue"),
             ("InterestExpense", "interest_expense"),
@@ -338,6 +443,12 @@ impl SecEdgarClient {
             ("WeightedAverageNumberOfSharesOutstandingBasic", "shares_basic"),
             ("WeightedAverageNumberOfSharesOutstandingDiluted", "shares_diluted"),
             ("EntityCommonStockSharesOutstanding", "shares_outstanding"),
+            ("WeightedAverageNumberOfDilutedSharesOutstanding", "shares_diluted"),
+            ("CommonStockSharesOutstanding", "shares_outstanding"),
+            ("CommonStockSharesOutstandingBasic", "shares_basic"),
+            ("CommonStockSharesOutstandingDiluted", "shares_diluted"),
+            ("WeightedAverageNumberOfSharesOutstandingBasicIncludingDilutiveEffect", "shares_diluted"),
+            ("WeightedAverageNumberOfSharesOutstandingBasicExcludingDilutiveEffect", "shares_basic"),
         ];
 
         // Navigate to the facts section
@@ -430,7 +541,7 @@ impl SecEdgarClient {
             symbol: symbol.to_string(),
             report_date: NaiveDate::from_ymd_opt(fiscal_year, 12, 31).unwrap_or_default(), // Placeholder date
             fiscal_year,
-            period_type: "TTM".to_string(),
+            period_type: "Annual".to_string(),
             revenue: income_data.get("revenue").copied(),
             net_income: income_data.get("net_income").copied(),
             operating_income: income_data.get("operating_income").copied(),
@@ -469,6 +580,37 @@ impl SecEdgarClient {
             .bind(data.long_term_debt)
             .bind(data.total_debt)
             .bind(data.share_repurchases)
+            .bind(&data.data_source)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Store cash flow data in the database
+    pub async fn store_cash_flow_data(&self, data: &CashFlowData) -> Result<()> {
+        let query = r#"
+            INSERT OR REPLACE INTO cash_flow_statements (
+                stock_id, period_type, report_date, fiscal_year,
+                depreciation_expense, amortization_expense, dividends_paid,
+                share_repurchases, operating_cash_flow, investing_cash_flow, financing_cash_flow,
+                data_source, created_at
+            ) VALUES (
+                ?1, 'Annual', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, CURRENT_TIMESTAMP
+            )
+        "#;
+
+        sqlx::query(query)
+            .bind(data.stock_id)
+            .bind(data.report_date)
+            .bind(data.fiscal_year)
+            .bind(data.depreciation_expense)
+            .bind(data.amortization_expense)
+            .bind(data.dividends_paid)
+            .bind(data.share_repurchases)
+            .bind(data.operating_cash_flow)
+            .bind(data.investing_cash_flow)
+            .bind(data.financing_cash_flow)
             .bind(&data.data_source)
             .execute(&self.pool)
             .await?;

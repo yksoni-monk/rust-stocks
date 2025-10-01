@@ -53,6 +53,11 @@ alwaysApply: true
 ## TypeScript Rules
 - TS bindings: Do not create manual TS types for backend-shared structs. Use `ts-rs` generated bindings only.
 - Generated files: Never edit files under `solid_frontend/src/api` (generated).
+- CRITICAL: Always generate TypeScript bindings for frontend using ts-rs on Rust backend code.
+  - Add `#[derive(TS)]` and `#[ts(export)]` to all structs used in API responses
+  - Add structs to `types.rs` re-exports and `generate_bindings()` test
+  - Run `cargo test ts_bindings_export_tests::generate_bindings` to generate TypeScript files
+  - NEVER create manual TypeScript interfaces for backend structs
 
 ## Code Quality Rules (NON-NEGOTIABLE)
 - ZERO WARNINGS POLICY: All code MUST compile with zero warnings.

@@ -24,7 +24,7 @@ pub struct OShaughnessyValueResult {
 
     // Ranking and scoring
     pub data_completeness_score: i32,
-    pub composite_score: i64,
+    pub composite_score: f64,
     pub composite_percentile: f64,
     pub overall_rank: i64,
     pub passes_screening: i32,
@@ -39,7 +39,8 @@ pub struct OShaughnessyValueResult {
     pub metrics_available: i32,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct OShaughnessyScreeningCriteria {
     pub max_composite_percentile: Option<f64>,
     pub max_ps_ratio: Option<f64>,
@@ -57,7 +58,7 @@ impl Default for OShaughnessyScreeningCriteria {
             max_evs_ratio: Some(2.0),
             min_market_cap: Some(200_000_000.0), // $200M
             sectors: None,
-            passes_screening_only: Some(false),
+            passes_screening_only: Some(true),
         }
     }
 }

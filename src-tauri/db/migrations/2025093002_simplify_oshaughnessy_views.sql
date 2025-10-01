@@ -106,10 +106,11 @@ SELECT *,
   RANK() OVER (ORDER BY 
     (COALESCE(pe_rank,0) + COALESCE(pb_rank,0) + COALESCE(ps_rank,0) + COALESCE(evs_rank,0) + COALESCE(ebitda_rank,0) + COALESCE(yield_rank,0))
     / (CASE WHEN metrics_available = 0 THEN 1 ELSE metrics_available END) ASC) as overall_rank,
-  -- Pass screening if in top 20% and has at least 3 metrics
+  -- Pass screening if in top 10 stocks and has all 6 metrics
   CASE WHEN 
-    ((COALESCE(pe_rank,0) + COALESCE(pb_rank,0) + COALESCE(ps_rank,0) + COALESCE(evs_rank,0) + COALESCE(ebitda_rank,0) + COALESCE(yield_rank,0))
-     / (CASE WHEN metrics_available = 0 THEN 1 ELSE metrics_available END) / total_stocks) <= 0.20
-    AND metrics_available >= 3 THEN 1 ELSE 0 END as passes_screening
+    RANK() OVER (ORDER BY 
+      (COALESCE(pe_rank,0) + COALESCE(pb_rank,0) + COALESCE(ps_rank,0) + COALESCE(evs_rank,0) + COALESCE(ebitda_rank,0) + COALESCE(yield_rank,0))
+      / (CASE WHEN metrics_available = 0 THEN 1 ELSE metrics_available END) ASC) <= 10
+    AND metrics_available = 6 THEN 1 ELSE 0 END as passes_screening
 FROM ranked
 ORDER BY composite_score ASC;

@@ -4,6 +4,7 @@ use ts_rs::TS;
 // Re-export types from other modules for ts-rs generation
 pub use crate::tools::data_freshness_checker::{SystemFreshnessReport, DataFreshnessStatus, FreshnessStatus, RefreshPriority, RefreshRecommendation, ScreeningReadiness};
 pub use crate::commands::piotroski_screening::{PiotoskiFScoreResult, PiotroskilScreeningCriteria};
+pub use crate::commands::oshaughnessy_screening::{OShaughnessyValueResult, OShaughnessyScreeningCriteria};
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -83,6 +84,10 @@ mod ts_bindings_export_tests {
         // Piotroski F-Score types
         PiotoskiFScoreResult::export().unwrap();
         PiotroskilScreeningCriteria::export().unwrap();
+        
+        // O'Shaughnessy Value Composite types
+        OShaughnessyValueResult::export().unwrap();
+        OShaughnessyScreeningCriteria::export().unwrap();
     }
 }
 

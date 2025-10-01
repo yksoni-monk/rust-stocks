@@ -51,6 +51,7 @@ struct FinancialData {
     operating_income: Option<f64>,
     depreciation_expense: Option<f64>,
     amortization_expense: Option<f64>,
+    depreciation_amortization: Option<f64>,
     dividends_paid: Option<f64>,
     share_repurchases: Option<f64>,
 }
@@ -203,6 +204,9 @@ async fn fetch_financial_data(pool: &SqlitePool) -> Result<Vec<FinancialData>> {
             (SELECT amortization_expense FROM cash_flow_statements c 
              WHERE c.stock_id = s.id AND c.period_type = 'Annual' 
              ORDER BY c.report_date DESC LIMIT 1) as amortization_expense,
+            (SELECT depreciation_amortization FROM cash_flow_statements c 
+             WHERE c.stock_id = s.id AND c.period_type = 'Annual' 
+             ORDER BY c.report_date DESC LIMIT 1) as depreciation_amortization,
              
             -- Latest stock price data
             (SELECT close_price FROM daily_prices dp 
@@ -291,6 +295,7 @@ async fn fetch_financial_data(pool: &SqlitePool) -> Result<Vec<FinancialData>> {
             operating_income: row.get("operating_income"),
             depreciation_expense: row.get("depreciation_expense"),
             amortization_expense: row.get("amortization_expense"),
+            depreciation_amortization: row.get("depreciation_amortization"),
             dividends_paid: row.get("dividends_paid"),
             share_repurchases: row.get("share_repurchases"),
         };
@@ -370,6 +375,7 @@ async fn fetch_historical_financial_data(pool: &SqlitePool) -> Result<Vec<Financ
             operating_income: row.get("operating_income"),
             depreciation_expense: row.get("depreciation_expense"),
             amortization_expense: row.get("amortization_expense"),
+            depreciation_amortization: row.get("depreciation_amortization"),
             dividends_paid: row.get("dividends_paid"),
             share_repurchases: row.get("share_repurchases"),
         };
@@ -440,7 +446,21 @@ fn calculate_stock_ratios(data: &FinancialData) -> CalculatedRatios {
         let net_income = data.net_income.unwrap_or(0.0);
         let depreciation = data.depreciation_expense.unwrap_or(0.0);
         let amortization = data.amortization_expense.unwrap_or(0.0);
-        let cash_flow = net_income + depreciation + amortization;
+        let depreciation_amortization = data.depreciation_amortization.unwrap_or(0.0);
+        
+        // Use combined value if individual values are missing
+        let total_depreciation = if depreciation > 0.0 { 
+            depreciation 
+        } else { 
+            depreciation_amortization / 2.0 
+        };
+        let total_amortization = if amortization > 0.0 { 
+            amortization 
+        } else { 
+            depreciation_amortization / 2.0 
+        };
+        
+        let cash_flow = net_income + total_depreciation + total_amortization;
         
         if cash_flow > 0.0 {
             ratios.pcf_ratio_annual = Some(market_cap / cash_flow);
@@ -454,7 +474,21 @@ fn calculate_stock_ratios(data: &FinancialData) -> CalculatedRatios {
         let operating_income = data.operating_income.unwrap_or(0.0);
         let depreciation = data.depreciation_expense.unwrap_or(0.0);
         let amortization = data.amortization_expense.unwrap_or(0.0);
-        let ebitda = operating_income + depreciation + amortization;
+        let depreciation_amortization = data.depreciation_amortization.unwrap_or(0.0);
+        
+        // Use combined value if individual values are missing
+        let total_depreciation = if depreciation > 0.0 { 
+            depreciation 
+        } else { 
+            depreciation_amortization / 2.0 
+        };
+        let total_amortization = if amortization > 0.0 { 
+            amortization 
+        } else { 
+            depreciation_amortization / 2.0 
+        };
+        
+        let ebitda = operating_income + total_depreciation + total_amortization;
         
         if ebitda > 0.0 {
             ratios.ev_ebitda_ratio_annual = Some(enterprise_value / ebitda);
@@ -468,7 +502,8 @@ fn calculate_stock_ratios(data: &FinancialData) -> CalculatedRatios {
         let share_repurchases = data.share_repurchases.unwrap_or(0.0);
         let total_shareholder_return = dividends_paid + share_repurchases;
         
-        if market_cap > 0.0 && total_shareholder_return > 0.0 {
+        // Set to 0% if no dividends or repurchases (valid business model)
+        if market_cap > 0.0 {
             ratios.shareholder_yield_annual = Some(total_shareholder_return / market_cap);
             ratios.data_completeness_score += 20; // 20 points for Shareholder Yield
         }

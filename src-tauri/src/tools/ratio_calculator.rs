@@ -182,9 +182,12 @@ async fn fetch_financial_data(pool: &SqlitePool) -> Result<Vec<FinancialData>> {
             (SELECT date FROM daily_prices dp 
              WHERE dp.stock_id = s.id 
              ORDER BY dp.date DESC LIMIT 1) as latest_price_date,
-            (SELECT shares_outstanding FROM daily_prices dp 
-             WHERE dp.stock_id = s.id AND dp.shares_outstanding IS NOT NULL
-             ORDER BY dp.date DESC LIMIT 1) as shares_outstanding,
+            (SELECT shares_basic FROM income_statements i 
+             WHERE i.stock_id = s.id AND i.shares_basic IS NOT NULL AND i.shares_basic > 0
+             ORDER BY 
+                 CASE WHEN i.data_source = 'sec_edgar_json' THEN 0 ELSE 1 END,
+                 i.report_date DESC 
+             LIMIT 1) as shares_outstanding,
              
             -- Latest balance sheet data for EV and P/B calculation
             (SELECT cash_and_equivalents FROM balance_sheets b
@@ -209,6 +212,10 @@ async fn fetch_financial_data(pool: &SqlitePool) -> Result<Vec<FinancialData>> {
         WHERE s.id IN (
             SELECT DISTINCT stock_id FROM balance_sheets 
             WHERE total_equity IS NOT NULL AND total_equity > 0
+        )
+        AND s.id IN (
+            SELECT DISTINCT stock_id FROM income_statements 
+            WHERE shares_basic IS NOT NULL AND shares_basic > 0
         )
         ORDER BY s.symbol
     "#;

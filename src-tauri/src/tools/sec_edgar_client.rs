@@ -74,6 +74,26 @@ pub struct BalanceSheetData {
     pub data_source: String,
 }
 
+/// Income statement data extracted from SEC filing
+#[derive(Debug, Clone)]
+pub struct IncomeStatementData {
+    pub stock_id: i64,
+    pub symbol: String,
+    pub report_date: NaiveDate,
+    pub fiscal_year: i32,
+    pub period_type: String,
+    pub revenue: Option<f64>,
+    pub net_income: Option<f64>,
+    pub operating_income: Option<f64>,
+    pub gross_profit: Option<f64>,
+    pub cost_of_revenue: Option<f64>,
+    pub interest_expense: Option<f64>,
+    pub tax_expense: Option<f64>,
+    pub shares_basic: Option<f64>,
+    pub shares_diluted: Option<f64>,
+    pub data_source: String,
+}
+
 impl SecEdgarClient {
     /// Create a new SEC EDGAR client
     pub fn new(pool: SqlitePool) -> Self {
@@ -293,6 +313,134 @@ impl SecEdgarClient {
         Ok(balance_sheet_data)
     }
 
+    /// Parse Company Facts JSON to extract income statement data including shares outstanding
+    fn parse_income_statement_json(&self, json: &serde_json::Value, symbol: &str) -> Result<HashMap<String, f64>> {
+        let mut income_data = HashMap::new();
+        
+        // Income statement field mappings (US GAAP taxonomy)
+        let field_mappings = [
+            ("Revenues", "revenue"),
+            ("RevenueFromContractWithCustomerExcludingAssessedTax", "revenue"),
+            ("SalesRevenueNet", "revenue"),
+            ("NetIncomeLoss", "net_income"),
+            ("OperatingIncomeLoss", "operating_income"),
+            ("GrossProfit", "gross_profit"),
+            ("CostOfGoodsAndServicesSold", "cost_of_revenue"),
+            ("InterestExpense", "interest_expense"),
+            ("IncomeTaxExpenseBenefit", "tax_expense"),
+        ];
+
+        // Shares outstanding field mappings
+        let shares_mappings = [
+            ("WeightedAverageNumberOfSharesOutstandingBasic", "shares_basic"),
+            ("WeightedAverageNumberOfSharesOutstandingDiluted", "shares_diluted"),
+            ("EntityCommonStockSharesOutstanding", "shares_outstanding"),
+        ];
+
+        // Navigate to the facts section
+        if let Some(facts) = json.get("facts").and_then(|f| f.get("us-gaap")) {
+            // Extract income statement data
+            for (field_name, our_field) in &field_mappings {
+                if let Some(field_data) = facts.get(field_name) {
+                    if let Some(units) = field_data.get("units") {
+                        if let Some(usd_data) = units.get("USD") {
+                            if let Some(values) = usd_data.as_array() {
+                                // Get the most recent value
+                                if let Some(latest_value) = values.last() {
+                                    if let Some(val) = latest_value.get("val").and_then(|v| v.as_f64()) {
+                                        if val != 0.0 {
+                                            income_data.insert(our_field.to_string(), val);
+                                            println!("    📈 Found {}: ${:.0}M", field_name, val / 1_000_000.0);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Extract shares outstanding data
+            for (field_name, our_field) in &shares_mappings {
+                if let Some(field_data) = facts.get(field_name) {
+                    if let Some(units) = field_data.get("units") {
+                        if let Some(shares_data) = units.get("shares") {
+                            if let Some(values) = shares_data.as_array() {
+                                // Get the most recent value
+                                if let Some(latest_value) = values.last() {
+                                    if let Some(val) = latest_value.get("val").and_then(|v| v.as_f64()) {
+                                        if val > 0.0 {
+                                            income_data.insert(our_field.to_string(), val);
+                                            println!("    📊 Found {}: {:.0}M shares", field_name, val / 1_000_000.0);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(income_data)
+    }
+
+    /// Extract income statement data using SEC EDGAR Company Facts API
+    pub async fn extract_income_statement_data(&mut self, cik: &str, stock_id: i64, symbol: &str) -> Result<Option<IncomeStatementData>> {
+        self.rate_limiter.wait_if_needed().await;
+
+        println!("  📈 Extracting income statement data for {} using Company Facts API", symbol);
+
+        // Use SEC EDGAR Company Facts API
+        let url = format!(
+            "https://data.sec.gov/api/xbrl/companyfacts/CIK{:0>10}.json",
+            cik
+        );
+
+        let response = self.http_client
+            .get(&url)
+            .header("User-Agent", "rust-stocks-edgar-client/1.0 (contact@example.com)")
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            println!("    ⚠️ Company Facts API failed for {}: {}", symbol, response.status());
+            return Ok(None);
+        }
+
+        let json: serde_json::Value = response.json().await?;
+
+        // Extract income statement data from JSON
+        let income_data = self.parse_income_statement_json(&json, symbol)?;
+
+        if income_data.is_empty() {
+            println!("    ⚠️ No income statement data found for {}", symbol);
+            return Ok(None);
+        }
+
+        // Get the most recent fiscal year (simplified for now, will refine for historical data)
+        let current_year = Utc::now().year();
+        let fiscal_year = current_year - 1; // Most recent completed fiscal year
+
+        Ok(Some(IncomeStatementData {
+            stock_id,
+            symbol: symbol.to_string(),
+            report_date: NaiveDate::from_ymd_opt(fiscal_year, 12, 31).unwrap_or_default(), // Placeholder date
+            fiscal_year,
+            period_type: "TTM".to_string(),
+            revenue: income_data.get("revenue").copied(),
+            net_income: income_data.get("net_income").copied(),
+            operating_income: income_data.get("operating_income").copied(),
+            gross_profit: income_data.get("gross_profit").copied(),
+            cost_of_revenue: income_data.get("cost_of_revenue").copied(),
+            interest_expense: income_data.get("interest_expense").copied(),
+            tax_expense: income_data.get("tax_expense").copied(),
+            shares_basic: income_data.get("shares_basic").copied(),
+            shares_diluted: income_data.get("shares_diluted").copied(),
+            data_source: "sec_edgar_json".to_string(),
+        }))
+    }
+
     /// Store balance sheet data in the database
     pub async fn store_balance_sheet_data(&self, data: &BalanceSheetData) -> Result<()> {
         let query = r#"
@@ -317,6 +465,36 @@ impl SecEdgarClient {
             .bind(data.short_term_debt)
             .bind(data.long_term_debt)
             .bind(data.total_debt)
+            .bind(&data.data_source)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Store income statement data in the database
+    pub async fn store_income_statement_data(&self, data: &IncomeStatementData) -> Result<()> {
+        let query = r#"
+            INSERT OR REPLACE INTO income_statements (
+                stock_id, period_type, report_date, fiscal_year,
+                revenue, gross_profit, operating_income, net_income,
+                shares_basic, shares_diluted, currency, data_source, created_at
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'USD', ?11, CURRENT_TIMESTAMP
+            )
+        "#;
+
+        sqlx::query(query)
+            .bind(data.stock_id)
+            .bind(&data.period_type)
+            .bind(data.report_date)
+            .bind(data.fiscal_year)
+            .bind(data.revenue)
+            .bind(data.gross_profit)
+            .bind(data.operating_income)
+            .bind(data.net_income)
+            .bind(data.shares_basic)
+            .bind(data.shares_diluted)
             .bind(&data.data_source)
             .execute(&self.pool)
             .await?;
@@ -378,6 +556,60 @@ impl SecEdgarClient {
         Ok(())
     }
 
+    /// Download income statement data for all S&P 500 companies
+    pub async fn download_all_sp500_income_statements(&mut self) -> Result<()> {
+        println!("🚀 Starting SEC EDGAR income statement data download for S&P 500 companies...");
+        
+        let mappings = self.get_sp500_cik_mappings().await?;
+        let total_companies = mappings.len();
+        
+        let pb = ProgressBar::new(total_companies as u64);
+        pb.set_style(
+            ProgressStyle::default_bar()
+                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos:>7}/{len:7} {msg}")
+                .unwrap()
+                .progress_chars("#>-")
+        );
+        pb.set_message("Downloading income statement data...");
+
+        let mut success_count = 0;
+        let mut error_count = 0;
+
+        for (i, mapping) in mappings.iter().enumerate() {
+            pb.set_message(format!("Processing {} ({})", mapping.symbol, mapping.company_name));
+            
+            match self.download_company_income_statements(mapping).await {
+                Ok(filings_processed) => {
+                    success_count += 1;
+                    if filings_processed > 0 {
+                        println!("  ✅ {}: {} filings processed", mapping.symbol, filings_processed);
+                    }
+                }
+                Err(e) => {
+                    error_count += 1;
+                    eprintln!("  ❌ {}: {}", mapping.symbol, e);
+                }
+            }
+
+            pb.inc(1);
+            
+            // Update progress every 10 companies
+            if (i + 1) % 10 == 0 {
+                pb.set_message(format!("Processed {} companies...", i + 1));
+            }
+        }
+
+        pb.finish_with_message("✅ Income statement download completed");
+        
+        println!("\n📊 SEC EDGAR Income Statement Download Summary:");
+        println!("  Total Companies: {}", total_companies);
+        println!("  Successful: {}", success_count);
+        println!("  Errors: {}", error_count);
+        println!("  Success Rate: {:.1}%", (success_count as f64 / total_companies as f64) * 100.0);
+
+        Ok(())
+    }
+
     /// Download balance sheet data for a single company
     async fn download_company_balance_sheets(&mut self, mapping: &CikMapping) -> Result<usize> {
         match self.extract_balance_sheet_data(&mapping.cik, mapping.stock_id, &mapping.symbol).await {
@@ -391,6 +623,24 @@ impl SecEdgarClient {
             }
             Err(e) => {
                 eprintln!("    ⚠️ Failed to extract balance sheet data for {}: {}", mapping.symbol, e);
+                Ok(0)
+            }
+        }
+    }
+
+    /// Download income statement data for a single company
+    async fn download_company_income_statements(&mut self, mapping: &CikMapping) -> Result<usize> {
+        match self.extract_income_statement_data(&mapping.cik, mapping.stock_id, &mapping.symbol).await {
+            Ok(Some(data)) => {
+                self.store_income_statement_data(&data).await?;
+                Ok(1)
+            }
+            Ok(None) => {
+                // No data extracted
+                Ok(0)
+            }
+            Err(e) => {
+                eprintln!("    ⚠️ Failed to extract income statement data for {}: {}", mapping.symbol, e);
                 Ok(0)
             }
         }

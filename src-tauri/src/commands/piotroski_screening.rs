@@ -53,11 +53,11 @@ pub struct PiotroskilScreeningCriteria {
 impl Default for PiotroskilScreeningCriteria {
     fn default() -> Self {
         Self {
-            min_f_score: Some(3),
-            min_data_completeness: Some(50),
+            min_f_score: Some(7), // Show only high-quality stocks (F-Score ≥ 7)
+            min_data_completeness: Some(80), // Require high data completeness
             sectors: None,
             min_market_cap: None,
-            passes_screening_only: Some(false),
+            passes_screening_only: Some(true), // Only show stocks that pass screening
         }
     }
 }
@@ -147,9 +147,9 @@ pub async fn get_piotroski_screening_results_internal(
 
     query.push_str(" ORDER BY f_score_complete DESC, data_completeness_score DESC");
 
-    if let Some(limit_val) = limit {
-        query.push_str(&format!(" LIMIT {}", limit_val));
-    }
+    // Default to top 10 if no limit specified
+    let limit_val = limit.unwrap_or(10);
+    query.push_str(&format!(" LIMIT {}", limit_val));
 
     // Build the query with parameters
     let mut sqlx_query = sqlx::query(&query);

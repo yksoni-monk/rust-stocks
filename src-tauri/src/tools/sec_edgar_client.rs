@@ -71,6 +71,7 @@ pub struct BalanceSheetData {
     pub short_term_debt: Option<f64>,
     pub long_term_debt: Option<f64>,
     pub total_debt: Option<f64>,
+    pub share_repurchases: Option<f64>,
     pub data_source: String,
 }
 
@@ -266,6 +267,7 @@ impl SecEdgarClient {
             short_term_debt: balance_sheet_data.get("ShortTermDebt").copied(),
             long_term_debt: balance_sheet_data.get("LongTermDebt").copied(),
             total_debt: balance_sheet_data.get("Debt").copied(),
+            share_repurchases: balance_sheet_data.get("ShareRepurchases").copied(),
             data_source: "sec_edgar_json".to_string(),
         }))
     }
@@ -285,6 +287,7 @@ impl SecEdgarClient {
             ("ShortTermDebt", "ShortTermDebt"),
             ("LongTermDebt", "LongTermDebt"),
             ("Debt", "Debt"),
+            ("PaymentsForRepurchaseOfCommonStock", "ShareRepurchases"),
         ];
 
         // Navigate to the facts section
@@ -448,9 +451,9 @@ impl SecEdgarClient {
                 stock_id, period_type, report_date, fiscal_year,
                 total_assets, total_liabilities, total_equity,
                 cash_and_equivalents, short_term_debt, long_term_debt, total_debt,
-                data_source, created_at
+                share_repurchases, data_source, created_at
             ) VALUES (
-                ?1, 'Annual', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, CURRENT_TIMESTAMP
+                ?1, 'Annual', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, CURRENT_TIMESTAMP
             )
         "#;
 
@@ -465,6 +468,7 @@ impl SecEdgarClient {
             .bind(data.short_term_debt)
             .bind(data.long_term_debt)
             .bind(data.total_debt)
+            .bind(data.share_repurchases)
             .bind(&data.data_source)
             .execute(&self.pool)
             .await?;

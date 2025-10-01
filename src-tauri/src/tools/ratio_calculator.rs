@@ -55,7 +55,7 @@ struct CalculatedRatios {
     ps_ratio_ttm: Option<f64>,
     evs_ratio_ttm: Option<f64>,
     pb_ratio_ttm: Option<f64>,
-    pcf_ratio_ttm: Option<f64>,
+    pcf_ratio_annual: Option<f64>,
     data_completeness_score: i32,
 }
 
@@ -355,7 +355,7 @@ fn calculate_stock_ratios(data: &FinancialData) -> CalculatedRatios {
         ps_ratio_ttm: None,
         evs_ratio_ttm: None,
         pb_ratio_ttm: None,
-        pcf_ratio_ttm: None,
+        pcf_ratio_annual: None,
         data_completeness_score: 0,
     };
 
@@ -408,7 +408,7 @@ fn calculate_stock_ratios(data: &FinancialData) -> CalculatedRatios {
         let cash_flow = net_income + depreciation + amortization;
         
         if cash_flow > 0.0 {
-            ratios.pcf_ratio_ttm = Some(market_cap / cash_flow);
+            ratios.pcf_ratio_annual = Some(market_cap / cash_flow);
             ratios.data_completeness_score += 20; // 20 points for P/CF ratio
         }
     }
@@ -430,7 +430,7 @@ async fn store_calculated_ratios(
         r#"
         INSERT OR REPLACE INTO daily_valuation_ratios (
             stock_id, date, price, market_cap, enterprise_value,
-            ps_ratio_ttm, evs_ratio_ttm, pb_ratio_ttm, pcf_ratio_ttm, revenue_ttm,
+            ps_ratio_ttm, evs_ratio_ttm, pb_ratio_ttm, pcf_ratio_annual, revenue_ttm,
             data_completeness_score, last_financial_update
         ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12
@@ -445,7 +445,7 @@ async fn store_calculated_ratios(
     .bind(ratios.ps_ratio_ttm)
     .bind(ratios.evs_ratio_ttm)
     .bind(ratios.pb_ratio_ttm)
-    .bind(ratios.pcf_ratio_ttm)
+    .bind(ratios.pcf_ratio_annual)
     .bind(data.latest_ttm_revenue)
     .bind(ratios.data_completeness_score)
     .bind(data.latest_ttm_report_date)
@@ -457,7 +457,7 @@ async fn store_calculated_ratios(
             if ratios.ps_ratio_ttm.is_some() { stats.ps_ratios_calculated = 1; }
             if ratios.evs_ratio_ttm.is_some() { stats.evs_ratios_calculated = 1; }
             if ratios.pb_ratio_ttm.is_some() { stats.pb_ratios_calculated = 1; }
-            if ratios.pcf_ratio_ttm.is_some() { stats.pcf_ratios_calculated = 1; }
+            if ratios.pcf_ratio_annual.is_some() { stats.pcf_ratios_calculated = 1; }
             if ratios.market_cap.is_some() { stats.market_caps_calculated = 1; }
             if ratios.enterprise_value.is_some() { stats.enterprise_values_calculated = 1; }
         }

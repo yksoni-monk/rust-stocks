@@ -699,15 +699,15 @@ impl DataRefreshManager {
     }
 
 
-    /// Calculate P/S and EV/S ratios (internal helper)
+    /// Calculate P/S, EV/S, and P/B ratios (internal helper)
     async fn calculate_ps_evs_ratios_internal(&self) -> Result<i64> {
-        println!("📊 Calculating P/S and EV/S ratios...");
+        println!("📊 Calculating P/S, EV/S, and P/B ratios...");
 
         // Use internal ratio calculator directly
-        let stats = ratio_calculator::calculate_ps_and_evs_ratios(&self.pool).await?;
+        let stats = ratio_calculator::calculate_ps_evs_pb_ratios(&self.pool).await?;
 
-        let total_ratios = stats.ps_ratios_calculated + stats.evs_ratios_calculated;
-        println!("✅ P/S and EV/S ratios calculated - {} stocks processed, {} ratios calculated",
+        let total_ratios = stats.ps_ratios_calculated + stats.evs_ratios_calculated + stats.pb_ratios_calculated;
+        println!("✅ P/S, EV/S, and P/B ratios calculated - {} stocks processed, {} ratios calculated",
                  stats.stocks_processed, total_ratios);
         Ok(total_ratios as i64)
     }

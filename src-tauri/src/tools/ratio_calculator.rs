@@ -8,6 +8,7 @@ pub struct RatioCalculationStats {
     pub stocks_processed: usize,
     pub ps_ratios_calculated: usize,
     pub evs_ratios_calculated: usize,
+    pub pb_ratios_calculated: usize,
     pub market_caps_calculated: usize,
     pub enterprise_values_calculated: usize,
     pub errors: usize,
@@ -19,6 +20,7 @@ impl Default for RatioCalculationStats {
             stocks_processed: 0,
             ps_ratios_calculated: 0,
             evs_ratios_calculated: 0,
+            pb_ratios_calculated: 0,
             market_caps_calculated: 0,
             enterprise_values_calculated: 0,
             errors: 0,
@@ -38,6 +40,7 @@ struct FinancialData {
     shares_outstanding: Option<f64>,
     cash_and_equivalents: Option<f64>,
     total_debt: Option<f64>,
+    total_equity: Option<f64>,
 }
 
 #[derive(Debug)]
@@ -46,12 +49,13 @@ struct CalculatedRatios {
     enterprise_value: Option<f64>,
     ps_ratio_ttm: Option<f64>,
     evs_ratio_ttm: Option<f64>,
+    pb_ratio_ttm: Option<f64>,
     data_completeness_score: i32,
 }
 
-/// Calculate P/S and EV/S ratios for all stocks with TTM financial data
-pub async fn calculate_ps_and_evs_ratios(pool: &SqlitePool) -> Result<RatioCalculationStats> {
-    println!("🧮 Starting P/S and EV/S ratio calculations...");
+/// Calculate P/S, EV/S, and P/B ratios for all stocks with TTM financial data
+pub async fn calculate_ps_evs_pb_ratios(pool: &SqlitePool) -> Result<RatioCalculationStats> {
+    println!("🧮 Starting P/S, EV/S, and P/B ratio calculations...");
     
     let financial_data = fetch_financial_data(pool).await?;
     println!("📊 Found {} stocks with financial data", financial_data.len());
@@ -83,6 +87,7 @@ pub async fn calculate_ps_and_evs_ratios(pool: &SqlitePool) -> Result<RatioCalcu
             Ok(stored_stats) => {
                 stats.ps_ratios_calculated += stored_stats.ps_ratios_calculated;
                 stats.evs_ratios_calculated += stored_stats.evs_ratios_calculated;
+                stats.pb_ratios_calculated += stored_stats.pb_ratios_calculated;
                 stats.market_caps_calculated += stored_stats.market_caps_calculated;
                 stats.enterprise_values_calculated += stored_stats.enterprise_values_calculated;
             }
@@ -102,9 +107,9 @@ pub async fn calculate_ps_and_evs_ratios(pool: &SqlitePool) -> Result<RatioCalcu
     Ok(stats)
 }
 
-/// Calculate P/S and EV/S ratios for ALL historical dates (not just recent)
-pub async fn calculate_historical_ps_and_evs_ratios(pool: &SqlitePool) -> Result<RatioCalculationStats> {
-    println!("🧮 Starting HISTORICAL P/S and EV/S ratio calculations...");
+/// Calculate P/S, EV/S, and P/B ratios for ALL historical dates (not just recent)
+pub async fn calculate_historical_ps_evs_pb_ratios(pool: &SqlitePool) -> Result<RatioCalculationStats> {
+    println!("🧮 Starting HISTORICAL P/S, EV/S, and P/B ratio calculations...");
     
     let historical_data = fetch_historical_financial_data(pool).await?;
     println!("📊 Found {} historical financial records", historical_data.len());
@@ -133,6 +138,7 @@ pub async fn calculate_historical_ps_and_evs_ratios(pool: &SqlitePool) -> Result
             Ok(stored_stats) => {
                 stats.ps_ratios_calculated += stored_stats.ps_ratios_calculated;
                 stats.evs_ratios_calculated += stored_stats.evs_ratios_calculated;
+                stats.pb_ratios_calculated += stored_stats.pb_ratios_calculated;
                 stats.market_caps_calculated += stored_stats.market_caps_calculated;
                 stats.enterprise_values_calculated += stored_stats.enterprise_values_calculated;
             }
@@ -180,17 +186,29 @@ async fn fetch_financial_data(pool: &SqlitePool) -> Result<Vec<FinancialData>> {
              WHERE dp.stock_id = s.id AND dp.shares_outstanding IS NOT NULL
              ORDER BY dp.date DESC LIMIT 1) as shares_outstanding,
              
-            -- Latest balance sheet data for EV calculation
+            -- Latest balance sheet data for EV and P/B calculation
             (SELECT cash_and_equivalents FROM balance_sheets b
-             WHERE b.stock_id = s.id AND b.period_type = 'TTM'
-             ORDER BY b.report_date DESC LIMIT 1) as cash_and_equivalents,
+             WHERE b.stock_id = s.id AND b.period_type IN ('TTM', 'Annual')
+             ORDER BY 
+                 CASE WHEN b.data_source = 'sec_edgar_json' THEN 0 ELSE 1 END,
+                 b.report_date DESC 
+             LIMIT 1) as cash_and_equivalents,
             (SELECT total_debt FROM balance_sheets b
-             WHERE b.stock_id = s.id AND b.period_type = 'TTM'
-             ORDER BY b.report_date DESC LIMIT 1) as total_debt
+             WHERE b.stock_id = s.id AND b.period_type IN ('TTM', 'Annual')
+             ORDER BY 
+                 CASE WHEN b.data_source = 'sec_edgar_json' THEN 0 ELSE 1 END,
+                 b.report_date DESC 
+             LIMIT 1) as total_debt,
+            (SELECT total_equity FROM balance_sheets b
+             WHERE b.stock_id = s.id AND b.period_type IN ('TTM', 'Annual')
+             ORDER BY 
+                 CASE WHEN b.data_source = 'sec_edgar_json' THEN 0 ELSE 1 END,
+                 b.report_date DESC 
+             LIMIT 1) as total_equity
         FROM stocks s
         WHERE s.id IN (
-            SELECT DISTINCT stock_id FROM income_statements 
-            WHERE period_type = 'TTM' AND revenue IS NOT NULL
+            SELECT DISTINCT stock_id FROM balance_sheets 
+            WHERE total_equity IS NOT NULL AND total_equity > 0
         )
         ORDER BY s.symbol
     "#;
@@ -209,11 +227,12 @@ async fn fetch_financial_data(pool: &SqlitePool) -> Result<Vec<FinancialData>> {
             shares_outstanding: row.get("shares_outstanding"),
             cash_and_equivalents: row.get("cash_and_equivalents"),
             total_debt: row.get("total_debt"),
+            total_equity: row.get("total_equity"),
         };
         financial_data.push(data);
     }
     
-    println!("  ✅ Found {} stocks with TTM financial data", financial_data.len());
+    println!("  ✅ Found {} stocks with balance sheet data", financial_data.len());
     Ok(financial_data)
 }
 
@@ -237,15 +256,28 @@ async fn fetch_historical_financial_data(pool: &SqlitePool) -> Result<Vec<Financ
              ORDER BY dp.date DESC LIMIT 1) as latest_price_date,
             i.shares_diluted as shares_outstanding,
              
-            -- Get balance sheet data closest to the TTM report date
+            -- Get balance sheet data closest to the TTM report date (prioritize SEC EDGAR data)
             (SELECT cash_and_equivalents FROM balance_sheets b
-             WHERE b.stock_id = s.id AND b.period_type = 'TTM'
+             WHERE b.stock_id = s.id AND b.period_type IN ('TTM', 'Annual')
              AND b.report_date <= i.report_date
-             ORDER BY b.report_date DESC LIMIT 1) as cash_and_equivalents,
+             ORDER BY 
+                 CASE WHEN b.data_source = 'sec_edgar_json' THEN 0 ELSE 1 END,
+                 b.report_date DESC 
+             LIMIT 1) as cash_and_equivalents,
             (SELECT total_debt FROM balance_sheets b
-             WHERE b.stock_id = s.id AND b.period_type = 'TTM'
+             WHERE b.stock_id = s.id AND b.period_type IN ('TTM', 'Annual')
              AND b.report_date <= i.report_date
-             ORDER BY b.report_date DESC LIMIT 1) as total_debt
+             ORDER BY 
+                 CASE WHEN b.data_source = 'sec_edgar_json' THEN 0 ELSE 1 END,
+                 b.report_date DESC 
+             LIMIT 1) as total_debt,
+            (SELECT total_equity FROM balance_sheets b
+             WHERE b.stock_id = s.id AND b.period_type IN ('TTM', 'Annual')
+             AND b.report_date <= i.report_date
+             ORDER BY 
+                 CASE WHEN b.data_source = 'sec_edgar_json' THEN 0 ELSE 1 END,
+                 b.report_date DESC 
+             LIMIT 1) as total_equity
         FROM stocks s
         JOIN income_statements i ON s.id = i.stock_id
         WHERE i.period_type = 'TTM' 
@@ -268,6 +300,7 @@ async fn fetch_historical_financial_data(pool: &SqlitePool) -> Result<Vec<Financ
             shares_outstanding: row.get("shares_outstanding"),
             cash_and_equivalents: row.get("cash_and_equivalents"),
             total_debt: row.get("total_debt"),
+            total_equity: row.get("total_equity"),
         };
         financial_data.push(data);
     }
@@ -283,6 +316,7 @@ fn calculate_stock_ratios(data: &FinancialData) -> CalculatedRatios {
         enterprise_value: None,
         ps_ratio_ttm: None,
         evs_ratio_ttm: None,
+        pb_ratio_ttm: None,
         data_completeness_score: 0,
     };
 
@@ -306,7 +340,7 @@ fn calculate_stock_ratios(data: &FinancialData) -> CalculatedRatios {
     if let (Some(market_cap), Some(revenue)) = (ratios.market_cap, data.latest_ttm_revenue) {
         if revenue > 0.0 {
             ratios.ps_ratio_ttm = Some(market_cap / revenue);
-            ratios.data_completeness_score += 25; // 25 points for P/S ratio
+            ratios.data_completeness_score += 20; // 20 points for P/S ratio
         }
     }
 
@@ -314,7 +348,15 @@ fn calculate_stock_ratios(data: &FinancialData) -> CalculatedRatios {
     if let (Some(enterprise_value), Some(revenue)) = (ratios.enterprise_value, data.latest_ttm_revenue) {
         if revenue > 0.0 {
             ratios.evs_ratio_ttm = Some(enterprise_value / revenue);
-            ratios.data_completeness_score += 25; // 25 points for EV/S ratio
+            ratios.data_completeness_score += 20; // 20 points for EV/S ratio
+        }
+    }
+
+    // Calculate P/B Ratio = Market Cap / Total Equity (Book Value)
+    if let (Some(market_cap), Some(equity)) = (ratios.market_cap, data.total_equity) {
+        if equity > 0.0 {
+            ratios.pb_ratio_ttm = Some(market_cap / equity);
+            ratios.data_completeness_score += 20; // 20 points for P/B ratio
         }
     }
 
@@ -335,10 +377,10 @@ async fn store_calculated_ratios(
         r#"
         INSERT OR REPLACE INTO daily_valuation_ratios (
             stock_id, date, price, market_cap, enterprise_value,
-            ps_ratio_ttm, evs_ratio_ttm, revenue_ttm,
+            ps_ratio_ttm, evs_ratio_ttm, pb_ratio_ttm, revenue_ttm,
             data_completeness_score, last_financial_update
         ) VALUES (
-            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11
         )
         "#
     )
@@ -349,6 +391,7 @@ async fn store_calculated_ratios(
     .bind(ratios.enterprise_value)
     .bind(ratios.ps_ratio_ttm)
     .bind(ratios.evs_ratio_ttm)
+    .bind(ratios.pb_ratio_ttm)
     .bind(data.latest_ttm_revenue)
     .bind(ratios.data_completeness_score)
     .bind(data.latest_ttm_report_date)
@@ -359,6 +402,7 @@ async fn store_calculated_ratios(
         Ok(_) => {
             if ratios.ps_ratio_ttm.is_some() { stats.ps_ratios_calculated = 1; }
             if ratios.evs_ratio_ttm.is_some() { stats.evs_ratios_calculated = 1; }
+            if ratios.pb_ratio_ttm.is_some() { stats.pb_ratios_calculated = 1; }
             if ratios.market_cap.is_some() { stats.market_caps_calculated = 1; }
             if ratios.enterprise_value.is_some() { stats.enterprise_values_calculated = 1; }
         }
@@ -403,9 +447,9 @@ pub async fn calculate_ratios_for_negative_earnings_stocks(pool: &SqlitePool) ->
         println!("  🔴 {} (Net Income: ${:.1}M)", symbol, net_income / 1_000_000.0);
     }
     
-    // Calculate P/S and EV/S ratios for these stocks
-    println!("💡 Calculating P/S and EV/S ratios for negative earnings stocks...");
-    calculate_ps_and_evs_ratios(pool).await
+    // Calculate P/S, EV/S, and P/B ratios for these stocks
+    println!("💡 Calculating P/S, EV/S, and P/B ratios for negative earnings stocks...");
+    calculate_ps_evs_pb_ratios(pool).await
 }
 
 /// Generate ratio calculation summary report
@@ -419,6 +463,7 @@ pub async fn generate_ratio_summary_report(pool: &SqlitePool) -> Result<()> {
             COUNT(*) as total_records,
             COUNT(ps_ratio_ttm) as ps_ratios,
             COUNT(evs_ratio_ttm) as evs_ratios,
+            COUNT(pb_ratio_ttm) as pb_ratios,
             COUNT(market_cap) as market_caps,
             COUNT(enterprise_value) as enterprise_values,
             AVG(data_completeness_score) as avg_completeness
@@ -430,6 +475,7 @@ pub async fn generate_ratio_summary_report(pool: &SqlitePool) -> Result<()> {
     let total_records: i64 = ratios_count.get("total_records");
     let ps_ratios: i64 = ratios_count.get("ps_ratios");
     let evs_ratios: i64 = ratios_count.get("evs_ratios");
+    let pb_ratios: i64 = ratios_count.get("pb_ratios");
     let market_caps: i64 = ratios_count.get("market_caps");
     let enterprise_values: i64 = ratios_count.get("enterprise_values");
     let avg_completeness: Option<f64> = ratios_count.get("avg_completeness");
@@ -438,6 +484,7 @@ pub async fn generate_ratio_summary_report(pool: &SqlitePool) -> Result<()> {
     println!("  Total Records: {}", total_records);
     println!("  P/S Ratios Calculated: {}", ps_ratios);
     println!("  EV/S Ratios Calculated: {}", evs_ratios);
+    println!("  P/B Ratios Calculated: {}", pb_ratios);
     println!("  Market Caps Calculated: {}", market_caps);
     println!("  Enterprise Values Calculated: {}", enterprise_values);
     println!("  Average Data Completeness: {:.1}%", avg_completeness.unwrap_or(0.0));

@@ -19,8 +19,15 @@ export interface Recommendation {
   quality_score?: number;
   passes_garp_screening?: boolean;
   market_cap?: number;
+  enterprise_value?: number;
   ps_ratio_ttm?: number;
   z_score?: number;
+
+  // Enhanced O'Shaughnessy metrics (all 6)
+  pe_ratio?: number;
+  pb_ratio?: number;
+  ev_ebitda_ratio?: number;
+  shareholder_yield?: number;
   reasoning: string;
 
   // Piotroski F-Score fields (when screening type is 'piotroski')
@@ -323,19 +330,27 @@ export function createRecommendationsStore() {
               reasoning: `F-Score: ${stock.f_score_complete}/9 | Data Quality: ${stock.data_completeness_score}% | Income: ${stock.criterion_positive_net_income ? '✓' : '✗'} | ROA: ${stock.criterion_improving_roa ? '✓' : '✗'} | Debt: ${stock.criterion_decreasing_debt_ratio ? '✓' : '✗'}`
             };
           } else if (currentScreeningType === 'oshaughnessy') {
-            // O'Shaughnessy Value Composite transformation
+            // Enhanced O'Shaughnessy Value Composite transformation (6 metrics)
             return {
               rank: index + 1,
               symbol: stock.symbol,
               company_name: stock.symbol,
-              current_pe_ratio: null,
+              current_pe_ratio: stock.pe_ratio,
               current_price: stock.current_price,
               market_cap: stock.market_cap,
+              enterprise_value: stock.enterprise_value,
+
+              // Enhanced O'Shaughnessy metrics
               ps_ratio_ttm: stock.ps_ratio,
+              pe_ratio: stock.pe_ratio,
+              pb_ratio: stock.pb_ratio,
+              ev_ebitda_ratio: stock.ev_ebitda_ratio,
+              shareholder_yield: stock.shareholder_yield,
+
               garp_score: 100 - stock.composite_percentile, // Invert percentile for scoring
               quality_score: stock.data_completeness_score,
               passes_garp_screening: stock.passes_screening === 1,
-              reasoning: `Value Rank: ${stock.overall_rank} (${stock.composite_percentile}th percentile) | P/S: ${stock.ps_ratio?.toFixed(2) || 'N/A'} | EV/S: ${stock.evs_ratio?.toFixed(2) || 'N/A'} | Score: ${stock.composite_score?.toFixed(1) || 'N/A'}`
+              reasoning: `Value Rank: ${stock.overall_rank} (${stock.composite_percentile}th percentile) | Metrics: ${stock.metrics_available}/6 | P/S: ${stock.ps_ratio?.toFixed(2) || 'N/A'} | P/E: ${stock.pe_ratio?.toFixed(2) || 'N/A'} | P/B: ${stock.pb_ratio?.toFixed(2) || 'N/A'} | EV/EBITDA: ${stock.ev_ebitda_ratio?.toFixed(2) || 'N/A'} | EV/S: ${stock.evs_ratio?.toFixed(2) || 'N/A'} | Yield: ${stock.shareholder_yield?.toFixed(1) || 'N/A'}%`
             };
           } else {
             // GARP transformation

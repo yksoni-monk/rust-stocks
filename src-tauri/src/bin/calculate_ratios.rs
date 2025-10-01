@@ -5,8 +5,8 @@ use anyhow::Result;
 
 // Import the ratio calculator module
 use rust_stocks_tauri_lib::tools::ratio_calculator::{
-    calculate_ps_and_evs_ratios,
-    calculate_historical_ps_and_evs_ratios,
+    calculate_ps_evs_pb_ratios,
+    calculate_historical_ps_evs_pb_ratios,
     calculate_ratios_for_negative_earnings_stocks,
     generate_ratio_summary_report,
 };
@@ -115,7 +115,7 @@ async fn main() -> Result<()> {
     } else if historical {
         // Calculate historical P/S and EV/S ratios
         println!("\n🧮 Calculating HISTORICAL P/S and EV/S ratios for all stocks...");
-        match calculate_historical_ps_and_evs_ratios(&pool).await {
+        match calculate_historical_ps_evs_pb_ratios(&pool).await {
             Ok(stats) => {
                 let duration = start_time.elapsed();
                 print_calculation_summary(&stats, duration);
@@ -132,7 +132,7 @@ async fn main() -> Result<()> {
     } else {
         // Calculate recent P/S and EV/S ratios only
         println!("\n🧮 Calculating P/S and EV/S ratios for recent dates...");
-        match calculate_ps_and_evs_ratios(&pool).await {
+        match calculate_ps_evs_pb_ratios(&pool).await {
             Ok(stats) => {
                 let duration = start_time.elapsed();
                 print_calculation_summary(&stats, duration);
@@ -169,6 +169,7 @@ fn print_calculation_summary(stats: &rust_stocks_tauri_lib::tools::ratio_calcula
     println!("📊 Stocks Processed: {}", stats.stocks_processed);
     println!("💰 P/S Ratios Calculated: {}", stats.ps_ratios_calculated);
     println!("🏢 EV/S Ratios Calculated: {}", stats.evs_ratios_calculated);
+    println!("📚 P/B Ratios Calculated: {}", stats.pb_ratios_calculated);
     println!("📈 Market Caps Calculated: {}", stats.market_caps_calculated);
     println!("🏦 Enterprise Values Calculated: {}", stats.enterprise_values_calculated);
     println!("❌ Errors: {}", stats.errors);

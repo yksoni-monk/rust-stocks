@@ -2,7 +2,8 @@
 
 ## PRODUCTION DATABASE (NEVER FORGET THIS!)
 - **Location**: `src-tauri/db/stocks.db` (in src-tauri/db/ directory)
-- **Size**: 2.5GB 
+- **DATABASE_URL**: `sqlite:/Users/yksoni/code/misc/rust-stocks/src-tauri/db/stocks.db` (ABSOLUTE PATH REQUIRED)
+- **Size**: 2.5GB
 - **Data**: 5,892 stocks, 6.2M daily prices, 54K TTM financials
 - **Status**: PRODUCTION - contains all your valuable data
 

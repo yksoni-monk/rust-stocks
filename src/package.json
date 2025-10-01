@@ -8,7 +8,10 @@
     "dev": "npm run build:bindings && vite",
     "build": "npm run build:bindings && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "playwright test",
+    "test:ui": "playwright test --ui",
+    "test:headed": "playwright test --headed"
   },
   "dependencies": {
     "@solidjs/router": "^0.15.3",
@@ -20,6 +23,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.33.0",
+    "@playwright/test": "^1.55.1",
     "autoprefixer": "^10.4.0",
     "eslint": "^9.33.0",
     "globals": "^16.3.0",

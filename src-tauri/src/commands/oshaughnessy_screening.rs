@@ -1,8 +1,10 @@
 use serde::{Deserialize, Serialize};
 use sqlx::{SqlitePool, Row};
 use crate::database::helpers::get_database_connection;
+use ts_rs::TS;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct OShaughnessyValueResult {
     pub stock_id: i64,
     pub symbol: String,
@@ -10,15 +12,31 @@ pub struct OShaughnessyValueResult {
     pub industry: Option<String>,
     pub current_price: Option<f64>,
     pub market_cap: Option<f64>,
+    pub enterprise_value: Option<f64>,
+
+    // All 6 O'Shaughnessy metrics
     pub ps_ratio: Option<f64>,
     pub evs_ratio: Option<f64>,
+    pub pe_ratio: Option<f64>,
+    pub pb_ratio: Option<f64>,
+    pub ev_ebitda_ratio: Option<f64>,
+    pub shareholder_yield: Option<f64>,
+
+    // Ranking and scoring
     pub data_completeness_score: i32,
-    pub composite_score: f64,
+    pub composite_score: i64,
     pub composite_percentile: f64,
     pub overall_rank: i64,
     pub passes_screening: i32,
-    pub ps_rank: i64,
-    pub evs_rank: i64,
+
+    // Individual ranks for transparency
+    pub ps_rank: Option<i64>,
+    pub evs_rank: Option<i64>,
+    pub pe_rank: Option<i64>,
+    pub pb_rank: Option<i64>,
+    pub ebitda_rank: Option<i64>,
+    pub yield_rank: Option<i64>,
+    pub metrics_available: i32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -71,16 +89,26 @@ async fn get_oshaughnessy_screening_results_internal(
             industry,
             current_price,
             market_cap,
+            enterprise_value,
             ps_ratio,
             evs_ratio,
+            pe_ratio,
+            pb_ratio,
+            ev_ebitda_ratio,
+            shareholder_yield,
             data_completeness_score,
             composite_score,
             composite_percentile,
             overall_rank,
             passes_screening,
             ps_rank,
-            evs_rank
-        FROM oshaughnessy_ranking_simple
+            evs_rank,
+            pe_rank,
+            pb_rank,
+            ebitda_rank,
+            yield_rank,
+            metrics_available
+        FROM oshaughnessy_ranking_complete
         WHERE 1=1"
     );
 
@@ -160,15 +188,31 @@ impl sqlx::FromRow<'_, sqlx::sqlite::SqliteRow> for OShaughnessyValueResult {
             industry: row.try_get("industry")?,
             current_price: row.try_get("current_price")?,
             market_cap: row.try_get("market_cap")?,
+            enterprise_value: row.try_get("enterprise_value")?,
+
+            // All 6 metrics
             ps_ratio: row.try_get("ps_ratio")?,
             evs_ratio: row.try_get("evs_ratio")?,
+            pe_ratio: row.try_get("pe_ratio")?,
+            pb_ratio: row.try_get("pb_ratio")?,
+            ev_ebitda_ratio: row.try_get("ev_ebitda_ratio")?,
+            shareholder_yield: row.try_get("shareholder_yield")?,
+
+            // Ranking and scoring
             data_completeness_score: row.try_get("data_completeness_score")?,
             composite_score: row.try_get("composite_score")?,
             composite_percentile: row.try_get("composite_percentile")?,
             overall_rank: row.try_get("overall_rank")?,
             passes_screening: row.try_get("passes_screening")?,
-            ps_rank: row.try_get("ps_rank")?,
-            evs_rank: row.try_get("evs_rank")?,
+
+            // Individual ranks
+            ps_rank: row.try_get("ps_rank").ok(),
+            evs_rank: row.try_get("evs_rank").ok(),
+            pe_rank: row.try_get("pe_rank").ok(),
+            pb_rank: row.try_get("pb_rank").ok(),
+            ebitda_rank: row.try_get("ebitda_rank").ok(),
+            yield_rank: row.try_get("yield_rank").ok(),
+            metrics_available: row.try_get("metrics_available")?,
         })
     }
 }

@@ -13,6 +13,7 @@ alwaysApply: true
 - Migrations are in `src-tauri/db/migrations/`
 - Backups are in `src-tauri/db/backups/`
 - most project context is in .md files in 'context/'
+- NEVER put .md files randomly in the project root - they belong in the context/ folder
 
 
 ## Database Rules
@@ -22,6 +23,11 @@ alwaysApply: true
   - check context/database_migrations.md to fully understand the migrations feature
   - Make a backup before migrations when touching critical tables (use the existing `DatabaseManager::create_backup`).
   - After migration, compile and run a freshness check to validate (`cargo check` and app status call).
+- CRITICAL: Always use environment variables for database access. NEVER use relative paths.
+  - Use `DATABASE_URL` environment variable (preferred) or `DATABASE_PATH` as fallback
+  - NEVER hardcode database paths like `"sqlite:src-tauri/db/stocks.db"` or `"sqlite:./db/stocks.db"`
+  - Always check for environment variables first: `std::env::var("DATABASE_URL")` or `std::env::var("DATABASE_PATH")`
+  - If environment variables are not set, return an error - do not use fallback paths
 
 ## API Contract Discipline (NON-NEGOTIABLE)
 - NEVER modify backend function signatures without checking all frontend callers
@@ -66,5 +72,7 @@ alwaysApply: true
 - ❌ Change API contracts without checking both sides
 - ❌ Use different field names between database and API models
 - ❌ Run direct SQL commands against production database
+- ❌ Use hardcoded database paths - always use DATABASE_URL or DATABASE_PATH environment variables
+- ❌ Use relative paths like `"sqlite:./db/stocks.db"` or `"sqlite:src-tauri/db/stocks.db"` - use environment variables only
 # Cursor Rules
 

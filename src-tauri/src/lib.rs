@@ -8,6 +8,9 @@ pub mod tools;
 pub mod analysis;
 pub mod types;
 
+#[cfg(test)]
+pub mod tests;
+
 
 use commands::*;
 use tauri::WindowEvent;

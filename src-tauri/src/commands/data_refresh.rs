@@ -32,8 +32,6 @@ pub async fn check_screening_readiness(feature: String) -> Result<bool, String> 
         .map_err(|e| format!("Failed to check data freshness: {}", e))?;
 
     match feature.as_str() {
-        "garp_screening" => Ok(report.screening_readiness.garp_screening),
-        "graham_screening" => Ok(report.screening_readiness.graham_screening),
         "valuation_analysis" => Ok(report.screening_readiness.valuation_analysis),
         _ => Err(format!("Unknown screening feature: {}", feature)),
     }

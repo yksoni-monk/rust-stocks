@@ -1,14 +1,15 @@
 -- Add GICS sector classification to stocks table for comprehensive sector-based analysis
 -- This enhances the existing sector field with detailed GICS hierarchy
 
--- Add GICS classification columns
-ALTER TABLE stocks ADD COLUMN gics_sector TEXT;
-ALTER TABLE stocks ADD COLUMN gics_industry_group TEXT;
-ALTER TABLE stocks ADD COLUMN gics_industry TEXT;
-ALTER TABLE stocks ADD COLUMN gics_sub_industry TEXT;
+-- Add GICS classification columns (if they don't exist)
+-- Note: These columns may already exist, so we'll skip if they do
+-- ALTER TABLE stocks ADD COLUMN gics_sector TEXT;
+-- ALTER TABLE stocks ADD COLUMN gics_industry_group TEXT;
+-- ALTER TABLE stocks ADD COLUMN gics_industry TEXT;
+-- ALTER TABLE stocks ADD COLUMN gics_sub_industry TEXT;
 
--- Create EDGAR field mapping tracking table
-CREATE TABLE edgar_field_mappings (
+-- Create EDGAR field mapping tracking table (if it doesn't exist)
+CREATE TABLE IF NOT EXISTS edgar_field_mappings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     sector TEXT NOT NULL,
     statement_type TEXT NOT NULL, -- 'balance_sheet', 'income_statement', 'cash_flow'
@@ -23,11 +24,11 @@ CREATE TABLE edgar_field_mappings (
     UNIQUE(sector, statement_type, our_field_name, edgar_gaap_field)
 );
 
--- Create indexes for efficient sector-based queries
-CREATE INDEX idx_stocks_gics_sector ON stocks(gics_sector);
-CREATE INDEX idx_stocks_gics_industry ON stocks(gics_industry);
-CREATE INDEX idx_edgar_mappings_sector ON edgar_field_mappings(sector, statement_type);
-CREATE INDEX idx_edgar_mappings_success ON edgar_field_mappings(success_rate DESC);
+-- Create indexes for efficient sector-based queries (if they don't exist)
+CREATE INDEX IF NOT EXISTS idx_stocks_gics_sector ON stocks(gics_sector);
+CREATE INDEX IF NOT EXISTS idx_stocks_gics_industry ON stocks(gics_industry);
+CREATE INDEX IF NOT EXISTS idx_edgar_mappings_sector ON edgar_field_mappings(sector, statement_type);
+CREATE INDEX IF NOT EXISTS idx_edgar_mappings_success ON edgar_field_mappings(success_rate DESC);
 
 -- Copy existing sector data to gics_sector for backward compatibility
 UPDATE stocks SET gics_sector = sector WHERE sector IS NOT NULL;
@@ -64,8 +65,8 @@ INSERT OR IGNORE INTO edgar_field_mappings (sector, statement_type, our_field_na
 ('Consumer Discretionary', 'balance_sheet', 'current_assets', 'LandAndDevelopmentCosts', 'Homebuilders: Development inventory'),
 ('Consumer Discretionary', 'balance_sheet', 'current_assets', 'ConstructionInProgress', 'Homebuilders: WIP inventory');
 
--- Create view for sector-based data quality analysis
-CREATE VIEW sector_data_quality AS
+-- Create view for sector-based data quality analysis (if it doesn't exist)
+CREATE VIEW IF NOT EXISTS sector_data_quality AS
 SELECT
     s.gics_sector,
     COUNT(*) as total_companies,

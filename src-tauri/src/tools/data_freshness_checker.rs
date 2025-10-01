@@ -83,8 +83,6 @@ pub struct RefreshRecommendation {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct ScreeningReadiness {
-    pub garp_screening: bool,
-    pub graham_screening: bool,
     pub valuation_analysis: bool,
     pub blocking_issues: Vec<String>,
 }
@@ -638,7 +636,7 @@ impl DataStatusReader {
         })
     }
 
-    /// Check P/E ratio freshness (critical for GARP analysis)
+    /// Check P/E ratio freshness
     async fn check_pe_ratios(&self) -> Result<DataFreshnessStatus> {
         let query = r#"
             SELECT
@@ -687,7 +685,7 @@ impl DataStatusReader {
 
         let priority = match status {
             FreshnessStatus::Current => RefreshPriority::Low,
-            FreshnessStatus::Stale => RefreshPriority::High, // P/E is critical for GARP
+            FreshnessStatus::Stale => RefreshPriority::High,
             FreshnessStatus::Missing | FreshnessStatus::Error => RefreshPriority::Critical,
         };
 
@@ -777,58 +775,16 @@ impl DataStatusReader {
     async fn assess_screening_readiness(&self, data_sources: &HashMap<String, DataFreshnessStatus>) -> Result<ScreeningReadiness> {
         let mut blocking_issues = Vec::new();
 
-        // GARP screening requires current P/E ratios and financial data
-        let garp_ready = self.check_garp_readiness(data_sources, &mut blocking_issues);
-
-        // Graham screening requires current prices and P/E ratios
-        let graham_ready = self.check_graham_readiness(data_sources, &mut blocking_issues);
 
         // Valuation analysis requires P/S and EV/S ratios
         let valuation_ready = self.check_valuation_readiness(data_sources, &mut blocking_issues);
 
         Ok(ScreeningReadiness {
-            garp_screening: garp_ready,
-            graham_screening: graham_ready,
             valuation_analysis: valuation_ready,
             blocking_issues,
         })
     }
 
-    fn check_garp_readiness(&self, data_sources: &HashMap<String, DataFreshnessStatus>, blocking_issues: &mut Vec<String>) -> bool {
-        let pe_status = data_sources.get("pe_ratios").map(|ds| &ds.status);
-        let financial_status = data_sources.get("financial_statements").map(|ds| &ds.status);
-
-        match (pe_status, financial_status) {
-            (Some(FreshnessStatus::Current), Some(FreshnessStatus::Current | FreshnessStatus::Stale)) => true,
-            _ => {
-                if let Some(FreshnessStatus::Stale | FreshnessStatus::Missing | FreshnessStatus::Error) = pe_status {
-                    blocking_issues.push("GARP screening blocked: P/E ratios are stale or missing".to_string());
-                }
-                if let Some(FreshnessStatus::Missing | FreshnessStatus::Error) = financial_status {
-                    blocking_issues.push("GARP screening blocked: Financial statements missing".to_string());
-                }
-                false
-            }
-        }
-    }
-
-    fn check_graham_readiness(&self, data_sources: &HashMap<String, DataFreshnessStatus>, blocking_issues: &mut Vec<String>) -> bool {
-        let price_status = data_sources.get("daily_prices").map(|ds| &ds.status);
-        let pe_status = data_sources.get("pe_ratios").map(|ds| &ds.status);
-
-        match (price_status, pe_status) {
-            (Some(FreshnessStatus::Current | FreshnessStatus::Stale), Some(FreshnessStatus::Current)) => true,
-            _ => {
-                if let Some(FreshnessStatus::Missing | FreshnessStatus::Error) = price_status {
-                    blocking_issues.push("Graham screening blocked: Price data missing".to_string());
-                }
-                if let Some(FreshnessStatus::Stale | FreshnessStatus::Missing | FreshnessStatus::Error) = pe_status {
-                    blocking_issues.push("Graham screening blocked: P/E ratios are stale or missing".to_string());
-                }
-                false
-            }
-        }
-    }
 
     fn check_valuation_readiness(&self, data_sources: &HashMap<String, DataFreshnessStatus>, blocking_issues: &mut Vec<String>) -> bool {
         let ratio_status = data_sources.get("ps_evs_ratios").map(|ds| &ds.status);
@@ -853,47 +809,6 @@ impl DataStatusReader {
         }
     }
 
-    /// Quick check specifically for GARP analysis
-    pub async fn check_garp_data_freshness(&self) -> Result<DataFreshnessStatus> {
-        self.check_pe_ratios().await
-    }
-
-    /// Quick check specifically for Graham analysis
-    pub async fn check_graham_data_freshness(&self) -> Result<DataFreshnessStatus> {
-        let pe_status = self.check_pe_ratios().await?;
-        let price_status = self.check_daily_prices().await?;
-
-        // Return the worst status between the two
-        let combined_status = match (&pe_status.status, &price_status.status) {
-            (FreshnessStatus::Current, FreshnessStatus::Current) => FreshnessStatus::Current,
-            (FreshnessStatus::Stale, FreshnessStatus::Current) |
-            (FreshnessStatus::Current, FreshnessStatus::Stale) |
-            (FreshnessStatus::Stale, FreshnessStatus::Stale) => FreshnessStatus::Stale,
-            _ => FreshnessStatus::Error,
-        };
-
-        Ok(DataFreshnessStatus {
-            data_source: "graham_screening".to_string(),
-            status: combined_status.clone(),
-            latest_data_date: pe_status.latest_data_date.clone(),
-            last_refresh: None,
-            staleness_days: pe_status.staleness_days,
-            records_count: pe_status.records_count + price_status.records_count,
-            message: format!("Graham readiness: {} | {}", pe_status.message, price_status.message),
-            refresh_priority: if combined_status == FreshnessStatus::Current {
-                RefreshPriority::Low
-            } else {
-                RefreshPriority::High
-            },
-            data_summary: DataSummary {
-                date_range: pe_status.latest_data_date,
-                stock_count: None,
-                data_types: vec!["Graham Screening".to_string()],
-                key_metrics: vec!["Combined P/E and Price Analysis".to_string()],
-                completeness_score: None,
-            },
-        })
-    }
 }
 
 impl FreshnessStatus {
@@ -934,8 +849,6 @@ impl SystemFreshnessReport {
 
     pub fn is_ready_for_analysis(&self, analysis_type: &str) -> bool {
         match analysis_type {
-            "garp" => self.screening_readiness.garp_screening,
-            "graham" => self.screening_readiness.graham_screening,
             "valuation" => self.screening_readiness.valuation_analysis,
             _ => false,
         }

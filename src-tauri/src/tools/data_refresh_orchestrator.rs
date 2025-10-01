@@ -946,13 +946,6 @@ impl DataRefreshManager {
     fn generate_post_refresh_recommendations(&self, freshness_report: &SystemFreshnessReport) -> Vec<String> {
         let mut recommendations = Vec::new();
 
-        if freshness_report.screening_readiness.garp_screening {
-            recommendations.push("GARP screening is now ready with current data".to_string());
-        }
-
-        if freshness_report.screening_readiness.graham_screening {
-            recommendations.push("Graham value screening is now ready with current data".to_string());
-        }
 
         if freshness_report.screening_readiness.valuation_analysis {
             recommendations.push("Valuation analysis is now ready with current ratios".to_string());

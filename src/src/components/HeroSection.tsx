@@ -5,39 +5,6 @@ import { uiStore } from '../stores/uiStore';
 export default function HeroSection() {
   const [showAdvanced, setShowAdvanced] = createSignal(false);
 
-  const handleRunGarpAnalysis = () => {
-    console.log('🎯 Running GARP Analysis (primary action)');
-    recommendationsStore.setScreeningType('garp_pe');
-    uiStore.openRecommendations();
-    
-    // Smooth scroll to recommendations panel after a brief delay
-    setTimeout(() => {
-      const recommendationsElement = document.querySelector('[data-section="recommendations"]');
-      if (recommendationsElement) {
-        recommendationsElement.scrollIntoView({ 
-          behavior: 'smooth', 
-          block: 'start' 
-        });
-      }
-    }, 100);
-  };
-
-  const handleGrahamAnalysis = () => {
-    console.log('💎 Running Graham Value Analysis');
-    recommendationsStore.setScreeningType('graham_value');
-    uiStore.openRecommendations();
-    
-    // Smooth scroll to recommendations panel after a brief delay
-    setTimeout(() => {
-      const recommendationsElement = document.querySelector('[data-section="recommendations"]');
-      if (recommendationsElement) {
-        recommendationsElement.scrollIntoView({ 
-          behavior: 'smooth', 
-          block: 'start' 
-        });
-      }
-    }, 100);
-  };
 
   const handlePiotroskilAnalysis = () => {
     console.log('🔍 Running Piotroski F-Score Analysis');
@@ -83,48 +50,15 @@ export default function HeroSection() {
           </h2>
           <p class="text-lg text-gray-700 max-w-2xl mx-auto">
             Find undervalued companies using proven investment methodologies - 
-            from Benjamin Graham's classic value principles to modern GARP strategies
+            from Piotroski F-Score financial strength analysis to O'Shaughnessy value composite
           </p>
         </div>
 
         {/* Primary Screening Options */}
         <div class="mb-6">
           <div class="flex flex-col gap-4 justify-center items-center">
-            {/* All Screening Methods - Same Size */}
-            <div class="grid grid-cols-2 lg:grid-cols-4 gap-4 w-full max-w-4xl">
-              <button
-                onClick={handleRunGarpAnalysis}
-                disabled={recommendationsStore.loading()}
-                class={`text-white text-lg font-semibold px-6 py-4 rounded-xl shadow-lg transition-all duration-200 transform ${
-                  recommendationsStore.loading()
-                    ? 'bg-blue-400 cursor-not-allowed'
-                    : 'bg-blue-600 hover:bg-blue-700 hover:shadow-xl hover:scale-105'
-                }`}
-              >
-                <Show
-                  when={!recommendationsStore.loading()}
-                  fallback={
-                    <div class="flex items-center gap-2 justify-center">
-                      <div class="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
-                      Analyzing...
-                    </div>
-                  }
-                >
-                  🔍 GARP Analysis
-                </Show>
-              </button>
-
-              <button
-                onClick={handleGrahamAnalysis}
-                disabled={recommendationsStore.loading()}
-                class={`text-white text-lg font-semibold px-6 py-4 rounded-xl shadow-lg transition-all duration-200 transform ${
-                  recommendationsStore.loading()
-                    ? 'bg-gray-400 cursor-not-allowed'
-                    : 'bg-gray-600 hover:bg-gray-700 hover:shadow-xl hover:scale-105'
-                }`}
-              >
-                💎 Graham Value
-              </button>
+            {/* Remaining Screening Methods */}
+            <div class="grid grid-cols-2 lg:grid-cols-2 gap-4 w-full max-w-2xl">
 
               <button
                 onClick={handlePiotroskilAnalysis}
@@ -166,10 +100,8 @@ export default function HeroSection() {
           </Show>
           
           <div class="mt-3 text-sm text-gray-600">
-            <span class="font-medium">GARP:</span> Growth at reasonable price with PEG ratios │
-            <span class="font-medium">Graham:</span> Classic value screening │
-            <span class="font-medium">Piotroski:</span> Quality & financial strength │
-            <span class="font-medium">O'Shaughnessy:</span> Value composite ranking
+            <span class="font-medium">Piotroski:</span> Financial strength scoring │
+            <span class="font-medium">O'Shaughnessy:</span> Multi-metric value composite
           </div>
         </div>
 
@@ -184,104 +116,6 @@ export default function HeroSection() {
           
           <Show when={showAdvanced()}>
             <div class="mt-4 bg-white rounded-lg p-4 shadow-sm border border-gray-200">
-              {/* GARP Settings */}
-              <div class="mb-4">
-                <h4 class="text-sm font-semibold text-gray-700 mb-2">🔍 GARP Criteria</h4>
-                <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
-                  <div>
-                    <label class="block text-gray-600 mb-1">Max PEG Ratio:</label>
-                    <select
-                      value={recommendationsStore.garpCriteria().maxPegRatio}
-                      onChange={(e) => recommendationsStore.updateGarpCriteria({ maxPegRatio: Number(e.target.value) })}
-                      class="w-full border border-gray-300 rounded px-2 py-1"
-                    >
-                      <option value={0.5}>0.5 (Very Strict)</option>
-                      <option value={0.8}>0.8 (Strict)</option>
-                      <option value={1.0}>1.0 (Balanced)</option>
-                      <option value={1.2}>1.2 (Relaxed)</option>
-                      <option value={1.5}>1.5 (Very Relaxed)</option>
-                    </select>
-                  </div>
-                  
-                  <div>
-                    <label class="block text-gray-600 mb-1">Min Growth Rate:</label>
-                    <select
-                      value={recommendationsStore.garpCriteria().minRevenueGrowth}
-                      onChange={(e) => recommendationsStore.updateGarpCriteria({ minRevenueGrowth: Number(e.target.value) })}
-                      class="w-full border border-gray-300 rounded px-2 py-1"
-                    >
-                      <option value={10}>10% (Low Growth)</option>
-                      <option value={15}>15% (Moderate Growth)</option>
-                      <option value={20}>20% (High Growth)</option>
-                      <option value={25}>25% (Very High Growth)</option>
-                    </select>
-                  </div>
-                  
-                  <div>
-                    <label class="block text-gray-600 mb-1">Quality Level:</label>
-                    <select
-                      value={recommendationsStore.garpCriteria().minQualityScore}
-                      onChange={(e) => recommendationsStore.updateGarpCriteria({ minQualityScore: Number(e.target.value) })}
-                      class="w-full border border-gray-300 rounded px-2 py-1"
-                    >
-                      <option value={25}>Basic (25+ score)</option>
-                      <option value={50}>Good (50+ score)</option>
-                      <option value={75}>High (75+ score)</option>
-                      <option value={100}>Excellent (100 score)</option>
-                    </select>
-                  </div>
-                </div>
-              </div>
-              
-              {/* Graham Settings */}
-              <div class="border-t pt-4">
-                <h4 class="text-sm font-semibold text-gray-700 mb-2">💎 Graham Value Criteria</h4>
-                <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
-                  <div>
-                    <label class="block text-gray-600 mb-1">Max P/E Ratio:</label>
-                    <select
-                      value={recommendationsStore.grahamCriteria().maxPeRatio}
-                      onChange={(e) => recommendationsStore.updateGrahamCriteria({ maxPeRatio: Number(e.target.value) })}
-                      class="w-full border border-gray-300 rounded px-2 py-1"
-                    >
-                      <option value={10}>10 (Very Strict)</option>
-                      <option value={12}>12 (Strict)</option>
-                      <option value={15}>15 (Graham Classic)</option>
-                      <option value={18}>18 (Moderate)</option>
-                      <option value={20}>20 (Relaxed)</option>
-                    </select>
-                  </div>
-                  
-                  <div>
-                    <label class="block text-gray-600 mb-1">Max P/B Ratio:</label>
-                    <select
-                      value={recommendationsStore.grahamCriteria().maxPbRatio}
-                      onChange={(e) => recommendationsStore.updateGrahamCriteria({ maxPbRatio: Number(e.target.value) })}
-                      class="w-full border border-gray-300 rounded px-2 py-1"
-                    >
-                      <option value={1.0}>1.0 (Very Strict)</option>
-                      <option value={1.2}>1.2 (Strict)</option>
-                      <option value={1.5}>1.5 (Graham Classic)</option>
-                      <option value={2.0}>2.0 (Moderate)</option>
-                      <option value={2.5}>2.5 (Relaxed)</option>
-                    </select>
-                  </div>
-                  
-                  <div>
-                    <label class="block text-gray-600 mb-1">Max Debt/Equity:</label>
-                    <select
-                      value={recommendationsStore.grahamCriteria().maxDebtToEquity}
-                      onChange={(e) => recommendationsStore.updateGrahamCriteria({ maxDebtToEquity: Number(e.target.value) })}
-                      class="w-full border border-gray-300 rounded px-2 py-1"
-                    >
-                      <option value={0.5}>0.5 (Conservative)</option>
-                      <option value={1.0}>1.0 (Balanced)</option>
-                      <option value={1.5}>1.5 (Moderate)</option>
-                      <option value={2.0}>2.0 (Aggressive)</option>
-                    </select>
-                  </div>
-                </div>
-              </div>
             </div>
           </Show>
         </div>

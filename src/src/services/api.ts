@@ -9,8 +9,6 @@ import type {
   PriceData,
   ValuationRatios,
   DateRange,
-  GarpCriteria,
-  GarpScreeningResult,
   RecommendationStats,
   ValueRecommendation,
   DatabaseStats,
@@ -18,7 +16,6 @@ import type {
   RefreshResult,
   RefreshDurationEstimates
 } from '../utils/types';
-import type { GrahamCriteria, GrahamResult } from '../stores/recommendationsStore';
 
 /**
  * Centralized API service layer for all backend operations
@@ -83,22 +80,6 @@ export const analysisAPI = {
 
 // Recommendations API
 export const recommendationsAPI = {
-  // Get GARP P/E screening results
-  async getGarpPeScreeningResults(stockTickers: string[], criteria?: GarpCriteria, limit?: number): Promise<GarpScreeningResult[]> {
-    return await invoke('get_garp_pe_screening_results', {
-      stockTickers,
-      criteria: criteria || {
-        maxPegRatio: 1.0,
-        minRevenueGrowth: 15.0,
-        minProfitMargin: 5.0,
-        maxDebtToEquity: 2.0,
-        minMarketCap: 500_000_000,
-        minQualityScore: 50,
-        requirePositiveEarnings: true
-      },
-      limit: limit || 50
-    });
-  },
 
   // Get Piotroski F-Score screening results
   async getPiotroskilScreeningResults(stockTickers: string[], criteria?: any, limit?: number): Promise<any[]> {
@@ -137,25 +118,6 @@ export const recommendationsAPI = {
     return await invoke('get_oshaughnessy_statistics');
   },
 
-  // Run Graham value screening
-  async runGrahamScreening(criteria: GrahamCriteria): Promise<GrahamResult[]> {
-    return await invoke('run_graham_screening', { criteria });
-  },
-
-  // Get Graham screening defaults
-  async getGrahamCriteriaDefaults(): Promise<GrahamCriteria> {
-    return await invoke('get_graham_criteria_defaults');
-  },
-
-  // Get Graham screening presets
-  async getGrahamScreeningPresets(): Promise<any[]> {
-    return await invoke('get_graham_screening_presets');
-  },
-
-  // Get latest Graham results (cached)
-  async getLatestGrahamResults(limit?: number): Promise<GrahamResult[]> {
-    return await invoke('get_latest_graham_results', { limit: limit || 50 });
-  }
 };
 
 // Note: Enhanced Data API removed - these commands don't exist in the backend

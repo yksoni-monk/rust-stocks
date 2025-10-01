@@ -157,12 +157,8 @@ async fn show_data_status(pool: &sqlx::SqlitePool, cli: &Cli) -> Result<()> {
     println!("🎯 SCREENING READINESS:");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
-    let garp_status = if report.screening_readiness.garp_screening { "✅ Ready" } else { "❌ Blocked" };
-    let graham_status = if report.screening_readiness.graham_screening { "✅ Ready" } else { "❌ Blocked" };
     let valuation_status = if report.screening_readiness.valuation_analysis { "✅ Ready" } else { "❌ Blocked" };
 
-    println!("GARP P/E Screening:     {}", garp_status);
-    println!("Graham Value Screening: {}", graham_status);
     println!("Valuation Analysis:     {}", valuation_status);
 
     if !report.screening_readiness.blocking_issues.is_empty() {

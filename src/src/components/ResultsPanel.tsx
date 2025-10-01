@@ -6,24 +6,6 @@ import type { Recommendation, ScreeningType } from '../stores/recommendationsSto
 // Color mapping for different screening types to match button colors
 const getScreeningTypeColors = (screeningType: ScreeningType) => {
   switch (screeningType) {
-    case 'garp_pe':
-      return {
-        primary: 'bg-blue-600',
-        hover: 'hover:bg-blue-700',
-        text: 'text-blue-100',
-        accent: 'text-blue-600',
-        gradient: 'from-blue-50 to-blue-100',
-        border: 'border-blue-200'
-      };
-    case 'graham_value':
-      return {
-        primary: 'bg-gray-600',
-        hover: 'hover:bg-gray-700',
-        text: 'text-gray-100',
-        accent: 'text-gray-600',
-        gradient: 'from-gray-50 to-gray-100',
-        border: 'border-gray-200'
-      };
     case 'piotroski':
       return {
         primary: 'bg-green-600',
@@ -79,8 +61,6 @@ export default function ResultsPanel(props: ResultsPanelProps) {
 
   const getScreeningTitle = (type: ScreeningType) => {
     switch (type) {
-      case 'garp_pe': return '🎯 GARP Analysis Results';
-      case 'graham_value': return '💎 Graham Value Results';
       case 'piotroski': return '🔍 Piotroski F-Score Results';
       case 'oshaughnessy': return '💰 Top 10 Value Stocks (O\'Shaughnessy Method)';
       case 'ps': return '📊 P/S Screening Results';
@@ -90,16 +70,10 @@ export default function ResultsPanel(props: ResultsPanelProps) {
   };
 
   const getScreeningSummary = (type: ScreeningType, count: number) => {
-    const garpCriteria = recommendationsStore.garpCriteria();
-    const grahamCriteria = recommendationsStore.grahamCriteria();
     const piotroskilCriteria = recommendationsStore.piotroskilCriteria();
     const oshaughnessyCriteria = recommendationsStore.oshaughnessyCriteria();
 
     switch (type) {
-      case 'garp_pe':
-        return `Found ${count} stocks with PEG < ${garpCriteria.maxPegRatio} and revenue growth > ${garpCriteria.minRevenueGrowth}%`;
-      case 'graham_value':
-        return `Found ${count} Graham value stocks with P/E < ${grahamCriteria.maxPeRatio}, P/B < ${grahamCriteria.maxPbRatio}, and strong fundamentals`;
       case 'piotroski':
         return `Found ${count} quality stocks with F-Score ≥ ${piotroskilCriteria.minFScore} and data completeness ≥ ${piotroskilCriteria.minDataCompleteness}%`;
       case 'oshaughnessy':
@@ -225,39 +199,11 @@ export default function ResultsPanel(props: ResultsPanelProps) {
                     <div class="text-2xl font-bold text-blue-600">
                       {recommendationsStore.screeningType() === 'piotroski' 
                         ? (recommendationsStore.stats()?.passing_stocks || recommendationsStore.recommendations().filter(r => r.passes_screening === 1).length)
-                        : recommendationsStore.recommendations().filter(r => r.passes_garp_screening).length
+                        : 0
                       }
                     </div>
                     <div class="text-sm text-gray-600">Pass All Criteria</div>
                   </div>
-                  <Show when={recommendationsStore.screeningType() === 'graham_value'}>
-                    <div>
-                      <div class="text-2xl font-bold text-purple-600">
-                        {(recommendationsStore.recommendations().reduce((avg, r) => avg + (r.garp_score || 0), 0) / recommendationsStore.recommendations().length).toFixed(1)}
-                      </div>
-                      <div class="text-sm text-gray-600">Avg Graham Score</div>
-                    </div>
-                    <div>
-                      <div class="text-2xl font-bold text-orange-600">
-                        {(recommendationsStore.recommendations().reduce((avg, r) => avg + (r.current_pe_ratio || 0), 0) / recommendationsStore.recommendations().length).toFixed(1)}
-                      </div>
-                      <div class="text-sm text-gray-600">Avg P/E Ratio</div>
-                    </div>
-                  </Show>
-                  <Show when={recommendationsStore.screeningType() === 'garp_pe'}>
-                    <div>
-                      <div class="text-2xl font-bold text-purple-600">
-                        {(recommendationsStore.recommendations().reduce((avg, r) => avg + (r.garp_score || 0), 0) / recommendationsStore.recommendations().length).toFixed(1)}
-                      </div>
-                      <div class="text-sm text-gray-600">Avg GARP Score</div>
-                    </div>
-                    <div>
-                      <div class="text-2xl font-bold text-orange-600">
-                        {Math.round(recommendationsStore.recommendations().reduce((avg, r) => avg + (r.quality_score || 0), 0) / recommendationsStore.recommendations().length)}
-                      </div>
-                      <div class="text-sm text-gray-600">Avg Quality</div>
-                    </div>
-                  </Show>
                   <Show when={recommendationsStore.screeningType() === 'ps' || recommendationsStore.screeningType() === 'pe'}>
                     <div>
                       <div class="text-2xl font-bold text-purple-600">
@@ -294,7 +240,7 @@ export default function ResultsPanel(props: ResultsPanelProps) {
               <For each={recommendationsStore.recommendations()}>
                 {(rec) => (
                   <div class={`bg-white rounded-lg p-4 border-2 transition-all hover:shadow-md ${
-                    (recommendationsStore.screeningType() === 'piotroski' ? rec.passes_screening === 1 : rec.passes_garp_screening) 
+                    (recommendationsStore.screeningType() === 'piotroski' ? rec.passes_screening === 1 : false) 
                       ? 'border-green-200 bg-green-50' : 'border-gray-200'
                   }`}>
                     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -304,7 +250,7 @@ export default function ResultsPanel(props: ResultsPanelProps) {
                           <span class="text-lg font-bold text-gray-700">#{rec.rank}</span>
                           <span class="text-xl font-bold text-blue-600">{rec.symbol}</span>
                           <span class="text-gray-600">{rec.company_name}</span>
-                          <Show when={recommendationsStore.screeningType() === 'piotroski' ? rec.passes_screening === 1 : rec.passes_garp_screening}>
+                          <Show when={recommendationsStore.screeningType() === 'piotroski' ? rec.passes_screening === 1 : false}>
                             <span class="bg-green-500 text-white text-xs px-2 py-1 rounded-full font-medium">
                               ✓ Recommended
                             </span>
@@ -338,71 +284,6 @@ interface MetricsDisplayProps {
 function MetricsDisplay(props: MetricsDisplayProps) {
   return (
     <>
-      <Show when={props.screeningType === 'garp_pe'}>
-        <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[60px]">
-          <div class="text-lg font-bold text-gray-900">
-            {props.rec.current_pe_ratio?.toFixed(1) || 'N/A'}
-          </div>
-          <div class="text-xs text-gray-500">P/E</div>
-        </div>
-        <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[60px]">
-          <div class={`text-sm font-bold ${props.rec.peg_ratio && props.rec.peg_ratio < 1.0 ? 'text-green-600' : 'text-gray-700'}`}>
-            {props.rec.peg_ratio?.toFixed(2) || 'N/A'}
-          </div>
-          <div class="text-xs text-gray-500">PEG</div>
-        </div>
-        <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[60px]">
-          <div class={`text-sm font-bold ${(props.rec.ttm_growth_rate || 0) > 15 ? 'text-green-600' : 'text-gray-700'}`}>
-            {props.rec.ttm_growth_rate?.toFixed(0) || props.rec.annual_growth_rate?.toFixed(0) || 'N/A'}%
-          </div>
-          <div class="text-xs text-gray-500">Growth</div>
-        </div>
-        <div class="text-center bg-blue-50 rounded-lg p-2 min-w-[60px]">
-          <div class="text-sm font-bold text-blue-600">
-            {props.rec.garp_score?.toFixed(1) || 'N/A'}
-          </div>
-          <div class="text-xs text-gray-500">GARP</div>
-        </div>
-        <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[50px]">
-          <div class={`text-lg font-bold ${props.rec.passes_garp_screening ? 'text-green-600' : 'text-red-500'}`}>
-            {props.rec.passes_garp_screening ? '✓' : '✗'}
-          </div>
-          <div class="text-xs text-gray-500">Pass</div>
-        </div>
-      </Show>
-      
-      <Show when={props.screeningType === 'graham_value'}>
-        <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[60px]">
-          <div class="text-lg font-bold text-gray-900">
-            {props.rec.current_pe_ratio?.toFixed(1) || 'N/A'}
-          </div>
-          <div class="text-xs text-gray-500">P/E</div>
-        </div>
-        <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[60px]">
-          <div class="text-sm font-bold text-gray-700">
-            N/A
-          </div>
-          <div class="text-xs text-gray-500">P/B</div>
-        </div>
-        <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[60px]">
-          <div class="text-sm font-bold text-gray-700">
-            {props.rec.debt_to_equity_ratio?.toFixed(2) || 'N/A'}
-          </div>
-          <div class="text-xs text-gray-500">Debt/Eq</div>
-        </div>
-        <div class="text-center bg-green-50 rounded-lg p-2 min-w-[60px]">
-          <div class="text-sm font-bold text-green-600">
-            {props.rec.garp_score?.toFixed(1) || 'N/A'}
-          </div>
-          <div class="text-xs text-gray-500">Graham</div>
-        </div>
-        <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[50px]">
-          <div class={`text-lg font-bold ${props.rec.passes_garp_screening ? 'text-green-600' : 'text-red-500'}`}>
-            {props.rec.passes_garp_screening ? '✓' : '✗'}
-          </div>
-          <div class="text-xs text-gray-500">Pass</div>
-        </div>
-      </Show>
       
       <Show when={props.screeningType === 'ps'}>
         <div class="text-center bg-gray-50 rounded-lg p-2 min-w-[60px]">

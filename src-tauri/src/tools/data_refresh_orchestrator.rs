@@ -704,10 +704,10 @@ impl DataRefreshManager {
         println!("📊 Calculating P/S, EV/S, and P/B ratios...");
 
         // Use internal ratio calculator directly
-        let stats = ratio_calculator::calculate_ps_evs_pb_pcf_ratios(&self.pool).await?;
+        let stats = ratio_calculator::calculate_ps_evs_pb_pcf_ev_ebitda_ratios(&self.pool).await?;
 
-        let total_ratios = stats.ps_ratios_calculated + stats.evs_ratios_calculated + stats.pb_ratios_calculated + stats.pcf_ratios_calculated;
-        println!("✅ P/S, EV/S, P/B, and P/CF ratios calculated - {} stocks processed, {} ratios calculated",
+        let total_ratios = stats.ps_ratios_calculated + stats.evs_ratios_calculated + stats.pb_ratios_calculated + stats.pcf_ratios_calculated + stats.ev_ebitda_ratios_calculated;
+        println!("✅ P/S, EV/S, P/B, P/CF, and EV/EBITDA ratios calculated - {} stocks processed, {} ratios calculated",
                  stats.stocks_processed, total_ratios);
         Ok(total_ratios as i64)
     }

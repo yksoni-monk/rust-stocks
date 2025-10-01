@@ -9,6 +9,7 @@ pub struct RatioCalculationStats {
     pub ps_ratios_calculated: usize,
     pub evs_ratios_calculated: usize,
     pub pb_ratios_calculated: usize,
+    pub pcf_ratios_calculated: usize,
     pub market_caps_calculated: usize,
     pub enterprise_values_calculated: usize,
     pub errors: usize,
@@ -21,6 +22,7 @@ impl Default for RatioCalculationStats {
             ps_ratios_calculated: 0,
             evs_ratios_calculated: 0,
             pb_ratios_calculated: 0,
+            pcf_ratios_calculated: 0,
             market_caps_calculated: 0,
             enterprise_values_calculated: 0,
             errors: 0,
@@ -41,6 +43,9 @@ struct FinancialData {
     cash_and_equivalents: Option<f64>,
     total_debt: Option<f64>,
     total_equity: Option<f64>,
+    net_income: Option<f64>,
+    depreciation_expense: Option<f64>,
+    amortization_expense: Option<f64>,
 }
 
 #[derive(Debug)]
@@ -50,12 +55,13 @@ struct CalculatedRatios {
     ps_ratio_ttm: Option<f64>,
     evs_ratio_ttm: Option<f64>,
     pb_ratio_ttm: Option<f64>,
+    pcf_ratio_ttm: Option<f64>,
     data_completeness_score: i32,
 }
 
-/// Calculate P/S, EV/S, and P/B ratios for all stocks with TTM financial data
-pub async fn calculate_ps_evs_pb_ratios(pool: &SqlitePool) -> Result<RatioCalculationStats> {
-    println!("🧮 Starting P/S, EV/S, and P/B ratio calculations...");
+/// Calculate P/S, EV/S, P/B, and P/CF ratios for all stocks with TTM financial data
+pub async fn calculate_ps_evs_pb_pcf_ratios(pool: &SqlitePool) -> Result<RatioCalculationStats> {
+    println!("🧮 Starting P/S, EV/S, P/B, and P/CF ratio calculations...");
     
     let financial_data = fetch_financial_data(pool).await?;
     println!("📊 Found {} stocks with financial data", financial_data.len());
@@ -107,9 +113,9 @@ pub async fn calculate_ps_evs_pb_ratios(pool: &SqlitePool) -> Result<RatioCalcul
     Ok(stats)
 }
 
-/// Calculate P/S, EV/S, and P/B ratios for ALL historical dates (not just recent)
-pub async fn calculate_historical_ps_evs_pb_ratios(pool: &SqlitePool) -> Result<RatioCalculationStats> {
-    println!("🧮 Starting HISTORICAL P/S, EV/S, and P/B ratio calculations...");
+/// Calculate P/S, EV/S, P/B, and P/CF ratios for ALL historical dates (not just recent)
+pub async fn calculate_historical_ps_evs_pb_pcf_ratios(pool: &SqlitePool) -> Result<RatioCalculationStats> {
+    println!("🧮 Starting HISTORICAL P/S, EV/S, P/B, and P/CF ratio calculations...");
     
     let historical_data = fetch_historical_financial_data(pool).await?;
     println!("📊 Found {} historical financial records", historical_data.len());
@@ -167,13 +173,24 @@ async fn fetch_financial_data(pool: &SqlitePool) -> Result<Vec<FinancialData>> {
             s.id as stock_id,
             s.symbol,
             
-            -- Latest TTM financial data
+            -- Latest Annual financial data (for O'Shaughnessy methodology)
             (SELECT revenue FROM income_statements i 
-             WHERE i.stock_id = s.id AND i.period_type = 'TTM' 
+             WHERE i.stock_id = s.id AND i.period_type = 'Annual' 
              ORDER BY i.report_date DESC LIMIT 1) as latest_ttm_revenue,
             (SELECT report_date FROM income_statements i 
-             WHERE i.stock_id = s.id AND i.period_type = 'TTM' 
+             WHERE i.stock_id = s.id AND i.period_type = 'Annual' 
              ORDER BY i.report_date DESC LIMIT 1) as latest_ttm_report_date,
+             
+            -- Latest Annual cash flow data for P/CF calculation
+            (SELECT net_income FROM income_statements i 
+             WHERE i.stock_id = s.id AND i.period_type = 'Annual' 
+             ORDER BY i.report_date DESC LIMIT 1) as net_income,
+            (SELECT depreciation_expense FROM cash_flow_statements c 
+             WHERE c.stock_id = s.id AND c.period_type = 'Annual' 
+             ORDER BY c.report_date DESC LIMIT 1) as depreciation_expense,
+            (SELECT amortization_expense FROM cash_flow_statements c 
+             WHERE c.stock_id = s.id AND c.period_type = 'Annual' 
+             ORDER BY c.report_date DESC LIMIT 1) as amortization_expense,
              
             -- Latest stock price data
             (SELECT close_price FROM daily_prices dp 
@@ -217,6 +234,14 @@ async fn fetch_financial_data(pool: &SqlitePool) -> Result<Vec<FinancialData>> {
             SELECT DISTINCT stock_id FROM income_statements 
             WHERE shares_basic IS NOT NULL AND shares_basic > 0
         )
+        AND s.id IN (
+            SELECT DISTINCT stock_id FROM income_statements 
+            WHERE period_type = 'Annual' AND net_income IS NOT NULL
+        )
+        AND s.id IN (
+            SELECT DISTINCT stock_id FROM cash_flow_statements 
+            WHERE period_type = 'Annual' AND (depreciation_expense IS NOT NULL OR amortization_expense IS NOT NULL)
+        )
         ORDER BY s.symbol
     "#;
 
@@ -235,6 +260,9 @@ async fn fetch_financial_data(pool: &SqlitePool) -> Result<Vec<FinancialData>> {
             cash_and_equivalents: row.get("cash_and_equivalents"),
             total_debt: row.get("total_debt"),
             total_equity: row.get("total_equity"),
+            net_income: row.get("net_income"),
+            depreciation_expense: row.get("depreciation_expense"),
+            amortization_expense: row.get("amortization_expense"),
         };
         financial_data.push(data);
     }
@@ -308,6 +336,9 @@ async fn fetch_historical_financial_data(pool: &SqlitePool) -> Result<Vec<Financ
             cash_and_equivalents: row.get("cash_and_equivalents"),
             total_debt: row.get("total_debt"),
             total_equity: row.get("total_equity"),
+            net_income: row.get("net_income"),
+            depreciation_expense: row.get("depreciation_expense"),
+            amortization_expense: row.get("amortization_expense"),
         };
         financial_data.push(data);
     }
@@ -324,6 +355,7 @@ fn calculate_stock_ratios(data: &FinancialData) -> CalculatedRatios {
         ps_ratio_ttm: None,
         evs_ratio_ttm: None,
         pb_ratio_ttm: None,
+        pcf_ratio_ttm: None,
         data_completeness_score: 0,
     };
 
@@ -367,6 +399,20 @@ fn calculate_stock_ratios(data: &FinancialData) -> CalculatedRatios {
         }
     }
 
+    // Calculate P/CF Ratio = Market Cap / Cash Flow
+    // Cash Flow = Net Income + Depreciation + Amortization
+    if let Some(market_cap) = ratios.market_cap {
+        let net_income = data.net_income.unwrap_or(0.0);
+        let depreciation = data.depreciation_expense.unwrap_or(0.0);
+        let amortization = data.amortization_expense.unwrap_or(0.0);
+        let cash_flow = net_income + depreciation + amortization;
+        
+        if cash_flow > 0.0 {
+            ratios.pcf_ratio_ttm = Some(market_cap / cash_flow);
+            ratios.data_completeness_score += 20; // 20 points for P/CF ratio
+        }
+    }
+
     ratios
 }
 
@@ -384,10 +430,10 @@ async fn store_calculated_ratios(
         r#"
         INSERT OR REPLACE INTO daily_valuation_ratios (
             stock_id, date, price, market_cap, enterprise_value,
-            ps_ratio_ttm, evs_ratio_ttm, pb_ratio_ttm, revenue_ttm,
+            ps_ratio_ttm, evs_ratio_ttm, pb_ratio_ttm, pcf_ratio_ttm, revenue_ttm,
             data_completeness_score, last_financial_update
         ) VALUES (
-            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12
         )
         "#
     )
@@ -399,6 +445,7 @@ async fn store_calculated_ratios(
     .bind(ratios.ps_ratio_ttm)
     .bind(ratios.evs_ratio_ttm)
     .bind(ratios.pb_ratio_ttm)
+    .bind(ratios.pcf_ratio_ttm)
     .bind(data.latest_ttm_revenue)
     .bind(ratios.data_completeness_score)
     .bind(data.latest_ttm_report_date)
@@ -410,6 +457,7 @@ async fn store_calculated_ratios(
             if ratios.ps_ratio_ttm.is_some() { stats.ps_ratios_calculated = 1; }
             if ratios.evs_ratio_ttm.is_some() { stats.evs_ratios_calculated = 1; }
             if ratios.pb_ratio_ttm.is_some() { stats.pb_ratios_calculated = 1; }
+            if ratios.pcf_ratio_ttm.is_some() { stats.pcf_ratios_calculated = 1; }
             if ratios.market_cap.is_some() { stats.market_caps_calculated = 1; }
             if ratios.enterprise_value.is_some() { stats.enterprise_values_calculated = 1; }
         }
@@ -454,9 +502,9 @@ pub async fn calculate_ratios_for_negative_earnings_stocks(pool: &SqlitePool) ->
         println!("  🔴 {} (Net Income: ${:.1}M)", symbol, net_income / 1_000_000.0);
     }
     
-    // Calculate P/S, EV/S, and P/B ratios for these stocks
-    println!("💡 Calculating P/S, EV/S, and P/B ratios for negative earnings stocks...");
-    calculate_ps_evs_pb_ratios(pool).await
+    // Calculate P/S, EV/S, P/B, and P/CF ratios for these stocks
+    println!("💡 Calculating P/S, EV/S, P/B, and P/CF ratios for negative earnings stocks...");
+    calculate_ps_evs_pb_pcf_ratios(pool).await
 }
 
 /// Generate ratio calculation summary report

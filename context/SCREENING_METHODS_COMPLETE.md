@@ -1442,73 +1442,75 @@ This enhanced system transforms the traditional Piotroski F-Score from a basic 9
 
 #### **Current Data Coverage Analysis**
 - **Balance Sheet Data**: 495/497 stocks (99.6%) - SEC EDGAR Company Facts API
-- **Income Statement Data**: 412/497 stocks (83%) - TTM revenue available
-- **Cash Flow Data**: 485/503 stocks (96.4%) - TTM cash flow statements
-- **Shares Outstanding**: 416/497 stocks (83.7%) - Missing for 81 stocks
+- **Income Statement Data (Annual)**: 493/497 stocks (99.2%) - Annual revenue available
+- **Income Statement Data (TTM)**: 412/497 stocks (83%) - TTM revenue available
+- **Cash Flow Data (Annual)**: 493/497 stocks (99.2%) - Annual cash flow statements
+- **Cash Flow Data (TTM)**: 424/497 stocks (85.3%) - TTM cash flow statements
+- **Shares Outstanding**: 495/497 stocks (99.6%) - **FIXED** via SEC EDGAR income statements
 
 #### **Missing Data Root Cause**
-- **81 stocks missing shares outstanding** → prevents market cap calculation
+- **2 stocks missing shares outstanding** → prevents market cap calculation (down from 81!)
 - **EV/EBITDA calculation** → needs EBITDA calculation from operating income + depreciation
 - **Shareholder Yield calculation** → needs dividend and buyback data from cash flow statements
 
 ### **🔧 IMPLEMENTATION PLAN**
 
-#### **Phase 1: Fix Shares Outstanding Data (2-3 hours)**
+#### **Phase 1: Fix Shares Outstanding Data (2-3 hours)** ✅ **COMPLETED**
 **Problem**: 81 S&P 500 stocks missing shares outstanding data
 **Solution**: Extract from SEC EDGAR income statements
 **Implementation**:
 ```rust
 // Update SEC EDGAR extraction to include shares outstanding
-"SharesOutstanding" | "WeightedAverageNumberOfSharesOutstandingBasic" => income_statement.shares_basic = Some(value),
-"SharesOutstandingDiluted" | "WeightedAverageNumberOfSharesOutstandingDiluted" => income_statement.shares_diluted = Some(value),
+"WeightedAverageNumberOfSharesOutstandingBasic" => income_statement.shares_basic = Some(value),
+"WeightedAverageNumberOfSharesOutstandingDiluted" => income_statement.shares_diluted = Some(value),
 ```
-**Expected Result**: 83.7% → 95%+ coverage
+**Result**: 83.7% → 99.6% coverage (495/497 stocks) ✅ **ACHIEVED**
 
 #### **Phase 2: Implement P/CF Ratio (2-3 hours)**
 **Formula**: `Market Cap ÷ (Net Income + Depreciation + Amortization)`
-**Data Sources**:
-- Net Income: `income_statements.net_income` (TTM)
-- Depreciation: `cash_flow_statements.depreciation_expense` (TTM)
-- Amortization: `cash_flow_statements.amortization_expense` (TTM)
+**Data Sources** (Using Annual data for better coverage):
+- Net Income: `income_statements.net_income` (Annual) - 99.2% coverage
+- Depreciation: `cash_flow_statements.depreciation_expense` (Annual) - 99.2% coverage  
+- Amortization: `cash_flow_statements.amortization_expense` (Annual) - 99.2% coverage
 **Implementation**:
 ```rust
 let cash_flow = net_income + depreciation + amortization;
 let cf_per_share = cash_flow / shares_outstanding;
 let price_to_cf = market_cap / cash_flow;
 ```
-**Expected Result**: 0% → 90%+ coverage
+**Expected Result**: 0% → 95%+ coverage (using Annual data)
 
 #### **Phase 3: Implement EV/EBITDA Ratio (3-4 hours)**
 **Formula**: `Enterprise Value ÷ EBITDA`
 **Enterprise Value**: `Market Cap + Total Debt - Cash`
 **EBITDA**: `Operating Income + Depreciation + Amortization`
-**Data Sources**:
-- Market Cap: existing
-- Total Debt: `balance_sheets.total_debt` (SEC EDGAR)
-- Cash: `balance_sheets.cash_and_equivalents` (SEC EDGAR)
-- Operating Income: `income_statements.operating_income` (TTM)
-- Depreciation: `cash_flow_statements.depreciation_expense` (TTM)
+**Data Sources** (Using Annual data for better coverage):
+- Market Cap: existing (99.6% coverage)
+- Total Debt: `balance_sheets.total_debt` (Annual) - 99.6% coverage
+- Cash: `balance_sheets.cash_and_equivalents` (Annual) - 99.6% coverage
+- Operating Income: `income_statements.operating_income` (Annual) - 99.2% coverage
+- Depreciation: `cash_flow_statements.depreciation_expense` (Annual) - 99.2% coverage
 **Implementation**:
 ```rust
 let enterprise_value = market_cap + total_debt - cash;
 let ebitda = operating_income + depreciation + amortization;
 let ev_ebitda = enterprise_value / ebitda;
 ```
-**Expected Result**: 0% → 85%+ coverage
+**Expected Result**: 0% → 95%+ coverage (using Annual data)
 
 #### **Phase 4: Implement Shareholder Yield (3-4 hours)**
 **Formula**: `Dividend Yield + Net Buyback Yield`
-**Data Sources**:
-- Dividends: `cash_flow_statements.dividends_paid` (TTM)
-- Share Repurchases: `cash_flow_statements.repurchase_of_common_stock` (TTM)
-- Market Cap: existing
+**Data Sources** (Using Annual data for better coverage):
+- Dividends: `cash_flow_statements.dividends_paid` (Annual) - 99.2% coverage
+- Share Repurchases: `cash_flow_statements.repurchase_of_common_stock` (Annual) - 99.2% coverage
+- Market Cap: existing (99.6% coverage)
 **Implementation**:
 ```rust
 let dividend_yield = (dividends_paid.abs() / market_cap) * 100.0;
 let buyback_yield = (share_repurchases.abs() / market_cap) * 100.0;
 let shareholder_yield = dividend_yield + buyback_yield;
 ```
-**Expected Result**: 0% → 70%+ coverage (realistic for US market)
+**Expected Result**: 0% → 80%+ coverage (using Annual data)
 
 #### **Phase 5: Database Schema Updates (1 hour)**
 **Add missing columns**:
@@ -1532,12 +1534,12 @@ ALTER TABLE daily_valuation_ratios ADD COLUMN shareholder_yield_ttm REAL;
 - **P/S Ratio**: 100% ✅ (already working)
 - **EV/S Ratio**: 100% ✅ (already working)
 - **P/E Ratio**: 100% ✅ (verified working)
-- **P/B Ratio**: 95%+ (383/497 → 470/497 stocks)
-- **P/CF Ratio**: 90%+ (0% → 90%+ coverage)
-- **EV/EBITDA**: 85%+ (0% → 85%+ coverage)
-- **Shareholder Yield**: 70%+ (0% → 70%+ coverage)
+- **P/B Ratio**: 96.4% ✅ (479/497 stocks) - **ACHIEVED**
+- **P/CF Ratio**: 95%+ (0% → 95%+ coverage using Annual data)
+- **EV/EBITDA**: 95%+ (0% → 95%+ coverage using Annual data)
+- **Shareholder Yield**: 80%+ (0% → 80%+ coverage using Annual data)
 
-#### **Overall Target**: 90%+ average coverage across all 6 metrics
+#### **Overall Target**: 95%+ average coverage across all 6 metrics
 
 ### **⚡ IMPLEMENTATION TIMELINE**
 

@@ -9,7 +9,6 @@ use std::time::Duration as StdDuration;
 use uuid::Uuid;
 
 use crate::tools::data_freshness_checker::{DataStatusReader, SystemFreshnessReport};
-use crate::tools::ratio_calculator;
 use crate::tools::date_range_calculator::DateRangeCalculator;
 use crate::tools::sec_edgar_client::SecEdgarClient;
 use crate::api::schwab_client::SchwabClient;
@@ -22,8 +21,6 @@ pub enum RefreshMode {
     Market,
     /// All EDGAR financial data: income, balance, cash flow (~90min)
     Financials,
-    /// All calculated ratios: P/E, P/S, Piotroski, O'Shaughnessy (~10min, requires Market + Financials)
-    Ratios,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -262,7 +259,6 @@ impl DataRefreshManager {
             "daily_prices" => self.refresh_market_internal(session_id).await?,
             "financial_statements" => self.refresh_financials_internal(session_id).await?,
             "cash_flow_statements" => self.refresh_cash_flow_internal(session_id).await?,
-            "ps_evs_ratios" => self.refresh_ratios_internal(session_id).await?,
             _ => return Err(anyhow!("Unknown data source: {}", step.data_source)),
         };
 
@@ -533,223 +529,7 @@ impl DataRefreshManager {
         Ok(ttm_records)
     }
 
-    /// Calculate all ratios and metrics for all algorithms
-    async fn refresh_ratios_internal(&self, _session_id: &str) -> Result<i64> {
-        println!("📁 Calculating all ratios and metrics...");
 
-        // Check prerequisites
-        println!("🔍 Checking prerequisites: market data + financial data");
-
-        // Verify market data is current (within 30 days for tolerance)
-        let market_check = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM daily_prices WHERE date >= date('now', '-30 days')"
-        ).fetch_one(&self.pool).await?;
-
-        if market_check == 0 {
-            return Err(anyhow!("Market data required but not current. Run 'market' refresh first."));
-        }
-
-        // Verify financial data exists (using Annual data)
-        let financial_check = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM income_statements WHERE period_type = 'Annual'"
-        ).fetch_one(&self.pool).await?;
-
-        if financial_check == 0 {
-            return Err(anyhow!("Financial data required but missing. Run 'financials' refresh first."));
-        }
-
-        println!("✅ Prerequisites satisfied - calculating ratios...");
-
-        // TODO: Implement comprehensive ratio calculation here
-        // For now, use existing ratio calculation calls
-        let mut total_records = 0;
-
-        // Calculate P/E ratios
-        let pe_records = self.calculate_pe_ratios_internal().await?;
-        total_records += pe_records;
-
-        // Calculate P/S and EV/S ratios
-        let ps_records = self.calculate_ps_evs_ratios_internal().await?;
-        total_records += ps_records;
-
-        println!("✅ All ratio calculations completed - {} total records", total_records);
-        Ok(total_records)
-    }
-
-    /// Calculate P/E ratios (internal helper) - PARALLEL VERSION
-    async fn calculate_pe_ratios_internal(&self) -> Result<i64> {
-        println!("📊 Calculating P/E ratios (parallel processing)...");
-
-        // Single phase: Calculate P/E ratios directly from income_statements - parallelized
-        println!("📊 PHASE 1: P/E Ratio Calculation (parallel)");
-        let pe_count = self.calculate_eps_parallel().await?; // This now calculates P/E ratios directly
-        println!("✅ Phase 1 Complete: {} P/E ratios calculated", pe_count);
-
-        // Phase 2: Refresh cache table
-        println!("🔄 PHASE 2: Refresh cache table");
-        let _ = sqlx::query("DROP TABLE IF EXISTS sp500_pe_cache").execute(&self.pool).await;
-
-        let create_cache = "
-            CREATE TABLE sp500_pe_cache AS
-            SELECT
-                s.symbol,
-                s.company_name,
-                dp.close_price as current_price,
-                dvr.pe_ratio,
-                dvr.market_cap,
-                dvr.price,
-                dp.date as price_date
-            FROM stocks s
-            JOIN daily_prices dp ON s.id = dp.stock_id
-            JOIN daily_valuation_ratios dvr ON s.id = dvr.stock_id AND dvr.date = dp.date
-            WHERE s.status = 'active'
-            AND dp.date = (SELECT MAX(date) FROM daily_prices WHERE stock_id = s.id)
-            AND dvr.pe_ratio IS NOT NULL
-            ORDER BY s.symbol
-        ";
-
-        match sqlx::query(create_cache).execute(&self.pool).await {
-            Ok(_) => println!("✅ Phase 2 Complete: Cache table refreshed"),
-            Err(e) => println!("⚠️ Phase 2 Warning: Cache refresh failed: {}", e),
-        }
-
-        println!("✅ P/E calculation completed - {} total records processed", pe_count);
-        Ok(pe_count as i64)
-    }
-
-    /// Parallel EPS calculation by stock using income_statements table
-    async fn calculate_eps_parallel(&self) -> Result<usize> {
-        println!("🧮 Parallel EPS calculation starting...");
-
-        // Get stocks that need EPS calculation in income_statements
-        let stocks_query = r#"
-            SELECT DISTINCT i.stock_id, s.symbol
-            FROM income_statements i
-            JOIN stocks s ON s.id = i.stock_id
-            WHERE i.net_income IS NOT NULL
-            AND i.shares_diluted IS NOT NULL
-            AND i.shares_diluted > 0
-            AND i.period_type = 'TTM'
-            ORDER BY s.symbol
-        "#;
-
-        let stocks = sqlx::query_as::<_, (i32, String)>(stocks_query)
-            .fetch_all(&self.pool)
-            .await?;
-
-        if stocks.is_empty() {
-            println!("📊 No stocks need EPS calculation");
-            return Ok(0);
-        }
-
-        println!("📊 Found {} stocks for EPS calculation", stocks.len());
-
-        // Parallel processing with semaphore
-        let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(30)); // Max 30 concurrent
-        let mut tasks = Vec::new();
-
-        for (stock_id, symbol) in stocks {
-            let permit = semaphore.clone();
-            let pool = self.pool.clone();
-
-            let task = tokio::spawn(async move {
-                let _permit = permit.acquire().await.unwrap();
-
-                // Calculate and store P/E ratios directly (this replaces separate EPS calculation)
-                let pe_calculation = r#"
-                    INSERT OR REPLACE INTO daily_valuation_ratios
-                    (stock_id, date, pe_ratio, market_cap, price)
-                    SELECT
-                        dp.stock_id,
-                        dp.date,
-                        CASE
-                            WHEN i.shares_diluted > 0 AND i.net_income > 0
-                            THEN dp.close_price / (i.net_income / i.shares_diluted)
-                            ELSE NULL
-                        END as pe_ratio,
-                        CASE
-                            WHEN i.shares_diluted > 0
-                            THEN dp.close_price * i.shares_diluted
-                            ELSE NULL
-                        END as market_cap,
-                        dp.close_price as price
-                    FROM daily_prices dp
-                    JOIN (
-                        SELECT stock_id, net_income, shares_diluted, fiscal_year, report_date,
-                               ROW_NUMBER() OVER (PARTITION BY stock_id ORDER BY report_date DESC) as rn
-                        FROM income_statements
-                        WHERE stock_id = ?
-                        AND period_type = 'TTM'
-                        AND net_income IS NOT NULL
-                        AND shares_diluted IS NOT NULL
-                        AND shares_diluted > 0
-                    ) i ON i.stock_id = dp.stock_id AND i.rn = 1
-                    WHERE dp.stock_id = ?
-                    AND dp.close_price IS NOT NULL
-                    AND dp.close_price > 0
-                "#;
-
-                match sqlx::query(pe_calculation)
-                    .bind(stock_id)
-                    .bind(stock_id)
-                    .execute(&pool)
-                    .await
-                {
-                    Ok(result) => {
-                        let rows_updated = result.rows_affected();
-                        if rows_updated > 0 {
-                            println!("✅ {} - {} P/E ratios calculated", symbol, rows_updated);
-                        }
-                        Ok((symbol, rows_updated))
-                    }
-                    Err(e) => {
-                        println!("⚠️ {} - P/E calculation failed: {}", symbol, e);
-                        Err(anyhow!("P/E failed for {}: {}", symbol, e))
-                    }
-                }
-            });
-            tasks.push(task);
-        }
-
-        // Wait for all tasks to complete
-        println!("🚀 Processing {} stocks concurrently (max 30 parallel)...", tasks.len());
-
-        let mut total_ratios_calculated = 0;
-        let mut processed_stocks = 0;
-
-        for task in tasks {
-            match task.await {
-                Ok(Ok((_symbol, ratio_count))) => {
-                    total_ratios_calculated += ratio_count as usize;
-                    processed_stocks += 1;
-                }
-                Ok(Err(e)) => {
-                    println!("⚠️ P/E task failed: {}", e);
-                }
-                Err(e) => {
-                    println!("⚠️ P/E task panicked: {}", e);
-                }
-            }
-        }
-
-        println!("✅ P/E ratio calculation completed - {} stocks, {} P/E ratios",
-                processed_stocks, total_ratios_calculated);
-        Ok(total_ratios_calculated)
-    }
-
-
-    /// Calculate P/S, EV/S, and P/B ratios (internal helper)
-    async fn calculate_ps_evs_ratios_internal(&self) -> Result<i64> {
-        println!("📊 Calculating P/S, EV/S, and P/B ratios...");
-
-        // Use internal ratio calculator directly
-        let stats = ratio_calculator::calculate_ps_evs_pb_pcf_ev_ebitda_ratios(&self.pool).await?;
-
-        let total_ratios = stats.ps_ratios_calculated + stats.evs_ratios_calculated + stats.pb_ratios_calculated + stats.pcf_ratios_calculated + stats.ev_ebitda_ratios_calculated + stats.shareholder_yield_ratios_calculated;
-        println!("✅ P/S, EV/S, P/B, P/CF, EV/EBITDA, and Shareholder Yield ratios calculated - {} stocks processed, {} ratios calculated",
-                 stats.stocks_processed, total_ratios);
-        Ok(total_ratios as i64)
-    }
 
     // ========================================
     // OLD FUNCTIONS (TO BE REMOVED)
@@ -826,17 +606,6 @@ impl DataRefreshManager {
             },
         ]);
 
-        // Ratios mode: All calculated ratios (depends on Market + Financials)
-        steps.insert(RefreshMode::Ratios, vec![
-            RefreshStep {
-                name: "Calculate all ratios and metrics".to_string(),
-                data_source: "ps_evs_ratios".to_string(),
-                estimated_duration_minutes: 10,
-                command: "internal".to_string(), // Internal function call
-                dependencies: vec!["daily_prices".to_string(), "financial_statements".to_string()],
-                priority: 1,
-            },
-        ]);
 
 
         steps
@@ -861,7 +630,6 @@ impl DataRefreshManager {
             .bind(match request.mode {
                 RefreshMode::Market => "market",
                 RefreshMode::Financials => "financials",
-                RefreshMode::Ratios => "ratios",
             })
             .bind(steps.len() as i32 + 2) // +2 for start/finish
             .bind("Initializing")

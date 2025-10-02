@@ -20,10 +20,10 @@ use rust_stocks_tauri_lib::tools::{
 #[command(
     name = "refresh_data",
     about = "🔄 Stock data refresh system",
-    long_about = "Updates market data (Schwab), financial data (EDGAR), and calculated ratios. Run without options to check status."
+    long_about = "Updates market data (Schwab) and financial data (EDGAR). Run without options to check status."
 )]
 struct Cli {
-    /// What to refresh: market, financials, or ratios
+    /// What to refresh: market or financials
     #[arg(value_enum)]
     mode: Option<RefreshMode>,
 
@@ -309,8 +309,9 @@ fn get_available_steps(mode: &RefreshMode) -> Vec<(String, i32)> {
     ];
 
     match mode {
-        RefreshMode::Ratios | RefreshMode::Financials => {
-            steps.push(("ps_evs_ratios".to_string(), 8));
+        RefreshMode::Financials => {
+            // Financials mode includes TTM cash flow calculation
+            steps.push(("cash_flow_statements".to_string(), 8));
         }
         _ => {}
     }

@@ -196,17 +196,11 @@ impl DataStatusReader {
         let financial_status = self.check_financial_statements_direct().await?;
         data_sources.insert("financial_statements".to_string(), financial_status);
 
-        // Check ps_evs_ratios directly
-        let ratios_status = self.check_ps_evs_ratios_direct().await?;
-        data_sources.insert("ps_evs_ratios".to_string(), ratios_status);
 
         // Check cash_flow_statements directly
         let cash_flow_status = self.check_cash_flow_statements_direct().await?;
         data_sources.insert("cash_flow_statements".to_string(), cash_flow_status);
 
-        // Check calculated_ratios directly
-        let calculated_ratios_status = self.check_calculated_ratios_direct().await?;
-        data_sources.insert("calculated_ratios".to_string(), calculated_ratios_status);
 
         Ok(data_sources)
     }
@@ -332,66 +326,6 @@ impl DataStatusReader {
         })
     }
 
-    /// Check daily_valuation_ratios table directly
-    async fn check_ps_evs_ratios_direct(&self) -> Result<DataFreshnessStatus> {
-        let query = r#"
-            SELECT 
-                COUNT(*) as total_records,
-                MAX(date) as latest_date,
-                COUNT(DISTINCT stock_id) as unique_stocks
-            FROM daily_valuation_ratios
-        "#;
-
-        let row = sqlx::query(query).fetch_one(&self.pool).await?;
-        let total_records: i64 = row.get("total_records");
-        let latest_date_str: Option<String> = row.get("latest_date");
-        let unique_stocks: i64 = row.get("unique_stocks");
-
-        let (status, staleness_days, message) = if let Some(ref date_str) = latest_date_str {
-            let latest_date = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")?;
-            let today = Local::now().naive_local().date();
-            let staleness = today.signed_duration_since(latest_date).num_days();
-
-            let status = if staleness <= 2 {
-                FreshnessStatus::Current
-            } else if staleness <= 7 {
-                FreshnessStatus::Stale
-            } else if staleness <= 30 {
-                FreshnessStatus::Stale
-            } else {
-                FreshnessStatus::Stale
-            };
-
-            let message = format!("Latest ratio data: {}, {} days old", latest_date, staleness);
-            (status, Some(staleness), message)
-        } else {
-            (FreshnessStatus::Missing, None, "No ratio data found".to_string())
-        };
-
-        let priority = match status {
-            FreshnessStatus::Current => RefreshPriority::Low,
-            FreshnessStatus::Stale => RefreshPriority::Medium,
-            FreshnessStatus::Missing | FreshnessStatus::Error => RefreshPriority::Critical,
-        };
-
-        Ok(DataFreshnessStatus {
-            data_source: "ps_evs_ratios".to_string(),
-            status,
-            latest_data_date: latest_date_str.clone(),
-            last_refresh: None,
-            staleness_days,
-            records_count: total_records,
-            message,
-            refresh_priority: priority,
-            data_summary: DataSummary {
-                date_range: latest_date_str,
-                stock_count: Some(unique_stocks),
-                data_types: vec!["Daily Valuation Ratios".to_string()],
-                key_metrics: vec![format!("{} records, {} stocks", total_records, unique_stocks)],
-                completeness_score: None,
-            },
-        })
-    }
 
     /// Check cash_flow_statements table directly
     async fn check_cash_flow_statements_direct(&self) -> Result<DataFreshnessStatus> {
@@ -453,66 +387,6 @@ impl DataStatusReader {
         })
     }
 
-    /// Check daily_valuation_ratios table directly (for calculated ratios)
-    async fn check_calculated_ratios_direct(&self) -> Result<DataFreshnessStatus> {
-        let query = r#"
-            SELECT 
-                COUNT(*) as total_records,
-                MAX(date) as latest_date,
-                COUNT(DISTINCT stock_id) as unique_stocks
-            FROM daily_valuation_ratios
-        "#;
-
-        let row = sqlx::query(query).fetch_one(&self.pool).await?;
-        let total_records: i64 = row.get("total_records");
-        let latest_date_str: Option<String> = row.get("latest_date");
-        let unique_stocks: i64 = row.get("unique_stocks");
-
-        let (status, staleness_days, message) = if let Some(ref date_str) = latest_date_str {
-            let latest_date = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d")?;
-            let today = Local::now().naive_local().date();
-            let staleness = today.signed_duration_since(latest_date).num_days();
-
-            let status = if staleness <= 2 {
-                FreshnessStatus::Current
-            } else if staleness <= 7 {
-                FreshnessStatus::Stale
-            } else if staleness <= 30 {
-                FreshnessStatus::Stale
-            } else {
-                FreshnessStatus::Stale
-            };
-
-            let message = format!("Latest calculated ratios: {}, {} days old", latest_date, staleness);
-            (status, Some(staleness), message)
-        } else {
-            (FreshnessStatus::Missing, None, "No calculated ratios found".to_string())
-        };
-
-        let priority = match status {
-            FreshnessStatus::Current => RefreshPriority::Low,
-            FreshnessStatus::Stale => RefreshPriority::Medium,
-            FreshnessStatus::Missing | FreshnessStatus::Error => RefreshPriority::Critical,
-        };
-
-        Ok(DataFreshnessStatus {
-            data_source: "calculated_ratios".to_string(),
-            status,
-            latest_data_date: latest_date_str.clone(),
-            last_refresh: None,
-            staleness_days,
-            records_count: total_records,
-            message,
-            refresh_priority: priority,
-            data_summary: DataSummary {
-                date_range: latest_date_str,
-                stock_count: Some(unique_stocks),
-                data_types: vec!["Daily Valuation Ratios".to_string()],
-                key_metrics: vec![format!("{} records, {} stocks", total_records, unique_stocks)],
-                completeness_score: None,
-            },
-        })
-    }
 
     async fn generate_market_data_summary(&self, records_count: i64, latest_date: &Option<String>) -> Result<DataSummary> {
         // Get detailed market data stats
@@ -628,60 +502,6 @@ impl DataStatusReader {
         })
     }
 
-    async fn generate_ratios_summary(&self, _records_count: i64, latest_date: &Option<String>) -> Result<DataSummary> {
-        // Get detailed ratios stats
-        let stats_query = r#"
-            SELECT
-                MIN(date) as earliest_date,
-                MAX(date) as latest_date,
-                COUNT(DISTINCT stock_id) as unique_stocks,
-                COUNT(DISTINCT CASE WHEN pe_ratio IS NOT NULL THEN stock_id END) as stocks_with_pe,
-                COUNT(DISTINCT CASE WHEN ps_ratio IS NOT NULL THEN stock_id END) as stocks_with_ps,
-                COUNT(DISTINCT CASE WHEN ev_sales_ratio IS NOT NULL THEN stock_id END) as stocks_with_evs
-            FROM daily_valuation_ratios
-        "#;
-
-        let row = sqlx::query(stats_query).fetch_one(&self.pool).await?;
-        let earliest_date: Option<String> = row.get("earliest_date");
-        let unique_stocks: i64 = row.get("unique_stocks");
-        let stocks_with_pe: i64 = row.get("stocks_with_pe");
-        let stocks_with_ps: i64 = row.get("stocks_with_ps");
-        let stocks_with_evs: i64 = row.get("stocks_with_evs");
-
-        let date_range = match (earliest_date, latest_date) {
-            (Some(start), Some(end)) => Some(format!("{} to {}", start, end)),
-            (None, Some(end)) => Some(format!("Up to {}", end)),
-            _ => None,
-        };
-
-        let mut data_types = vec![];
-        if stocks_with_pe > 0 { data_types.push("P/E Ratios".to_string()); }
-        if stocks_with_ps > 0 { data_types.push("P/S Ratios".to_string()); }
-        if stocks_with_evs > 0 { data_types.push("EV/S Ratios".to_string()); }
-
-        let key_metrics = vec![
-            format!("{} stocks", unique_stocks),
-            format!("{} with P/E", stocks_with_pe),
-            format!("{} with P/S", stocks_with_ps),
-            format!("{} with EV/S", stocks_with_evs),
-        ];
-
-        // Calculate completeness score based on stocks with any ratio
-        let sp500_total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sp500_symbols").fetch_one(&self.pool).await?;
-        let completeness_score = if sp500_total > 0 {
-            Some((unique_stocks as f32 / sp500_total as f32) * 100.0)
-        } else {
-            None
-        };
-
-        Ok(DataSummary {
-            date_range,
-            stock_count: Some(unique_stocks),
-            data_types,
-            key_metrics,
-            completeness_score,
-        })
-    }
 
     async fn generate_cash_flow_summary(&self, _records_count: i64, latest_date: &Option<String>) -> Result<DataSummary> {
         let stats_query = r#"
@@ -782,13 +602,6 @@ impl DataStatusReader {
                 let latest: Option<String> = row.get("latest");
                 (count, latest)
             },
-            "ps_evs_ratios" => {
-                let row = sqlx::query("SELECT COUNT(*) as count, MAX(date) as latest FROM daily_valuation_ratios")
-                    .fetch_one(pool).await?;
-                let count: i64 = row.get("count");
-                let latest: Option<String> = row.get("latest");
-                (count, latest)
-            },
             _ => return Err(anyhow::anyhow!("Unknown data source: {}", data_source))
         };
 
@@ -874,84 +687,11 @@ impl DataStatusReader {
         })
     }
 
-    /// Check P/E ratio freshness
-    #[allow(dead_code)]
-    async fn check_pe_ratios(&self) -> Result<DataFreshnessStatus> {
-        let query = r#"
-            SELECT
-                MAX(date) as latest_pe_date,
-                COUNT(*) as pe_records,
-                COUNT(DISTINCT stock_id) as stocks_with_pe
-            FROM daily_valuation_ratios
-            WHERE pe_ratio IS NOT NULL
-        "#;
-
-        let row = sqlx::query(query).fetch_one(&self.pool).await?;
-
-        let latest_date_str: Option<String> = row.get("latest_pe_date");
-        let pe_records: i64 = row.get("pe_records");
-
-        // Also check the latest date in daily_prices for comparison
-        let price_query = "SELECT MAX(date) as latest_price_date FROM daily_prices";
-        let price_row = sqlx::query(price_query).fetch_one(&self.pool).await?;
-        let latest_price_date_str: Option<String> = price_row.get("latest_price_date");
-
-        let (status, staleness_days, message) = if let (Some(pe_date_str), Some(price_date_str)) = (latest_date_str.as_ref(), latest_price_date_str.as_ref()) {
-            let pe_date = NaiveDate::parse_from_str(pe_date_str, "%Y-%m-%d")?;
-            let price_date = NaiveDate::parse_from_str(price_date_str, "%Y-%m-%d")?;
-
-            let today = Local::now().naive_local().date();
-            let pe_staleness = today.signed_duration_since(pe_date).num_days();
-            let price_gap = price_date.signed_duration_since(pe_date).num_days();
-
-            let status = if price_gap <= 2 && pe_staleness <= 7 {
-                FreshnessStatus::Current
-            } else if price_gap <= 7 && pe_staleness <= 30 {
-                FreshnessStatus::Stale
-            } else {
-                FreshnessStatus::Error
-            };
-
-            let message = if price_gap > 2 {
-                format!("P/E ratios ({}) lag behind prices ({}) by {} days", pe_date, price_date, price_gap)
-            } else {
-                format!("P/E ratios current to {}, {} days old", pe_date, pe_staleness)
-            };
-
-            (status, Some(pe_staleness), message)
-        } else {
-            (FreshnessStatus::Missing, None, "No P/E ratio data found".to_string())
-        };
-
-        let priority = match status {
-            FreshnessStatus::Current => RefreshPriority::Low,
-            FreshnessStatus::Stale => RefreshPriority::High,
-            FreshnessStatus::Missing | FreshnessStatus::Error => RefreshPriority::Critical,
-        };
-
-        Ok(DataFreshnessStatus {
-            data_source: "pe_ratios".to_string(),
-            status,
-            latest_data_date: latest_date_str.clone(),
-            last_refresh: None,
-            staleness_days,
-            records_count: pe_records,
-            message,
-            refresh_priority: priority,
-            data_summary: self.generate_ratios_summary(pe_records, &latest_date_str).await.unwrap_or(DataSummary {
-                date_range: latest_date_str,
-                stock_count: None,
-                data_types: vec!["P/E Ratios".to_string()],
-                key_metrics: vec![format!("{} records", pe_records)],
-                completeness_score: None,
-            }),
-        })
-    }
 
     /// Determine overall system status
     fn determine_overall_status(&self, data_sources: &HashMap<String, DataFreshnessStatus>) -> FreshnessStatus {
         // Only consider core data sources for overall status
-        let core_sources = ["daily_prices", "financial_statements", "ps_evs_ratios"];
+        let core_sources = ["daily_prices", "financial_statements", "cash_flow_statements"];
         let core_statuses: Vec<&FreshnessStatus> = data_sources
             .iter()
             .filter(|(key, _)| core_sources.contains(&key.as_str()))

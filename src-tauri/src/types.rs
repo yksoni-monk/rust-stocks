@@ -13,8 +13,6 @@ pub enum RefreshMode {
     Market,
     #[serde(rename = "financials")]
     Financials,
-    #[serde(rename = "ratios")]
-    Ratios,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

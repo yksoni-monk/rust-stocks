@@ -49,7 +49,6 @@ pub async fn start_data_refresh(app_handle: tauri::AppHandle, request: RefreshRe
     let refresh_mode = match request.mode {
         RefreshModeDto::Market => RefreshMode::Market,
         RefreshModeDto::Financials => RefreshMode::Financials,
-        RefreshModeDto::Ratios => RefreshMode::Ratios,
     };
 
     let refresh_request = RefreshRequest {
@@ -147,8 +146,7 @@ pub async fn get_refresh_progress(session_id: String) -> Result<Option<RefreshPr
         let operation_type = match op_type_str.as_str() {
             "market" => RefreshModeDto::Market,
             "financials" => RefreshModeDto::Financials,
-            "ratios" => RefreshModeDto::Ratios,
-            _ => RefreshModeDto::Ratios,
+            _ => RefreshModeDto::Market, // Default to market for unknown types
         };
         let status_str: String = row.get("status");
         let status = match status_str.as_str() {

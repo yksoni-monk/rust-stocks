@@ -20,14 +20,15 @@ path = "src/main.rs"
 # CLI Tools (moved from root workspace)
 
 
-[[bin]]
-name = "calculate-ratios"
-path = "src/bin/calculate_ratios.rs"
 
 
 [[bin]]
 name = "db_admin"
 path = "src/bin/db_admin.rs"
+
+[[bin]]
+name = "fetch_ciks"
+path = "src/bin/fetch_ciks.rs"
 
 [[bin]]
 name = "import-schwab-prices"

@@ -217,15 +217,21 @@ impl SecEdgarClient {
         Ok(latest_date)
     }
 
-    /// Get latest filing date from our database
+    /// Get latest filing date from our database (checks all financial tables)
     pub async fn get_our_latest_filing_date(&self, stock_id: i64) -> Result<Option<String>> {
         let query = r#"
-            SELECT MAX(filed_date) as latest_filed_date
-            FROM income_statements 
-            WHERE stock_id = ? AND filed_date IS NOT NULL
+            SELECT MAX(filed_date) as latest_filed_date FROM (
+                SELECT filed_date FROM income_statements WHERE stock_id = ? AND filed_date IS NOT NULL
+                UNION ALL
+                SELECT filed_date FROM balance_sheets WHERE stock_id = ? AND filed_date IS NOT NULL
+                UNION ALL
+                SELECT filed_date FROM cash_flow_statements WHERE stock_id = ? AND filed_date IS NOT NULL
+            )
         "#;
         
         let result: Option<String> = sqlx::query_scalar(query)
+            .bind(stock_id)
+            .bind(stock_id)
             .bind(stock_id)
             .fetch_optional(&self.pool)
             .await?;

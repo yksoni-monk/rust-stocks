@@ -8,7 +8,6 @@ use anyhow::Result;
 use chrono::NaiveDate;
 use clap::{Parser, Subcommand};
 use sqlx::{SqlitePool, Row};
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -78,7 +77,7 @@ struct CashFlowQuarterlyData {
 #[derive(Debug, Clone)]
 struct CashFlowTTMData {
     stock_id: i64,
-    symbol: String,
+    _symbol: String,
     ttm_end_date: NaiveDate,
     fiscal_year: i32,
     operating_cash_flow: Option<f64>,
@@ -88,8 +87,8 @@ struct CashFlowTTMData {
     depreciation_expense: Option<f64>,
     dividends_paid: Option<f64>,
     share_repurchases: Option<f64>,
-    quarters_used: usize,
-    data_quality_score: f32,
+    _quarters_used: usize,
+    _data_quality_score: f32,
 }
 
 #[derive(Debug)]
@@ -122,7 +121,7 @@ struct ConcurrentTTMCalculator {
 struct CalculatorConfig {
     max_workers: usize,
     batch_size: usize,
-    progress_interval: Duration,
+    _progress_interval: Duration,
     sp500_only: bool,
     min_quarters: usize,
 }
@@ -312,7 +311,7 @@ impl ConcurrentTTMCalculator {
 
             let ttm_record = CashFlowTTMData {
                 stock_id,
-                symbol: symbol.clone(),
+                _symbol: symbol.clone(),
                 ttm_end_date,
                 fiscal_year: ttm_fiscal_year,
                 operating_cash_flow,
@@ -322,8 +321,8 @@ impl ConcurrentTTMCalculator {
                 depreciation_expense,
                 dividends_paid,
                 share_repurchases,
-                quarters_used: window_quarters.len(),
-                data_quality_score,
+                _quarters_used: window_quarters.len(),
+                _data_quality_score: data_quality_score,
             };
 
             debug!("✅ {} TTM ending {}: calculated with {} quarters, {:.1}% data quality",
@@ -572,7 +571,7 @@ async fn main() -> Result<()> {
     let config = CalculatorConfig {
         max_workers: cli.workers,
         batch_size: cli.batch_size,
-        progress_interval: Duration::from_secs(cli.progress_interval),
+        _progress_interval: Duration::from_secs(cli.progress_interval),
         sp500_only: cli.sp500_only,
         min_quarters: cli.min_quarters,
     };

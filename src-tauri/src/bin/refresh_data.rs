@@ -117,11 +117,11 @@ async fn show_data_status(pool: &sqlx::SqlitePool, cli: &Cli) -> Result<()> {
     println!("🕐 Last check: {}", report.last_check);
     println!();
 
-    // Display individual data sources
+    // Display individual data sources (excluding screening_readiness as it's not a data source)
     println!("📋 DATA SOURCE STATUS:");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
-    let mut sources = vec![&report.market_data, &report.financial_data, &report.calculated_ratios];
+    let mut sources = vec![&report.market_data, &report.financial_data];
     sources.sort_by(|a, b| b.refresh_priority.partial_cmp(&a.refresh_priority).unwrap());
 
     for source in sources {
@@ -157,15 +157,39 @@ async fn show_data_status(pool: &sqlx::SqlitePool, cli: &Cli) -> Result<()> {
     println!("🎯 SCREENING READINESS:");
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 
-    let valuation_status = if report.screening_readiness.valuation_analysis { "✅ Ready" } else { "❌ Blocked" };
-
-    println!("Valuation Analysis:     {}", valuation_status);
-
-    if !report.screening_readiness.blocking_issues.is_empty() {
-        println!("\n⚠️  BLOCKING ISSUES:");
-        for issue in &report.screening_readiness.blocking_issues {
-            println!("   • {}", issue);
+    let is_financial_data_stale = report.financial_data.status.needs_refresh();
+    let is_market_data_stale = report.market_data.status.needs_refresh();
+    
+    if is_financial_data_stale || is_market_data_stale {
+        println!("❌ Valuation Analysis:     ❌ Blocked");
+        println!();
+        println!("Reason:");
+        println!("We require fresh data for screening analysis.");
+        
+        let mut stale_data_types = Vec::new();
+        let mut commands = Vec::new();
+        
+        if is_financial_data_stale {
+            stale_data_types.push("financial statements");
+            commands.push("cargo run --bin refresh_data financials");
         }
+        
+        if is_market_data_stale {
+            stale_data_types.push("daily prices");  
+            commands.push("cargo run --bin refresh_data market");
+        }
+        
+        println!("We require fresh data for <{}>.", stale_data_types.join(" and "));
+        println!("Please run the following command:");
+        println!("{}", commands.join(" && "));
+        
+    } else {
+        println!("✅ Valuation Analysis:     ✅ Ready");
+        println!("");
+        println!("All required data is current:");
+        println!("   • Financial statements: Up-to-date with SEC filings");
+        println!("   • Daily prices: Current market data");
+        println!("   • Screening algorithms: Ready to run");
     }
 
     println!();

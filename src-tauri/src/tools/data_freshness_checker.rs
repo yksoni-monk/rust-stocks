@@ -106,7 +106,7 @@ impl DataStatusReader {
         
         // Use SecEdgarClient to check which stocks need updates
         let mut edgar_client = SecEdgarClient::new(pool.clone());
-        let mut outdated_count = 0;
+        let mut stale_count = 0;
         let mut current_count = 0;
         let mut api_errors = 0;
         
@@ -117,7 +117,7 @@ impl DataStatusReader {
             
             match edgar_client.check_if_update_needed(cik, *stock_id).await {
                 Ok(true) => {
-                    outdated_count += 1;
+                    stale_count += 1;
                 }
                 Ok(false) => {
                     current_count += 1;
@@ -135,17 +135,15 @@ impl DataStatusReader {
         }
         
         println!("  📈 Freshness Check Results:");
-        println!("    Need Updates: {} stocks", outdated_count);
+        println!("    Stale (need updates): {} stocks", stale_count);
         println!("    Current: {} stocks", current_count);
         println!("    API Errors: {}", api_errors);
         
-        // Determine freshness status based on results
-        let freshness_status = if outdated_count == 0 {
+        // Proper status determination based on stale count
+        let freshness_status = if stale_count == 0 {
             FreshnessStatus::Current
-        } else if outdated_count < all_stocks.len() / 2 {
-            FreshnessStatus::Stale
         } else {
-            FreshnessStatus::Missing
+            FreshnessStatus::Stale
         };
         
         // Get basic market data status (this isn't SEC-related, so keep existing)
@@ -154,34 +152,56 @@ impl DataStatusReader {
         
         Ok(SystemFreshnessReport {
             overall_status: freshness_status.clone(),
-            market_data: market_financial_check,
+            market_data: market_financial_check.clone(),
             financial_data: DataFreshnessStatus {
                 data_source: "financial_statements".to_string(),
                 status: freshness_status.clone(),
-                latest_data_date: self.get_latest_filing_date_string(pool).await.unwrap_or(None),
+                latest_data_date: None,
                 last_refresh: None,
-                staleness_days: None, // Using SEC filing-based freshness instead of days
-                records_count: self.get_financial_records_count(pool).await?,
-                message: format!("Financial data freshness: {} stocks need updates out of {}", outdated_count, all_stocks.len()),
-                refresh_priority: if freshness_status.is_current() { RefreshPriority::Low } else { RefreshPriority::High },
+                staleness_days: None,
+                records_count: stale_count,
+                message: if stale_count == 0 {
+                    format!("All {} stocks are up-to-date with latest SEC filings", all_stocks.len())
+                } else {
+                    format!("{} out of {} stocks need SEC updates - run 'refresh_data financials'", stale_count, all_stocks.len())
+                },
+                refresh_priority: RefreshPriority::High,
                 data_summary: DataSummary {
                     date_range: None,
-                    stock_count: Some(self.get_sp500_financial_coverage(pool).await?),
-                    data_types: vec!["Income Statements".to_string(), "Balance Sheets".to_string(), "Cash Flow".to_string()],
-                    key_metrics: vec!["Revenue".to_string(), "Net Income".to_string(), "Total Assets".to_string()],
-                    completeness_score: Some(95.0),
+                    stock_count: Some(stale_count),
+                    data_types: vec!["SEC Financials".to_string()],
+                    key_metrics: vec![if stale_count == 0 { 
+                        "All stocks current".to_string() 
+                    } else { 
+                        format!("{} stocks need refresh", stale_count) 
+                    }],
+                    completeness_score: Some(100.0),
                 },
             },
             calculated_ratios: DataFreshnessStatus {
-                data_source: "cash_flow_statements".to_string(),
-                status: market_cash_flow_check.status.clone(),
-                latest_data_date: market_cash_flow_check.latest_data_date.clone(),
-                last_refresh: market_cash_flow_check.last_refresh.clone(),
-                staleness_days: market_cash_flow_check.staleness_days,
-                records_count: market_cash_flow_check.records_count,
-                message: market_cash_flow_check.message.clone(),
-                refresh_priority: market_cash_flow_check.refresh_priority.clone(),
-                data_summary: market_cash_flow_check.data_summary.clone(),
+                data_source: "screening_readiness".to_string(),
+                status: if freshness_status.is_current() && market_financial_check.status.is_current() {
+                    FreshnessStatus::Current
+                } else {
+                    FreshnessStatus::Stale
+                },
+                latest_data_date: None,
+                last_refresh: None,
+                staleness_days: None,
+                records_count: 0,
+                message: if freshness_status.is_current() && market_financial_check.status.is_current() {
+                    "Screening analysis ready".to_string()
+                } else {
+                    "Screening blocked: data issues".to_string()
+                },
+                refresh_priority: RefreshPriority::Medium,
+                data_summary: DataSummary {
+                    date_range: None,
+                    stock_count: None,
+                    data_types: vec!["Piotroski F-Score".to_string(), "O'Shaughnessy Value".to_string()],
+                    key_metrics: vec!["Screening Ready".to_string()],
+                    completeness_score: None,
+                },
             },
             recommendations: vec![],
             screening_readiness: ScreeningReadiness {
@@ -216,60 +236,6 @@ impl DataStatusReader {
         Ok(stocks)
     }
     
-    /// Get latest filing date from our database as a string
-    async fn get_latest_filing_date_string(&self, pool: &SqlitePool) -> Result<Option<String>> {
-        let query = r#"
-            SELECT MAX(filed_date) as latest_filed_date
-            FROM income_statements 
-            WHERE filed_date IS NOT NULL
-                AND filed_date <= date('now')
-        "#;
-        
-        let result: Option<String> = sqlx::query_scalar(query)
-            .fetch_optional(pool)
-            .await?;
-            
-        Ok(result)
-    }
-    
-    /// Get count of financial records in database
-    async fn get_financial_records_count(&self, pool: &SqlitePool) -> Result<i64> {
-        let query = r#"
-            SELECT COUNT(*) as record_count
-            FROM (
-                SELECT stock_id FROM income_statements WHERE period_type = 'Annual'
-                UNION
-                SELECT stock_id FROM balance_sheets WHERE period_type = 'Annual'
-                UNION
-                SELECT stock_id FROM cash_flow_statements WHERE period_type = 'Annual'
-            ) financial_records
-        "#;
-        
-        let result: i64 = sqlx::query_scalar(query)
-            .fetch_one(pool)
-            .await?;
-            
-        Ok(result)
-    }
-    
-    /// Get S&P 500 financial coverage count
-    async fn get_sp500_financial_coverage(&self, pool: &SqlitePool) -> Result<i64> {
-        let query = r#"
-            SELECT COUNT(DISTINCT s.id) as stock_count
-            FROM stocks s
-            WHERE s.is_sp500 = 1
-                AND EXISTS (
-                    SELECT 1 FROM income_statements i 
-                    WHERE i.stock_id = s.id AND i.period_type = 'Annual'
-                )
-        "#;
-        
-        let result: i64 = sqlx::query_scalar(query)
-            .fetch_one(pool)
-            .await?;
-            
-        Ok(result)
-    }
 
     /// Check daily_prices table directly
     async fn check_daily_prices_direct(&self) -> Result<DataFreshnessStatus> {

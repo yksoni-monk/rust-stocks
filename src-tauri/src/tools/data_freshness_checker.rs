@@ -280,7 +280,7 @@ impl DataStatusReader {
                 MAX(report_date) as latest_date,
                 COUNT(DISTINCT stock_id) as unique_stocks
             FROM income_statements
-            WHERE period_type = 'Annual'
+            WHERE period_type = 'Annual' AND report_date <= date('now')
         "#;
 
         let row = sqlx::query(query).fetch_one(&self.pool).await?;

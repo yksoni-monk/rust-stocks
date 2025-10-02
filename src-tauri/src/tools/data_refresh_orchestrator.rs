@@ -11,6 +11,7 @@ use uuid::Uuid;
 use crate::tools::data_freshness_checker::{DataStatusReader, SystemFreshnessReport};
 use crate::tools::ratio_calculator;
 use crate::tools::date_range_calculator::DateRangeCalculator;
+use crate::tools::sec_edgar_client::SecEdgarClient;
 use crate::api::schwab_client::SchwabClient;
 use crate::api::StockDataProvider;
 use crate::models::Config;
@@ -434,23 +435,72 @@ impl DataRefreshManager {
     async fn refresh_financials_internal(&self, _session_id: &str) -> Result<i64> {
         println!("📈 Refreshing EDGAR financial data using API client...");
         
-        // Use the current EDGAR API client instead of legacy local file extraction
-        // This is handled by the current sec_edgar_client.rs implementation
+        // Create EDGAR client
+        let mut edgar_client = SecEdgarClient::new(self.pool.clone());
         
-        println!("✅ EDGAR API client integration ready");
+        // Get S&P 500 stocks for EDGAR data extraction
+        let stocks_query = r#"
+            SELECT s.id, s.symbol, s.cik
+            FROM stocks s
+            INNER JOIN sp500_symbols sp ON s.symbol = sp.symbol
+            WHERE s.status = 'active' AND s.cik IS NOT NULL
+            ORDER BY s.symbol
+        "#;
+        
+        let stocks = sqlx::query(stocks_query)
+            .fetch_all(&self.pool)
+            .await?;
+        
+        println!("📊 Found {} S&P 500 stocks with CIK for EDGAR extraction", stocks.len());
+        
+        let mut total_records = 0;
+        let mut processed_stocks = 0;
+        
+        for row in stocks {
+            let stock_id: i64 = row.get("id");
+            let symbol: String = row.get("symbol");
+            let cik: String = row.get("cik");
+            
+            println!("  📋 Processing {} ({})", symbol, cik);
+            
+            // Extract balance sheet data (includes income statement and cash flow)
+            match edgar_client.extract_balance_sheet_data(&cik, stock_id, &symbol).await {
+                Ok(Some(_)) => {
+                    processed_stocks += 1;
+                    println!("    ✅ Successfully extracted financial data for {}", symbol);
+                }
+                Ok(None) => {
+                    println!("    ⚠️ No financial data found for {}", symbol);
+                }
+                Err(e) => {
+                    println!("    ❌ Failed to extract data for {}: {}", symbol, e);
+                }
+            }
+            
+            // Add small delay to respect rate limits
+            sleep(StdDuration::from_millis(100)).await;
+        }
         
         // Count total records extracted
-        let total_records = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM (
-                SELECT 1 FROM income_statements WHERE data_source = 'edgar'
-                UNION ALL
-                SELECT 1 FROM balance_sheets WHERE data_source = 'edgar'
-                UNION ALL
-                SELECT 1 FROM cash_flow_statements WHERE data_source = 'edgar'
-            )"
+        let income_records = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM income_statements WHERE data_source = 'sec_edgar_json'"
         ).fetch_one(&self.pool).await?;
         
-        println!("📊 Total EDGAR financial records: {}", total_records);
+        let balance_records = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM balance_sheets WHERE data_source = 'sec_edgar_json'"
+        ).fetch_one(&self.pool).await?;
+        
+        let cashflow_records = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM cash_flow_statements WHERE data_source = 'sec_edgar_json'"
+        ).fetch_one(&self.pool).await?;
+        
+        total_records = income_records + balance_records + cashflow_records;
+        
+        println!("✅ EDGAR financial data extraction completed");
+        println!("📊 Processed {} stocks", processed_stocks);
+        println!("📊 Total records: {} income, {} balance, {} cash flow", 
+                 income_records, balance_records, cashflow_records);
+        
         Ok(total_records)
     }
 

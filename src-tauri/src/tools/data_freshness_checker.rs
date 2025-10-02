@@ -153,21 +153,21 @@ impl DataStatusReader {
                 },
             });
 
-        let calculated_ratios = data_sources.get("ps_evs_ratios")
+        let calculated_ratios = data_sources.get("cash_flow_statements")
             .cloned()
             .unwrap_or_else(|| DataFreshnessStatus {
-                data_source: "ps_evs_ratios".to_string(),
+                data_source: "cash_flow_statements".to_string(),
                 status: FreshnessStatus::Missing,
                 latest_data_date: None,
                 last_refresh: None,
                 staleness_days: None,
                 records_count: 0,
-                message: "Ratio data not available".to_string(),
+                message: "Cash flow data not available".to_string(),
                 refresh_priority: RefreshPriority::Critical,
                 data_summary: DataSummary {
                     date_range: None,
                     stock_count: None,
-                    data_types: vec!["Financial Ratios".to_string()],
+                    data_types: vec!["Cash Flow Statements".to_string()],
                     key_metrics: vec!["No data available".to_string()],
                     completeness_score: None,
                 },
@@ -767,23 +767,36 @@ impl DataStatusReader {
 
 
     fn check_valuation_readiness(&self, data_sources: &HashMap<String, DataFreshnessStatus>, blocking_issues: &mut Vec<String>) -> bool {
-        let ratio_status = data_sources.get("ps_evs_ratios").map(|ds| &ds.status);
+        // Check if we have the core data needed for pure SQL view calculations
+        let financial_status = data_sources.get("financial_statements").map(|ds| &ds.status);
+        let cash_flow_status = data_sources.get("cash_flow_statements").map(|ds| &ds.status);
+        let market_status = data_sources.get("daily_prices").map(|ds| &ds.status);
 
-        match ratio_status {
-            Some(FreshnessStatus::Current | FreshnessStatus::Stale) => true,
-            _ => {
-                blocking_issues.push("Valuation analysis blocked: P/S and EV/S ratios missing".to_string());
-                false
+        let has_financials = matches!(financial_status, Some(FreshnessStatus::Current | FreshnessStatus::Stale));
+        let has_cash_flow = matches!(cash_flow_status, Some(FreshnessStatus::Current | FreshnessStatus::Stale));
+        let has_market_data = matches!(market_status, Some(FreshnessStatus::Current | FreshnessStatus::Stale));
+
+        if has_financials && has_cash_flow && has_market_data {
+            true
+        } else {
+            if !has_financials {
+                blocking_issues.push("Valuation analysis blocked: Financial statements missing".to_string());
             }
+            if !has_cash_flow {
+                blocking_issues.push("Valuation analysis blocked: Cash flow statements missing".to_string());
+            }
+            if !has_market_data {
+                blocking_issues.push("Valuation analysis blocked: Market data missing".to_string());
+            }
+            false
         }
     }
 
     fn estimate_refresh_duration(&self, data_source: &str) -> String {
         match data_source {
             "daily_prices" => "5-15 minutes".to_string(),
-            "pe_ratios" => "10-30 minutes".to_string(),
-            "ps_evs_ratios" => "5-10 minutes".to_string(),
             "financial_statements" => "30-60 minutes".to_string(),
+            "cash_flow_statements" => "5-10 minutes".to_string(),
             "company_metadata" => "1-2 minutes".to_string(),
             _ => "Unknown".to_string(),
         }

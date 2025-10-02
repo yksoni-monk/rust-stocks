@@ -427,9 +427,9 @@ impl DataRefreshManager {
         Ok(total_records as i64)
     }
 
-    /// Refresh all EDGAR financial data (income, balance, cash flow) - Uses Concurrent Extractor
+    /// Refresh all EDGAR financial data (income, balance, cash flow) - Smart Incremental Updates
     async fn refresh_financials_internal(&self, _session_id: &str) -> Result<i64> {
-        println!("📈 Refreshing EDGAR financial data using API client...");
+        println!("📈 Refreshing EDGAR financial data using smart incremental updates...");
         
         // Create EDGAR client
         let mut edgar_client = SecEdgarClient::new(self.pool.clone());
@@ -439,7 +439,7 @@ impl DataRefreshManager {
             SELECT s.id, s.symbol, s.cik
             FROM stocks s
             INNER JOIN sp500_symbols sp ON s.symbol = sp.symbol
-            WHERE s.status = 'active' AND s.cik IS NOT NULL
+            WHERE s.status = 'active' AND s.cik IS NOT NULL AND s.cik != ''
             ORDER BY s.symbol
         "#;
         
@@ -449,32 +449,68 @@ impl DataRefreshManager {
         
         println!("📊 Found {} S&P 500 stocks with CIK for EDGAR extraction", stocks.len());
         
-        let mut total_records = 0;
         let mut processed_stocks = 0;
+        let mut skipped_current = 0;
+        let mut updated_stocks = 0;
+        
+        println!("🔄 Checking freshness and performing incremental updates...");
+        
+        let total_stocks_count = stocks.len();
         
         for row in stocks {
             let stock_id: i64 = row.get("id");
             let symbol: String = row.get("symbol");
             let cik: String = row.get("cik");
             
-            println!("  📋 Processing {} ({})", symbol, cik);
-            
-            // Extract balance sheet data (includes income statement and cash flow)
-            match edgar_client.extract_balance_sheet_data(&cik, stock_id, &symbol).await {
-                Ok(Some(_)) => {
-                    processed_stocks += 1;
-                    println!("    ✅ Successfully extracted financial data for {}", symbol);
-                }
-                Ok(None) => {
-                    println!("    ⚠️ No financial data found for {}", symbol);
+            // Check if this stock needs update using Company Facts API
+            match edgar_client.check_if_update_needed(&cik, stock_id).await {
+                Ok(needs_update) => {
+                    if needs_update {
+                        println!("  📋 Updating {} ({}) - has newer SEC filings", symbol, cik);
+                        
+                        // Extract financial data for stocks that need updates
+                        match edgar_client.extract_balance_sheet_data(&cik, stock_id, &symbol).await {
+                            Ok(Some(_)) => {
+                                processed_stocks += 1;
+                                updated_stocks += 1;
+                                println!("    ✅ Successfully updated financial data for {}", symbol);
+                            }
+                            Ok(None) => {
+                                println!("    ⚠️ No financial data found for {}", symbol);
+                            }
+                            Err(e) => {
+                                println!("    ❌ Failed to extract data for {}: {}", symbol, e);
+                            }
+                        }
+                    } else {
+                        skipped_current += 1;
+                        if skipped_current % 10 == 0 {
+                            println!("    ⏭️ Skipping {} stocks with current data...", skipped_current);
+                        }
+                    }
                 }
                 Err(e) => {
-                    println!("    ❌ Failed to extract data for {}: {}", symbol, e);
+                    println!("    ⚠️ Freshness check failed for {}: {}. Updating anyway.", symbol, e);
+                    
+                    // Still try to extract if freshness check fails
+                    match edgar_client.extract_balance_sheet_data(&cik, stock_id, &symbol).await {
+                        Ok(Some(_)) => {
+                            processed_stocks += 1;
+                            updated_stocks += 1;
+                            println!("    ✅ Successfully extracted financial data for {}", symbol);
+                        }
+                        Ok(None) => {
+                            println!("    ⚠️ No financial data found for {}", symbol);
+                        }
+                        Err(extract_error) => {
+                            println!("    ❌ Failed to extract data for {}: {}", symbol, extract_error);
+                        }
+                    }
                 }
             }
             
-            // Add small delay to respect rate limits
-            sleep(StdDuration::from_millis(100)).await;
+            // Add delay to respect rate limits (10 requests per second + buffer)
+            sleep(StdDuration::from_millis(110)).await;
         }
         
         // Count total records extracted
@@ -490,11 +526,15 @@ impl DataRefreshManager {
             "SELECT COUNT(*) FROM cash_flow_statements WHERE data_source = 'sec_edgar_json'"
         ).fetch_one(&self.pool).await?;
         
-        total_records = income_records + balance_records + cashflow_records;
+        let total_records = income_records + balance_records + cashflow_records;
         
-        println!("✅ EDGAR financial data extraction completed");
-        println!("📊 Processed {} stocks", processed_stocks);
-        println!("📊 Total records: {} income, {} balance, {} cash flow", 
+        println!("✅ EDGAR financial data smart refresh completed");
+        println!("📊 Summary:");
+        println!("  Total stocks checked: {}", total_stocks_count);
+        println!("  Stocks skipped (current): {}", skipped_current);
+        println!("  Stocks updated: {}", updated_stocks);
+        println!("  Successfully processed: {}", processed_stocks);
+        println!("  Total records: {} income, {} balance, {} cash flow", 
                  income_records, balance_records, cashflow_records);
         
         Ok(total_records)

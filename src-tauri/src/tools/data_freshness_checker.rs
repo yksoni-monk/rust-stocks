@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{SqlitePool, Row};
 use std::collections::HashMap;
 use ts_rs::TS;
+use crate::tools::sec_edgar_client::SecEdgarClient;
 
 /// Column names for the v_data_freshness_summary view
 /// This prevents magic number bugs and makes the code more maintainable
@@ -845,5 +846,191 @@ impl SystemFreshnessReport {
             "valuation" => self.screening_readiness.valuation_analysis,
             _ => false,
         }
+    }
+}
+
+// Enhanced Company Facts-Based Freshness Checking Implementation
+impl DataStatusReader {
+    /// Check financial data freshness using SEC Company Facts API (filing-based)
+    pub async fn check_financial_filing_freshness(&self, pool: &SqlitePool) -> Result<SystemFreshnessReport> {
+        println!("🔍 Checking financial data freshness using SEC Company Facts API...");
+        
+        // Get all S&P 500 stocks with CIKs
+        let all_stocks = self.get_all_sp500_stocks_with_cik(pool).await?;
+        println!("  📊 Checking all {} S&P 500 stocks with CIKs", all_stocks.len());
+        
+        // Use SecEdgarClient to check which stocks need updates
+        let mut edgar_client = SecEdgarClient::new(pool.clone());
+        let mut outdated_count = 0;
+        let mut current_count = 0;
+        let mut api_errors = 0;
+        
+        for (i, (stock_id, cik)) in all_stocks.iter().enumerate() {
+            if i > 0 && i % 50 == 0 {
+                println!("  📊 Progress: checked {}/{} stocks", i, all_stocks.len());
+            }
+            
+            match edgar_client.check_if_update_needed(cik, *stock_id).await {
+                Ok(true) => {
+                    outdated_count += 1;
+                }
+                Ok(false) => {
+                    current_count += 1;
+                }
+                Err(e) => {
+                    api_errors += 1;
+                    if api_errors <= 5 { // Only show first few errors to avoid spam
+                        println!("    ⚠️ API error for stock {}: {}", stock_id, e);
+                    }
+                }
+            }
+            
+            // Respect rate limits (10 requests per second)
+            tokio::time::sleep(std::time::Duration::from_millis(110)).await;
+        }
+        
+        println!("  📈 Freshness Check Results:");
+        println!("    Need Updates: {} stocks", outdated_count);
+        println!("    Current: {} stocks", current_count);
+        println!("    API Errors: {}", api_errors);
+        
+        // Determine freshness status based on results
+        let freshness_status = if outdated_count == 0 {
+            FreshnessStatus::Current
+        } else if outdated_count < all_stocks.len() / 2 {
+            FreshnessStatus::Stale
+        } else {
+            FreshnessStatus::Missing
+        };
+        
+        // Get basic market data status (this isn't SEC-related, so keep existing)
+        let market_financial_check = self.check_financial_statements_direct().await?;
+        let market_cash_flow_check = self.check_cash_flow_statements_direct().await?;
+        
+        Ok(SystemFreshnessReport {
+            overall_status: FreshnessStatus::Current,
+            market_data: market_financial_check,
+            financial_data: DataFreshnessStatus {
+                data_source: "cash_flow_statements".to_string(),
+                status: market_cash_flow_check.status.clone(),
+                latest_data_date: market_cash_flow_check.latest_data_date.clone(),
+                last_refresh: market_cash_flow_check.last_refresh.clone(),
+                staleness_days: market_cash_flow_check.staleness_days,
+                records_count: market_cash_flow_check.records_count,
+                message: market_cash_flow_check.message.clone(),
+                refresh_priority: market_cash_flow_check.refresh_priority.clone(),
+                data_summary: market_cash_flow_check.data_summary.clone(),
+            },
+            calculated_ratios: DataFreshnessStatus {
+                data_source: "financial_statements".to_string(),
+                status: freshness_status.clone(),
+                latest_data_date: self.get_latest_filing_date_string(pool).await.unwrap_or(None),
+                last_refresh: None,
+                staleness_days: None, // Using filing-based freshness instead
+                records_count: self.get_financial_records_count(pool).await?,
+                message: format!("Financial data freshness: {} stocks need updates out of {}", outdated_count, all_stocks.len()),
+                refresh_priority: if freshness_status.is_current() { RefreshPriority::Low } else { RefreshPriority::High },
+                data_summary: DataSummary {
+                    date_range: None,
+                    stock_count: Some(self.get_sp500_financial_coverage(pool).await?),
+                    data_types: vec!["Income Statements".to_string(), "Balance Sheets".to_string(), "Cash Flow".to_string()],
+                    key_metrics: vec!["Revenue".to_string(), "Net Income".to_string(), "Total Assets".to_string()],
+                    completeness_score: Some(95.0), // Placeholder for now
+                },
+            },
+            recommendations: vec![],
+            screening_readiness: ScreeningReadiness {
+                valuation_analysis: freshness_status.is_current() && market_cash_flow_check.status.is_current(),
+                blocking_issues: if freshness_status.is_current() { vec![] } else { vec!["Financial data outdated based on SEC filings".to_string()] },
+            },
+            last_check: Utc::now().to_rfc3339(),
+        })
+    }
+    
+    /// Get all S&P 500 stocks with CIKs for freshness checking
+    async fn get_all_sp500_stocks_with_cik(&self, pool: &SqlitePool) -> Result<Vec<(i64, String)>> {
+        let query = r#"
+            SELECT s.id, s.cik
+            FROM stocks s
+            WHERE s.is_sp500 = 1
+                AND s.cik IS NOT NULL 
+                AND s.cik != ''
+                AND s.cik != 'Unknown'
+            ORDER BY s.symbol
+        "#;
+        
+        let rows = sqlx::query(query).fetch_all(pool).await?;
+        let mut stocks = Vec::new();
+        
+        for row in rows {
+            let stock_id: i64 = row.get("id");
+            let cik: String = row.get("cik");
+            stocks.push((stock_id, cik));
+        }
+        
+        Ok(stocks)
+    }
+    
+    /// Get latest filing date from our database as a string
+    async fn get_latest_filing_date_string(&self, pool: &SqlitePool) -> Result<Option<String>> {
+        let query = r#"
+            SELECT MAX(filed_date) as latest_filed_date
+            FROM income_statements 
+            WHERE filed_date IS NOT NULL
+                AND filed_date <= date('now')
+        "#;
+        
+        let result: Option<String> = sqlx::query_scalar(query)
+            .fetch_optional(pool)
+            .await?;
+            
+        Ok(result)
+    }
+    
+    /// Get count of financial records in database
+    async fn get_financial_records_count(&self, pool: &SqlitePool) -> Result<i64> {
+        let query = r#"
+            SELECT COUNT(*) as record_count
+            FROM (
+                SELECT stock_id FROM income_statements WHERE period_type = 'Annual'
+                UNION
+                SELECT stock_id FROM balance_sheets WHERE period_type = 'Annual'
+                UNION
+                SELECT stock_id FROM cash_flow_statements WHERE period_type = 'Annual'
+            ) financial_records
+        "#;
+        
+        let result: i64 = sqlx::query_scalar(query)
+            .fetch_one(pool)
+            .await?;
+            
+        Ok(result)
+    }
+    
+    /// Get S&P 500 financial coverage count
+    async fn get_sp500_financial_coverage(&self, pool: &SqlitePool) -> Result<i64> {
+        let query = r#"
+            SELECT COUNT(DISTINCT s.id) as stock_count
+            FROM stocks s
+            WHERE s.is_sp500 = 1
+                AND EXISTS (
+                    SELECT 1 FROM income_statements i 
+                    WHERE i.stock_id = s.id AND i.period_type = 'Annual'
+                )
+        "#;
+        
+        let result: i64 = sqlx::query_scalar(query)
+            .fetch_one(pool)
+            .await?;
+            
+        Ok(result)
+    }
+    
+    /// Generate system freshness report using Company Facts API
+    pub async fn generate_system_freshness_report(&self, pool: &SqlitePool) -> Result<SystemFreshnessReport> {
+        println!("📊 Generating Enhanced Company Facts-Based System Freshness Report...");
+        
+        // Use the new filing-based freshness check instead of days-based
+        self.check_financial_filing_freshness(pool).await
     }
 }

@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::{SqlitePool, Row};
 // HashMap removed - no longer used with SEC filing-based approach
 use ts_rs::TS;
+use std::sync::Arc;
+use tokio::sync::{Mutex, Semaphore};
 use crate::tools::sec_edgar_client::SecEdgarClient;
 
 // Legacy constants - no longer used with SEC filing-based freshness
@@ -102,42 +104,82 @@ impl DataStatusReader {
         
         // Get all S&P 500 stocks with CIKs
         let all_stocks = self.get_all_sp500_stocks_with_cik(pool).await?;
-        println!("  📊 Checking all {} S&P 500 stocks with CIKs", all_stocks.len());
+        let total_stocks_count = all_stocks.len();
+        println!("  📊 Checking all {} S&P 500 stocks with CIKs", total_stocks_count);
         
-        // Use SecEdgarClient to check which stocks need updates
-        let mut edgar_client = SecEdgarClient::new(pool.clone());
-        let mut stale_count = 0;
-        let mut current_count = 0;
-        let mut api_errors = 0;
+        // Concurrent freshness check with rate limiting (10 requests/second = 100ms between requests)
+        let stale_count = Arc::new(Mutex::new(0));
+        let current_count = Arc::new(Mutex::new(0));
+        let api_errors = Arc::new(Mutex::new(0));
         
-        for (i, (stock_id, cik)) in all_stocks.iter().enumerate() {
-            if i > 0 && i % 50 == 0 {
-                println!("  📊 Progress: checked {}/{} stocks", i, all_stocks.len());
-            }
+        // Create a semaphore to limit concurrent requests (SEC allows 10/second)
+        let semaphore = Arc::new(Semaphore::new(10)); // Allow 10 concurrent requests
+        let pool_clone = pool.clone();
+        
+        // Process stocks concurrently with controlled concurrency
+        let mut handles = Vec::new();
+        
+        for (stock_id, cik) in all_stocks {
+            let semaphore_clone = semaphore.clone();
+            let stale_count_clone = stale_count.clone();
+            let current_count_clone = current_count.clone();
+            let api_errors_clone = api_errors.clone();
+            let pool_clone = pool_clone.clone();
             
-            match edgar_client.check_if_update_needed(cik, *stock_id).await {
-                Ok(true) => {
-                    stale_count += 1;
+            let handle = tokio::spawn(async move {
+                // Acquire permit before making request
+                let _permit = semaphore_clone.acquire().await.unwrap();
+                
+                // Small delay to respect rate limits (100ms per request = 10/sec)
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                
+                let mut edgar_client = SecEdgarClient::new(pool_clone);
+                
+                match edgar_client.check_if_update_needed(&cik, stock_id).await {
+                    Ok(true) => {
+                        let mut count = stale_count_clone.lock().await;
+                        *count += 1;
+                    }
+                    Ok(false) => {
+                        let mut count = current_count_clone.lock().await;
+                        *count += 1;
+                    }
+                    Err(_e) => {
+                        let mut count = api_errors_clone.lock().await;
+                        *count += 1;
+                    }
                 }
-                Ok(false) => {
-                    current_count += 1;
-                }
-                Err(e) => {
-                    api_errors += 1;
-                    if api_errors <= 5 { // Only show first few errors to avoid spam
-                        println!("    ⚠️ API error for stock {}: {}", stock_id, e);
+            });
+            
+            handles.push(handle);
+        }
+        
+        // Wait for all tasks to complete with progress updates
+        let total_tasks = handles.len();
+        let completed = Arc::new(Mutex::new(0));
+        
+        for (_i, handle) in handles.into_iter().enumerate() {
+            tokio::select! {
+                _ = handle => {
+                    let mut completed_count = completed.lock().await;
+                    *completed_count += 1;
+                    
+                    if *completed_count > 0 && *completed_count % 50 == 0 {
+                        println!("  📊 Progress: completed {}/{} checks", *completed_count, total_tasks);
                     }
                 }
             }
-            
-            // Respect rate limits (10 requests per second)
-            tokio::time::sleep(std::time::Duration::from_millis(110)).await;
         }
+        
+        // Get final counts
+        let stale_count = *(stale_count.lock().await);
+        let current_count = *(current_count.lock().await);
+        let api_errors = *(api_errors.lock().await);
         
         println!("  📈 Freshness Check Results:");
         println!("    Stale (need updates): {} stocks", stale_count);
         println!("    Current: {} stocks", current_count);
-        println!("    API Errors: {}", api_errors);
+        println!("    API Errors: {} stocks", api_errors);
         
         // Proper status determination based on stale count
         let freshness_status = if stale_count == 0 {
@@ -161,9 +203,9 @@ impl DataStatusReader {
                 staleness_days: None,
                 records_count: stale_count,
                 message: if stale_count == 0 {
-                    format!("All {} stocks are up-to-date with latest SEC filings", all_stocks.len())
+                    format!("All {} stocks are up-to-date with latest SEC filings", total_stocks_count)
                 } else {
-                    format!("{} out of {} stocks need SEC updates - run 'refresh_data financials'", stale_count, all_stocks.len())
+                    format!("{} out of {} stocks need SEC updates - run 'cargo run --bin refresh_data financials'", stale_count, total_stocks_count)
                 },
                 refresh_priority: RefreshPriority::High,
                 data_summary: DataSummary {

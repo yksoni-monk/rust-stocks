@@ -15,8 +15,7 @@ import time
 from datetime import datetime
 
 # Configuration
-SCHWAB_TOKEN_FILE = "schwab_tokens_full.json"  # schwab-py's full token file
-MINIMAL_TOKEN_FILE = "schwab_tokens.json"  # Your minimal file
+SCHWAB_TOKEN_FILE = "src-tauri/schwab_tokens.json"  # Single token file
 ENV_FILE = ".env"
 CALLBACK_URL = "https://127.0.0.1:8182"
 
@@ -33,42 +32,36 @@ def load_config():
         print(f"❌ {ENV_FILE} not found")
     return config
 
-def save_minimal_tokens(full_token_file):
-    """Load full token from schwab-py file and save minimal structure"""
+def save_tokens(token_data):
+    """Save token data to the single token file"""
     try:
-        if not Path(full_token_file).exists():
-            print(f"❌ Full token file {full_token_file} not found")
-            return False
-        with open(full_token_file, 'r') as f:
-            data = json.load(f)
-        token = data.get('token', {})
-        required_keys = ['access_token', 'refresh_token', 'expires_in']
-        if not all(k in token for k in required_keys):
-            print(f"❌ Invalid token data: missing required keys")
-            print(f"   Token: {token}")
-            return False
-        
-        updated_data = {
-            'access_token': token['access_token'],
-            'refresh_token': token['refresh_token'],
-            'expires_at': time.time() + token['expires_in']
-        }
-        with open(MINIMAL_TOKEN_FILE, 'w') as f:
-            json.dump(updated_data, f, indent=2)
-        print(f"✅ Minimal tokens saved to {MINIMAL_TOKEN_FILE}")
+        with open(SCHWAB_TOKEN_FILE, 'w') as f:
+            json.dump(token_data, f, indent=2)
+        print(f"✅ Tokens saved to {SCHWAB_TOKEN_FILE}")
         return True
     except Exception as e:
-        print(f"❌ Error saving minimal tokens: {e}")
+        print(f"❌ Error saving tokens: {e}")
         return False
 
 def check_token_status(token_file):
-    """Check token status from minimal file"""
+    """Check token status from token file"""
     if not Path(token_file).exists():
         print(f"❌ Token file {token_file} not found")
         return False
     with open(token_file, 'r') as f:
         data = json.load(f)
-    expires_at = data['expires_at']
+    
+    # Handle both old and new token formats
+    if 'expires_at' in data:
+        # Old format: expires_at at root level
+        expires_at = data['expires_at']
+    elif 'token' in data and 'expires_at' in data['token']:
+        # New format: expires_at in token object
+        expires_at = data['token']['expires_at']
+    else:
+        print("❌ No expires_at found in token file")
+        return False
+    
     now = time.time()
     print("📊 Token Status:")
     print(f"   Expires:  {datetime.fromtimestamp(expires_at)}")
@@ -101,14 +94,11 @@ def main():
         client = client_from_manual_flow(
             api_key, app_secret, CALLBACK_URL, token_path=SCHWAB_TOKEN_FILE
         )
-        if save_minimal_tokens(SCHWAB_TOKEN_FILE):
-            print("✅ Initial authentication complete!")
-        else:
-            print("❌ Failed to save tokens")
+        print("✅ Initial authentication complete!")
     elif len(sys.argv) > 1 and sys.argv[1] == '--refresh':
         # Load and refresh if needed
         print("🔍 Checking token status...")
-        if check_token_status(MINIMAL_TOKEN_FILE):
+        if check_token_status(SCHWAB_TOKEN_FILE):
             print("✅ Access token is valid, no refresh needed.")
         else:
             print("\n🔄 Loading client (auto-refreshes if refresh token valid)...")
@@ -118,8 +108,6 @@ def main():
                 response = client.get_account_numbers()
                 if response.status_code == 200:
                     print("✅ Refresh successful! API call works.")
-                    # Save updated minimal tokens
-                    save_minimal_tokens(SCHWAB_TOKEN_FILE)
                 else:
                     print(f"❌ Refresh failed: {response.status_code}, {response.text}")
                     print("ℹ️ Run with --auth to re-authenticate.")
@@ -127,7 +115,7 @@ def main():
                 print(f"❌ Error loading client: {e}")
                 print("ℹ️ Run with --auth to re-authenticate.")
     else:
-        print("Usage: python schwab_auth.py [--auth | --refresh]")
+        print("Usage: python refresh_token.py [--auth | --refresh]")
         sys.exit(1)
 
 if __name__ == "__main__":

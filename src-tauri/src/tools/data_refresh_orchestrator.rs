@@ -490,18 +490,18 @@ impl DataRefreshManager {
         // Check prerequisites
         println!("🔍 Checking prerequisites: market data + financial data");
 
-        // Verify market data is current
+        // Verify market data is current (within 30 days for tolerance)
         let market_check = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM daily_prices WHERE date >= date('now', '-7 days')"
+            "SELECT COUNT(*) FROM daily_prices WHERE date >= date('now', '-30 days')"
         ).fetch_one(&self.pool).await?;
 
         if market_check == 0 {
             return Err(anyhow!("Market data required but not current. Run 'market' refresh first."));
         }
 
-        // Verify financial data exists
+        // Verify financial data exists (using Annual data)
         let financial_check = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM income_statements WHERE period_type = 'TTM'"
+            "SELECT COUNT(*) FROM income_statements WHERE period_type = 'Annual'"
         ).fetch_one(&self.pool).await?;
 
         if financial_check == 0 {

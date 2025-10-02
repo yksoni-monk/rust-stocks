@@ -30,57 +30,76 @@ A high-performance desktop application for stock analysis using Tauri (Rust back
 └──────────────────────────────────────────────────────────────┘
 ```
 
-## Current Data Architecture - EDGAR API Integration
+## Current Data Architecture - Pure SQL View Architecture
 
-The system uses SEC EDGAR API for comprehensive financial data with offline-first architecture:
+The system uses SEC EDGAR API for comprehensive financial data with a pure SQL view architecture that eliminates calculated tables and stale data:
 
-### EDGAR API Data System
+### Pure SQL View Architecture
 
-#### 1. Data Sources
+#### 1. Design Philosophy
+- **Single Source of Truth**: EDGAR financial data + daily_prices only
+- **On-Demand Calculations**: All metrics calculated in SQL views when queried
+- **No Stale Data**: Eliminates calculated tables that can become outdated
+- **Simplified Architecture**: Pure SQL views for all screening algorithms
+
+#### 2. Data Sources
 - **SEC EDGAR Company Facts API**: Real-time financial statements (Income, Balance Sheet, Cash Flow)
+- **Schwab API**: Daily price data and market metrics
 - **S&P 500 Coverage**: 503 stocks with comprehensive financial data
-- **Data Types**: Annual and Quarterly financial statements
-- **Update Frequency**: Real-time API calls with local caching
+- **Data Types**: Annual financial statements for screening algorithms
+- **Update Frequency**: Quarterly for financials, daily for prices
 
-#### 2. Data Processing
-**Phase 1**: S&P 500 Symbol Management
-- Fetch S&P 500 symbols from GitHub repository
-- Maintain local symbol database with sector/industry classification
-- Update symbols quarterly
-
-**Phase 2**: EDGAR Financial Data Extraction
-- Real-time API calls to SEC EDGAR Company Facts API
+#### 3. Data Processing Architecture
+**Phase 1**: EDGAR Financial Data Integration
+- Real-time API calls to SEC EDGAR Company Facts API via `SecEdgarClient`
 - Extract Income Statements, Balance Sheets, Cash Flow Statements
-- Store both Annual and Quarterly data for multi-year analysis
+- Store Annual data for screening algorithms
+- Integrated into `refresh_data --financials` command
 
-**Phase 3**: Financial Ratio Calculations
-- Calculate Piotroski F-Score (9 criteria across profitability, leverage, efficiency)
-- Calculate O'Shaughnessy Value Composite (6 metrics: P/B, P/S, P/CF, P/E, EV/EBITDA, Shareholder Yield)
-- Multi-year comparisons for trend analysis
+**Phase 2**: Pure SQL View Calculations
+- **Piotroski F-Score**: 9 criteria calculated directly from EDGAR data
+- **O'Shaughnessy Value**: 6 metrics calculated from EDGAR + daily_prices
+- **No Calculated Tables**: All metrics computed on-demand in SQL views
+- **Real-time Accuracy**: Always uses latest available data
 
-**Phase 4**: Data Quality Assessment
-- Calculate data completeness scores
+**Phase 3**: Data Quality Assessment
+- Calculate data completeness scores in SQL views
 - Validate financial statement consistency
 - Generate data freshness reports
 
-**Phase 5**: Performance Optimization
+**Phase 4**: Performance Optimization
 - Create database indexes for fast screening queries
-- Optimize for real-time analysis and visualization
+- Optimize SQL views for real-time analysis
+- Eliminate maintenance overhead of calculated tables
 
-#### 3. Current Data Coverage
+#### 4. Current Data Coverage
 **Financial Data:**
-- Income Statements: Revenue, Net Income, Operating Income, Gross Profit
-- Balance Sheets: Total Assets, Total Equity, Current Assets, Current Liabilities
-- Cash Flow Statements: Operating Cash Flow, Investing Cash Flow, Financing Cash Flow
+- Income Statements: Revenue, Net Income, Operating Income, Gross Profit, Shares Outstanding
+- Balance Sheets: Total Assets, Total Equity, Current Assets, Current Liabilities, Total Debt, Cash
+- Cash Flow Statements: Operating Cash Flow, Dividends Paid, Share Repurchases, Depreciation
 - Multi-year coverage: 5+ years of historical data for trend analysis
 
 **Screening Algorithms:**
-- Piotroski F-Score: 9-criteria financial strength scoring
-- O'Shaughnessy Value: 6-metric value composite screening
-- Data completeness scoring for quality assessment
-- Real-time screening with dynamic criteria
+- **Piotroski F-Score**: 9-criteria financial strength scoring (pure SQL view)
+- **O'Shaughnessy Value**: 6-metric value composite screening (pure SQL view)
+- **Data completeness scoring**: Calculated in SQL views for quality assessment
+- **Real-time screening**: Dynamic criteria with on-demand calculations
 
-### Current Database Schema (EDGAR-Based)
+#### 5. O'Shaughnessy Value Metrics (Pure SQL View)
+**6 Core Metrics Calculated On-Demand:**
+1. **P/E Ratio**: `price / (net_income / shares_diluted)` from `daily_prices` + `income_statements`
+2. **P/B Ratio**: `price / (total_equity / shares_outstanding)` from `daily_prices` + `balance_sheets`
+3. **P/S Ratio**: `market_cap / revenue` from `daily_prices` + `income_statements`
+4. **EV/S Ratio**: `enterprise_value / revenue` from `daily_prices` + `balance_sheets` + `income_statements`
+5. **EV/EBITDA Ratio**: `enterprise_value / ebitda` from `daily_prices` + `balance_sheets` + `income_statements` + `cash_flow_statements`
+6. **Shareholder Yield**: `(dividends_paid + share_repurchases) / market_cap` from `daily_prices` + `cash_flow_statements`
+
+**Data Requirements:**
+- All metrics calculated from raw EDGAR data + daily_prices
+- No dependency on calculated tables or stale data
+- Real-time accuracy with latest available data
+
+### Current Database Schema (Pure SQL View Architecture)
 
 ```sql
 -- Stocks table with S&P 500 integration
@@ -100,62 +119,236 @@ CREATE TABLE stocks (
     is_sp500 INTEGER DEFAULT 0  -- S&P 500 flag
 );
 
--- Financial statements from EDGAR API
-CREATE TABLE financial_statements (
+-- Daily price data from Schwab API
+CREATE TABLE daily_prices (
     id INTEGER PRIMARY KEY,
     stock_id INTEGER NOT NULL,
-    statement_type TEXT NOT NULL, -- 'income', 'balance', 'cash_flow'
-    period_type TEXT NOT NULL,    -- 'Annual', 'Quarterly'
-    fiscal_year INTEGER,
-    fiscal_period TEXT,           -- 'Q1', 'Q2', 'Q3', 'Q4' for quarterly
-    report_date DATE NOT NULL,
-    
-    -- Financial metrics (JSON blob for flexibility)
-    metrics TEXT NOT NULL,        -- JSON containing all financial data
-    
-    -- EDGAR metadata
-    edgar_accession TEXT,
-    edgar_form TEXT,
-    edgar_filed_date DATE,
-    
+    date DATE NOT NULL,
+    price REAL NOT NULL,
+    volume INTEGER,
+    market_cap REAL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (stock_id) REFERENCES stocks(id),
-    UNIQUE(stock_id, statement_type, period_type, fiscal_year, fiscal_period)
+    UNIQUE(stock_id, date)
 );
 
--- Screening results and calculated metrics
-CREATE TABLE screening_results (
+-- Income statements from EDGAR API
+CREATE TABLE income_statements (
     id INTEGER PRIMARY KEY,
     stock_id INTEGER NOT NULL,
-    screening_type TEXT NOT NULL, -- 'piotroski', 'oshaughnessy'
+    period_type TEXT NOT NULL,    -- 'Annual', 'Quarterly'
+    report_date DATE NOT NULL,
+    fiscal_year INTEGER,
     
-    -- Piotroski F-Score results
-    f_score_complete INTEGER,
-    profitability_score INTEGER,
-    leverage_score INTEGER,
-    efficiency_score INTEGER,
+    -- Core income metrics
+    revenue REAL,
+    gross_profit REAL,
+    operating_income REAL,
+    net_income REAL,
+    shares_basic REAL,
+    shares_diluted REAL,
     
-    -- O'Shaughnessy Value results
-    composite_score REAL,
-    composite_percentile REAL,
-    overall_rank INTEGER,
-    
-    -- Data quality
-    data_completeness_score INTEGER,
-    passes_screening INTEGER, -- 0 or 1
-    
-    -- Metadata
-    calculated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    -- EDGAR metadata
+    data_source TEXT DEFAULT 'sec_edgar_json',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (stock_id) REFERENCES stocks(id),
-    UNIQUE(stock_id, screening_type)
+    UNIQUE(stock_id, period_type, report_date)
+);
+
+-- Balance sheets from EDGAR API
+CREATE TABLE balance_sheets (
+    id INTEGER PRIMARY KEY,
+    stock_id INTEGER NOT NULL,
+    period_type TEXT NOT NULL,    -- 'Annual', 'Quarterly'
+    report_date DATE NOT NULL,
+    fiscal_year INTEGER,
+    
+    -- Enterprise value components
+    cash_and_equivalents REAL,
+    short_term_debt REAL,
+    long_term_debt REAL,
+    total_debt REAL,
+    
+    -- Additional metrics
+    total_assets REAL,
+    total_liabilities REAL,
+    total_equity REAL,
+    current_assets REAL,
+    current_liabilities REAL,
+    shares_outstanding REAL,
+    
+    -- EDGAR metadata
+    data_source TEXT DEFAULT 'sec_edgar_json',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (stock_id) REFERENCES stocks(id),
+    UNIQUE(stock_id, period_type, report_date)
+);
+
+-- Cash flow statements from EDGAR API
+CREATE TABLE cash_flow_statements (
+    id INTEGER PRIMARY KEY,
+    stock_id INTEGER NOT NULL,
+    period_type TEXT NOT NULL,    -- 'Annual', 'Quarterly'
+    report_date DATE NOT NULL,
+    fiscal_year INTEGER,
+    
+    -- Cash flow metrics
+    operating_cash_flow REAL,
+    investing_cash_flow REAL,
+    financing_cash_flow REAL,
+    dividends_paid REAL,
+    share_repurchases REAL,
+    depreciation_expense REAL,
+    amortization_expense REAL,
+    
+    -- EDGAR metadata
+    data_source TEXT DEFAULT 'sec_edgar_json',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (stock_id) REFERENCES stocks(id),
+    UNIQUE(stock_id, period_type, report_date)
 );
 
 -- Performance indexes for fast analysis
 CREATE INDEX idx_stocks_sp500 ON stocks(is_sp500);
-CREATE INDEX idx_financial_statements_stock_type ON financial_statements(stock_id, statement_type);
-CREATE INDEX idx_financial_statements_period ON financial_statements(period_type, fiscal_year, fiscal_period);
-CREATE INDEX idx_screening_results_type ON screening_results(screening_type);
-CREATE INDEX idx_screening_results_score ON screening_results(f_score_complete, composite_score);
+CREATE INDEX idx_daily_prices_stock_date ON daily_prices(stock_id, date);
+CREATE INDEX idx_income_statements_stock_period ON income_statements(stock_id, period_type, report_date);
+CREATE INDEX idx_balance_sheets_stock_period ON balance_sheets(stock_id, period_type, report_date);
+CREATE INDEX idx_cash_flow_statements_stock_period ON cash_flow_statements(stock_id, period_type, report_date);
+```
+
+### Pure SQL View Implementation
+
+#### O'Shaughnessy Value Composite View
+```sql
+-- Pure SQL view calculating all 6 metrics on-demand
+CREATE VIEW oshaughnessy_value_composite AS
+WITH latest_data AS (
+  SELECT 
+    s.id as stock_id,
+    s.symbol,
+    s.sector,
+    s.industry,
+    
+    -- Latest price data
+    dp.price as current_price,
+    dp.market_cap,
+    
+    -- Latest income statement data
+    i.net_income,
+    i.revenue,
+    i.shares_diluted,
+    
+    -- Latest balance sheet data
+    b.total_equity,
+    b.shares_outstanding,
+    b.total_debt,
+    b.cash_and_equivalents,
+    
+    -- Latest cash flow data
+    cf.dividends_paid,
+    cf.share_repurchases,
+    cf.depreciation_expense,
+    cf.amortization_expense,
+    
+    -- Calculate enterprise value
+    (dp.market_cap + COALESCE(b.total_debt, 0) - COALESCE(b.cash_and_equivalents, 0)) as enterprise_value,
+    
+    -- Calculate EBITDA
+    (COALESCE(i.operating_income, 0) + COALESCE(cf.depreciation_expense, 0) + COALESCE(cf.amortization_expense, 0)) as ebitda,
+    
+    ROW_NUMBER() OVER (PARTITION BY s.id ORDER BY dp.date DESC) as price_rn,
+    ROW_NUMBER() OVER (PARTITION BY s.id ORDER BY i.report_date DESC) as income_rn,
+    ROW_NUMBER() OVER (PARTITION BY s.id ORDER BY b.report_date DESC) as balance_rn,
+    ROW_NUMBER() OVER (PARTITION BY s.id ORDER BY cf.report_date DESC) as cashflow_rn
+    
+  FROM stocks s
+  LEFT JOIN daily_prices dp ON s.id = dp.stock_id
+  LEFT JOIN income_statements i ON s.id = i.stock_id AND i.period_type = 'Annual'
+  LEFT JOIN balance_sheets b ON s.id = b.stock_id AND b.period_type = 'Annual'
+  LEFT JOIN cash_flow_statements cf ON s.id = cf.stock_id AND cf.period_type = 'Annual'
+  WHERE s.is_sp500 = 1
+)
+SELECT 
+  stock_id,
+  symbol,
+  sector,
+  industry,
+  current_price,
+  market_cap,
+  enterprise_value,
+  
+  -- Calculate all 6 O'Shaughnessy metrics
+  CASE WHEN net_income > 0 AND shares_diluted > 0 
+       THEN current_price / (net_income / shares_diluted) 
+       ELSE NULL END as pe_ratio,
+  
+  CASE WHEN total_equity > 0 AND shares_outstanding > 0 
+       THEN current_price / (total_equity / shares_outstanding) 
+       ELSE NULL END as pb_ratio,
+  
+  CASE WHEN revenue > 0 
+       THEN market_cap / revenue 
+       ELSE NULL END as ps_ratio,
+  
+  CASE WHEN revenue > 0 
+       THEN enterprise_value / revenue 
+       ELSE NULL END as evs_ratio,
+  
+  CASE WHEN ebitda > 0 
+       THEN enterprise_value / ebitda 
+       ELSE NULL END as ev_ebitda_ratio,
+  
+  CASE WHEN market_cap > 0 
+       THEN (COALESCE(dividends_paid, 0) + COALESCE(share_repurchases, 0)) / market_cap 
+       ELSE NULL END as shareholder_yield,
+  
+  -- Data completeness score
+  ((CASE WHEN net_income > 0 AND shares_diluted > 0 THEN 1 ELSE 0 END) +
+   (CASE WHEN total_equity > 0 AND shares_outstanding > 0 THEN 1 ELSE 0 END) +
+   (CASE WHEN revenue > 0 THEN 1 ELSE 0 END) +
+   (CASE WHEN revenue > 0 THEN 1 ELSE 0 END) +
+   (CASE WHEN ebitda > 0 THEN 1 ELSE 0 END) +
+   (CASE WHEN market_cap > 0 THEN 1 ELSE 0 END)) * 16.67 as data_completeness_score
+
+FROM latest_data
+WHERE price_rn = 1 AND income_rn = 1 AND balance_rn = 1 AND cashflow_rn = 1
+  AND market_cap > 200000000;  -- $200M minimum
+```
+
+#### O'Shaughnessy Ranking View
+```sql
+-- Ranking view with composite scoring
+CREATE VIEW oshaughnessy_ranking AS
+WITH ranked AS (
+  SELECT *,
+    RANK() OVER (ORDER BY pe_ratio ASC) as pe_rank,
+    RANK() OVER (ORDER BY pb_ratio ASC) as pb_rank,
+    RANK() OVER (ORDER BY ps_ratio ASC) as ps_rank,
+    RANK() OVER (ORDER BY evs_ratio ASC) as evs_rank,
+    RANK() OVER (ORDER BY ev_ebitda_ratio ASC) as ebitda_rank,
+    RANK() OVER (ORDER BY shareholder_yield DESC) as yield_rank,
+    COUNT(*) OVER () as total_stocks
+  FROM oshaughnessy_value_composite
+  WHERE pe_ratio IS NOT NULL AND pb_ratio IS NOT NULL 
+    AND ps_ratio IS NOT NULL AND evs_ratio IS NOT NULL
+    AND ev_ebitda_ratio IS NOT NULL AND shareholder_yield IS NOT NULL
+)
+SELECT *,
+  -- Composite score (average of all ranks)
+  CAST((pe_rank + pb_rank + ps_rank + evs_rank + ebitda_rank + yield_rank) / 6.0 AS REAL) as composite_score,
+  
+  -- Percentile ranking
+  CAST(ROUND(((pe_rank + pb_rank + ps_rank + evs_rank + ebitda_rank + yield_rank) / 6.0 / total_stocks) * 100, 1) AS REAL) as composite_percentile,
+  
+  -- Overall ranking
+  RANK() OVER (ORDER BY (pe_rank + pb_rank + ps_rank + evs_rank + ebitda_rank + yield_rank) / 6.0 ASC) as overall_rank,
+  
+  -- Pass screening if in top 10 stocks
+  CASE WHEN 
+    RANK() OVER (ORDER BY (pe_rank + pb_rank + ps_rank + evs_rank + ebitda_rank + yield_rank) / 6.0 ASC) <= 10
+    THEN 1 ELSE 0 END as passes_screening
+FROM ranked
+ORDER BY composite_score ASC;
 ```
 
 ### Future Schema Extensions (Schwab API)
@@ -615,51 +808,74 @@ pub async fn add_performance_indexes(pool: &SqlitePool) -> Result<()>
 
 ### ✅ Completed Phases
 
-**Phase 1: SimFin Data Infrastructure (COMPLETE)**
-- ✅ Offline-first architecture with SimFin CSV import system
-- ✅ Comprehensive database schema with calculated fundamentals
-- ✅ 6-phase import process: Stock extraction → Price import → Financials → EPS calculation → P/E calculation → Performance indexing
-- ✅ 5,876+ stocks with 6.2M price records and 52k+ financial records
+**Phase 1: EDGAR API Integration (COMPLETE)**
+- ✅ SEC EDGAR Company Facts API integration via `SecEdgarClient`
+- ✅ Comprehensive financial data extraction (Income, Balance Sheet, Cash Flow)
+- ✅ 994 income statements, 496 balance sheets, 496 cash flow statements
+- ✅ S&P 500 coverage with latest financial data (2024-12-31)
 
-**Phase 2: Modern Desktop Frontend (COMPLETE)**  
-- ✅ Expandable panels UI system (single-page, contextual expansion)
-- ✅ User-driven analysis (no artificial "basic vs enhanced" tiers)
-- ✅ S&P 500 filtering and pagination system
-- ✅ Real-time search and visual data indicators
-- ✅ Professional animations and responsive design
+**Phase 2: Pure SQL View Architecture (COMPLETE)**
+- ✅ Piotroski F-Score: 9-criteria financial strength scoring (pure SQL view)
+- ✅ O'Shaughnessy Value: 6-metric value composite screening (pure SQL view)
+- ✅ Real-time calculations from raw EDGAR data + daily_prices
+- ✅ No dependency on calculated tables or stale data
 
-**Phase 3: Backend Integration (COMPLETE)**
-- ✅ Tauri commands for paginated stock loading
-- ✅ Analysis commands for price history and P/E data
-- ✅ Database statistics and stock summary commands
-- ✅ Export functionality with multiple formats
+**Phase 3: Modern Desktop Frontend (COMPLETE)**  
+- ✅ SolidJS frontend with signal-based reactivity
+- ✅ Piotroski F-Score and O'Shaughnessy Value screening interfaces
+- ✅ Real-time results with dynamic criteria
+- ✅ Data quality indicators and freshness status
+
+**Phase 4: Data Refresh System (COMPLETE)**
+- ✅ Schwab API integration for daily price data
+- ✅ Event-driven refresh system with real-time UI updates
+- ✅ Data freshness monitoring and status reporting
 
 ### 🔄 Active Development
 
-**Current Priority: S&P 500 Offline Support**
-- 🔄 Fix database migration system (sector column error)
-- 🔄 Create `sp500_symbols` table migration
-- 🔄 Test offline S&P 500 functionality with ~500 symbols
+**Current Priority: Pure SQL View Implementation**
+- 🔄 Create pure O'Shaughnessy SQL view without `daily_valuation_ratios` dependency
+- 🔄 Integrate `SecEdgarClient` into `refresh_data --financials` command
+- 🔄 Remove ratio calculation code and `daily_valuation_ratios` table
+- 🔄 Update data freshness checker for pure SQL view architecture
 
 ### 🚀 Future Enhancements
 
-**Phase 4: Advanced Analysis Tools**
+**Phase 5: Advanced Analysis Tools**
 1. **Technical Indicators**: Moving averages, RSI, MACD, Bollinger Bands
 2. **Comparative Analysis**: Multi-stock comparison in expandable panels
 3. **Sector Analysis**: Industry-wide trend analysis
 4. **Portfolio Tracking**: Track and analyze custom stock portfolios
 
-**Phase 5: Real-Time Features (Future Schwab API)**
+**Phase 6: Real-Time Features (Schwab API)**
 1. **Real-Time Quotes**: Live price updates during market hours
 2. **Options Data**: Options chain visualization and analysis
 3. **Market News**: Real-time news feed integration
 4. **Alert System**: Price and fundamental metric alerts
 
-**Phase 6: Advanced Features**
+**Phase 7: Advanced Features**
 1. **Custom Screening**: Build complex stock screens
 2. **PDF Reports**: Export comprehensive analysis reports
 3. **Data Sync**: Cloud backup and multi-device sync
 4. **Advanced Charts**: Candlestick charts with overlays
+
+## Pure SQL View Architecture Benefits
+
+### Key Advantages
+1. **Single Source of Truth**: EDGAR financial data + daily_prices only
+2. **Real-time Accuracy**: All calculations use latest available data
+3. **No Stale Data**: Eliminates calculated tables that can become outdated
+4. **Simplified Maintenance**: No need to refresh calculated ratios
+5. **Better Performance**: On-demand calculations optimized by SQL engine
+6. **Easier Debugging**: All logic visible in SQL views
+7. **Consistent Results**: Same calculation logic for all queries
+
+### Implementation Strategy
+1. **Phase 1**: Create pure O'Shaughnessy SQL view
+2. **Phase 2**: Integrate EDGAR into `refresh_data --financials`
+3. **Phase 3**: Remove ratio calculation code and `daily_valuation_ratios` table
+4. **Phase 4**: Update data freshness checker for pure SQL view architecture
+5. **Phase 5**: Test and validate with existing data
 
 ## Data Import Usage
 

@@ -291,7 +291,7 @@ async fn execute_data_refresh(pool: &sqlx::SqlitePool, _cli: &Cli, mode: Refresh
     println!();
     if result.success {
         println!("✅ All screening features should now be ready with current data!");
-        println!("💡 You can now run GARP or Graham screening with confidence.");
+        println!("💡 You can now run Piotroski F-Score or O'Shaughnessy Value screening with confidence.");
     } else {
         println!("⚠️  Some refresh operations failed. Check the details above.");
         println!("💡 You may want to retry with --force to refresh specific sources.");

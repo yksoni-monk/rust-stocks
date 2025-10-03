@@ -5,16 +5,13 @@
 use anyhow::Result;
 use chrono::NaiveDate;
 use governor::{Quota, RateLimiter};
-use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
 use reqwest::Client;
 use rust_stocks_tauri_lib::database::helpers::get_database_connection;
 use serde_json::Value;
-// use std::collections::HashMap; // Not used yet
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Semaphore, Mutex};
-use tower::ServiceBuilder;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -30,10 +27,10 @@ async fn main() -> Result<()> {
     println!("✅ Found {} S&P 500 stocks with CIKs", stocks_with_ciks.len());
 
     // Create rate-limited HTTP client
-    let client = create_rate_limited_client().await?;
+    let (client, limiter) = create_rate_limited_client().await?;
     
     // Process CIKs concurrently with rate limiting
-    let results = process_ciks_concurrently(&pool, &client, &stocks_with_ciks).await?;
+    let results = process_ciks_concurrently(&pool, &client, &limiter, &stocks_with_ciks).await?;
     
     // Report results
     println!("\n📊 Population Results:");
@@ -55,21 +52,19 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn create_rate_limited_client() -> Result<Client> {
+async fn create_rate_limited_client() -> Result<(Client, Arc<RateLimiter<governor::state::direct::NotKeyed, governor::state::InMemoryState, governor::clock::DefaultClock>>)> {
     // Define rate limit: 10 requests per second (SEC limit)
     let quota = Quota::with_period(Duration::from_millis(100))
         .unwrap()
         .allow_burst(NonZeroU32::new(10).unwrap());
-    let limiter = RateLimiter::direct(quota);
+    let limiter = Arc::new(RateLimiter::direct(quota));
 
-    // Create a simple rate-limited client using tokio::time::sleep
-    // For now, we'll use a simpler approach without the complex middleware
     let client = Client::builder()
         .user_agent("rust-stocks-edgar-client/1.0 (contact@example.com)")
         .timeout(Duration::from_secs(30))
         .build()?;
 
-    Ok(client)
+    Ok((client, limiter))
 }
 
 async fn get_sp500_stocks_with_ciks(pool: &sqlx::SqlitePool) -> Result<Vec<(i64, String, String)>> {
@@ -96,6 +91,7 @@ struct ProcessingResults {
 async fn process_ciks_concurrently(
     pool: &sqlx::SqlitePool,
     client: &Client,
+    limiter: &Arc<RateLimiter<governor::state::direct::NotKeyed, governor::state::InMemoryState, governor::clock::DefaultClock>>,
     stocks: &[(i64, String, String)],
 ) -> Result<ProcessingResults> {
     let semaphore = Arc::new(Semaphore::new(10)); // 10 concurrent workers
@@ -112,6 +108,7 @@ async fn process_ciks_concurrently(
         let client = client.clone();
         let pool = pool.clone();
         let results = results.clone();
+        let limiter = limiter.clone();
         let cik = cik.clone();
         let symbol = symbol.clone();
         let stock_id = *stock_id;
@@ -119,7 +116,7 @@ async fn process_ciks_concurrently(
         let handle = tokio::spawn(async move {
             let _permit = permit; // Hold the permit for the duration of the task
             
-            match process_single_cik(&pool, &client, stock_id, &cik, &symbol).await {
+            match process_single_cik(&pool, &client, &limiter, stock_id, &cik, &symbol).await {
                 Ok(_) => {
                     let mut res = results.lock().await;
                     res.successful += 1;
@@ -149,15 +146,16 @@ async fn process_ciks_concurrently(
 async fn process_single_cik(
     pool: &sqlx::SqlitePool,
     client: &Client,
+    limiter: &Arc<RateLimiter<governor::state::direct::NotKeyed, governor::state::InMemoryState, governor::clock::DefaultClock>>,
     stock_id: i64,
     cik: &str,
     symbol: &str,
 ) -> Result<()> {
-    // Download Company Facts JSON with rate limiting
+    // Download Company Facts JSON with proper rate limiting using governor
     let url = format!("https://data.sec.gov/api/xbrl/companyfacts/CIK{}.json", cik);
     
-    // Rate limiting: 10 requests per second = 100ms between requests
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    // Use governor rate limiter - this will automatically handle the timing
+    limiter.until_ready().await;
     
     let response = client.get(&url).send().await?;
     

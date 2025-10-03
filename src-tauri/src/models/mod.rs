@@ -7,26 +7,11 @@ pub struct Stock {
     pub id: Option<i64>,
     pub symbol: String,
     pub company_name: String,
+    pub cik: Option<String>,
     pub sector: Option<String>,
-    pub industry: Option<String>,
-    pub market_cap: Option<f64>,
-    pub status: StockStatus,
-    pub first_trading_date: Option<NaiveDate>,
     pub last_updated: Option<DateTime<Utc>>,
-}
-
-/// Stock status enumeration
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum StockStatus {
-    Active,
-    Delisted,
-    Suspended,
-}
-
-impl Default for StockStatus {
-    fn default() -> Self {
-        StockStatus::Active
-    }
+    pub created_at: Option<DateTime<Utc>>,
+    pub is_sp500: bool,
 }
 
 /// Daily price and fundamental data

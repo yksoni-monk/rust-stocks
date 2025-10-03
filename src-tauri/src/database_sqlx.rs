@@ -2,7 +2,7 @@ use anyhow::Result;
 use chrono::{NaiveDate, DateTime, Utc};
 use sqlx::{sqlite::{SqlitePoolOptions, SqliteConnectOptions}, SqlitePool, Row};
 use std::collections::HashMap;
-use crate::models::{Stock, DailyPrice, StockStatus, StockDataStats};
+use crate::models::{Stock, DailyPrice, StockDataStats};
 
 /// SQLX-based database manager for the Rust Stocks TUI
 #[derive(Clone)]
@@ -55,13 +55,11 @@ impl DatabaseManagerSqlx {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 symbol TEXT UNIQUE NOT NULL,
                 company_name TEXT NOT NULL,
+                cik TEXT UNIQUE,
                 sector TEXT,
-                industry TEXT,
-                market_cap REAL,
-                status TEXT NOT NULL DEFAULT 'active',
-                first_trading_date DATE,
-                last_updated DATETIME NOT NULL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                last_updated DATETIME,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                is_sp500 BOOLEAN DEFAULT 0
             )
             "#
         ).execute(&pool).await?;
@@ -102,37 +100,27 @@ impl DatabaseManagerSqlx {
 
     /// Upsert a stock (insert or update) - using raw SQL for flexibility
     pub async fn upsert_stock(&self, stock: &Stock) -> Result<i64> {
-        let status_str = match stock.status {
-            StockStatus::Active => "active",
-            StockStatus::Delisted => "delisted",
-            StockStatus::Suspended => "suspended",
-        };
-
         let last_updated = stock.last_updated.map(|dt| dt.naive_utc()).unwrap_or_else(|| Utc::now().naive_utc());
 
         let result = sqlx::query(
             r#"
-            INSERT INTO stocks (symbol, company_name, sector, industry, market_cap, status, first_trading_date, last_updated)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO stocks (symbol, company_name, cik, sector, last_updated, is_sp500)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(symbol) DO UPDATE SET
                 company_name = excluded.company_name,
+                cik = excluded.cik,
                 sector = excluded.sector,
-                industry = excluded.industry,
-                market_cap = excluded.market_cap,
-                status = excluded.status,
-                first_trading_date = excluded.first_trading_date,
-                last_updated = excluded.last_updated
+                last_updated = excluded.last_updated,
+                is_sp500 = excluded.is_sp500
             RETURNING id
             "#
         )
         .bind(&stock.symbol)
         .bind(&stock.company_name)
+        .bind(&stock.cik)
         .bind(&stock.sector)
-        .bind(&stock.industry)
-        .bind(stock.market_cap)
-        .bind(status_str)
-        .bind(stock.first_trading_date)
         .bind(last_updated)
+        .bind(stock.is_sp500)
         .fetch_one(&self.pool)
         .await?;
 
@@ -143,7 +131,7 @@ impl DatabaseManagerSqlx {
     pub async fn get_stock_by_symbol(&self, symbol: &str) -> Result<Option<Stock>> {
         let row = sqlx::query(
             r#"
-            SELECT id, symbol, company_name, sector, industry, market_cap, status, first_trading_date, last_updated, created_at
+            SELECT id, symbol, company_name, cik, sector, last_updated, created_at, is_sp500
             FROM stocks
             WHERE symbol = ?
             "#
@@ -153,34 +141,25 @@ impl DatabaseManagerSqlx {
         .await?;
 
         Ok(row.map(|r| {
-            let status = match r.get::<Option<String>, _>("status").as_deref() {
-                Some("active") => StockStatus::Active,
-                Some("delisted") => StockStatus::Delisted,
-                Some("suspended") => StockStatus::Suspended,
-                _ => StockStatus::Active,
-            };
-
             Stock {
                 id: Some(r.get::<i64, _>("id")),
                 symbol: r.get::<String, _>("symbol"),
                 company_name: r.get::<String, _>("company_name"),
+                cik: r.get::<Option<String>, _>("cik"),
                 sector: r.get::<Option<String>, _>("sector"),
-                industry: r.get::<Option<String>, _>("industry"),
-                market_cap: r.get::<Option<f64>, _>("market_cap"),
-                status,
-                first_trading_date: r.get::<Option<NaiveDate>, _>("first_trading_date"),
                 last_updated: r.get::<Option<DateTime<Utc>>, _>("last_updated"),
+                created_at: r.get::<Option<DateTime<Utc>>, _>("created_at"),
+                is_sp500: r.get::<bool, _>("is_sp500"),
             }
         }))
     }
 
     /// Get all active stocks - using raw SQL
     pub async fn get_active_stocks(&self) -> Result<Vec<Stock>> {
-        let rows = sqlx::query(
+        let rows =         sqlx::query(
             r#"
-            SELECT id, symbol, company_name, sector, industry, market_cap, status, first_trading_date, last_updated, created_at
+            SELECT id, symbol, company_name, cik, sector, last_updated, created_at, is_sp500
             FROM stocks
-            WHERE status = 'active'
             ORDER BY symbol
             "#
         )
@@ -188,23 +167,15 @@ impl DatabaseManagerSqlx {
         .await?;
 
         Ok(rows.into_iter().map(|r| {
-            let status = match r.get::<Option<String>, _>("status").as_deref() {
-                Some("active") => StockStatus::Active,
-                Some("delisted") => StockStatus::Delisted,
-                Some("suspended") => StockStatus::Suspended,
-                _ => StockStatus::Active,
-            };
-
             Stock {
                 id: Some(r.get::<i64, _>("id")),
                 symbol: r.get::<String, _>("symbol"),
                 company_name: r.get::<String, _>("company_name"),
+                cik: r.get::<Option<String>, _>("cik"),
                 sector: r.get::<Option<String>, _>("sector"),
-                industry: r.get::<Option<String>, _>("industry"),
-                market_cap: r.get::<Option<f64>, _>("market_cap"),
-                status,
-                first_trading_date: r.get::<Option<NaiveDate>, _>("first_trading_date"),
                 last_updated: r.get::<Option<DateTime<Utc>>, _>("last_updated"),
+                created_at: r.get::<Option<DateTime<Utc>>, _>("created_at"),
+                is_sp500: r.get::<bool, _>("is_sp500"),
             }
         }).collect())
     }
@@ -386,7 +357,7 @@ impl DatabaseManagerSqlx {
         let mut stats = HashMap::new();
 
         // Count stocks
-        let stock_count = sqlx::query("SELECT COUNT(*) as count FROM stocks WHERE status = 'active'")
+        let stock_count = sqlx::query("SELECT COUNT(*) as count FROM stocks")
             .fetch_one(&self.pool)
             .await?;
         stats.insert("total_stocks".to_string(), stock_count.get::<i64, _>("count"));

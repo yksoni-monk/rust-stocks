@@ -75,7 +75,7 @@ async fn get_sp500_stocks_with_ciks(pool: &sqlx::SqlitePool) -> Result<Vec<(i64,
     .await?;
 
     let stocks = rows.into_iter()
-        .map(|row| (row.id, row.cik.unwrap_or_default(), row.symbol))
+        .map(|row| (row.id.unwrap(), row.cik.unwrap_or_default(), row.symbol))
         .collect();
 
     Ok(stocks)

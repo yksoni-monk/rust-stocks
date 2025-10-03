@@ -121,7 +121,7 @@ async fn get_sp500_stocks_with_ciks(pool: &sqlx::SqlitePool) -> Result<Vec<(i64,
     .fetch_all(pool)
     .await?;
 
-    Ok(rows.into_iter().map(|row| (row.id, row.cik.unwrap_or_default(), row.symbol)).collect())
+    Ok(rows.into_iter().map(|row| (row.id.unwrap(), row.cik.unwrap_or_default(), row.symbol)).collect())
 }
 
 async fn download_bulk_submissions_if_needed() -> Result<Vec<u8>> {

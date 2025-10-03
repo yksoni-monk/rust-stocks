@@ -293,7 +293,6 @@ impl DataRefreshManager {
             SELECT s.id, s.symbol
             FROM stocks s
             INNER JOIN sp500_symbols sp ON s.symbol = sp.symbol
-            WHERE s.status = 'active'
             ORDER BY s.symbol
         "#;
         let stocks = sqlx::query_as::<_, (i64, String)>(stocks_query)
@@ -439,7 +438,7 @@ impl DataRefreshManager {
             SELECT s.id, s.symbol, s.cik
             FROM stocks s
             INNER JOIN sp500_symbols sp ON s.symbol = sp.symbol
-            WHERE s.status = 'active' AND s.cik IS NOT NULL AND s.cik != ''
+            WHERE s.cik IS NOT NULL AND s.cik != ''
             ORDER BY s.symbol
         "#;
         

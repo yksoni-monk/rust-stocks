@@ -114,40 +114,39 @@ CREATE INDEX IF NOT EXISTS idx_sp500_symbols_symbol ON sp500_symbols(symbol);
 - **Root Cause**: Data imported from SimFin without SEC filing metadata
 
 ## Current Status
-- ✅ **Bulk Submissions Freshness Checker**: Implemented and working
-- ✅ **SEC Data Matching**: Verified AAPL data matches perfectly between SEC and our DB
+- ✅ **CIK Format Fixed**: All CIKs properly formatted and verified against SEC
+- ✅ **Database Cleaned**: Consolidated to use only `cik_mappings_sp500` table
 - ❌ **Missing Metadata**: All `filed_date`, `accession_number`, `form_type` columns are NULL
 - ❌ **Freshness Logic**: Cannot compare SEC filing dates with our data
 
-## Implementation Plan
+## Implementation Plan - Company Facts API Approach
 
-### **Step 1: Create Migration (Dry Run)** 🔄
-- Create migration file to add 3 columns to all 3 tables:
-  - `income_statements`: Add `filed_date`, `accession_number`, `form_type`
-  - `balance_sheets`: Add `filed_date`, `accession_number`, `form_type`  
-  - `cash_flow_statements`: Add `filed_date`, `accession_number`, `form_type`
-- **Status**: Ready to create
-- **Action**: Wait for green signal before applying
+### **Step 1: Remove Bulk Submissions Logic** 🔄
+- Remove all bulk submissions download/extraction code
+- Clean up `populate_sec_metadata.rs` binary
+- Remove zip file handling and JSON extraction logic
+- **Status**: Ready to implement
 
-### **Step 2: Apply Migration** ⏳
-- Apply migration after green signal
-- Add columns to all 3 financial statement tables
-- **Dependencies**: Step 1 completion + user approval
+### **Step 2: Implement Company Facts API with Rate Limiting** ⏳
+- **API Endpoint**: `https://data.sec.gov/api/xbrl/companyfacts/CIK##########.json`
+- **Rate Limiting**: Use `governor` crate (10 requests/second limit)
+- **Concurrency**: 10 concurrent threads with proper rate limiting
+- **Dependencies**: Add `governor` and `reqwest-middleware` to Cargo.toml
 
 ### **Step 3: Concurrent Data Population** ⏳
-- **Concurrency**: 10 concurrent threads
-- **Data Source**: Use existing bulk submissions JSON files
 - **Process**:
-  1. Read CIK submission JSON for each stock
-  2. Query our database for existing financial records
-  3. Match `reportDate` (SEC) with `report_date` (our DB)
-  4. Extract `filingDate`, `accessionNumber`, `form` from SEC
-  5. Update all matching records across all 3 tables
+  1. Get all S&P 500 CIKs from database
+  2. Create 10 concurrent workers with rate-limited HTTP client
+  3. Each worker downloads Company Facts JSON for assigned CIKs
+  4. Parse JSON to extract filing metadata (`filingDate`, `accessionNumber`, `form`)
+  5. Match with our existing financial records by `reportDate`
+  6. Update all matching records across all 3 tables
 - **Target**: Both 10-K and 10-Q filings
 - **Cleanup**: Remove records with no SEC filing match
 
 ### **Step 4: Error Handling** ⏳
-- **Corrupted/Missing CIKs**: Report full list to user
+- **Rate Limit Compliance**: Automatic throttling via governor
+- **API Errors**: Handle 403, 429, and other HTTP errors gracefully
 - **Continue Processing**: Don't stop on individual CIK errors
 - **Validation**: Ensure data integrity after population
 

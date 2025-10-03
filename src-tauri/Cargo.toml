@@ -34,6 +34,10 @@ path = "src/bin/fetch_ciks.rs"
 name = "import-schwab-prices"
 path = "src/bin/import-schwab-prices.rs"
 
+[[bin]]
+name = "populate_sec_metadata_companyfacts"
+path = "src/bin/populate_sec_metadata_companyfacts.rs"
+
 
 
 
@@ -72,6 +76,9 @@ uuid = { version = "1.0", features = ["v4"] }
 rusqlite = { version = "0.32", features = ["chrono"] }
 sha2 = "0.10.9"
 zip = "0.6"
+governor = "0.6"
+reqwest-middleware = "0.3"
+tower = "0.5"
 
 # Additional dependencies for testing and development
 [dev-dependencies]

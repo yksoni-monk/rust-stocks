@@ -49,8 +49,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let stock_id: i64 = row.get("id");
         let symbol: String = row.get("symbol");
 
-        // Get CIK
-        let cik_query = "SELECT cik FROM cik_mappings WHERE symbol = ?";
+        // Get CIK from cik_mappings_sp500
+        let cik_query = "SELECT cik FROM cik_mappings_sp500 WHERE symbol = ?";
         if let Ok(cik_row) = sqlx::query(cik_query)
             .bind(&symbol)
             .fetch_one(&pool)

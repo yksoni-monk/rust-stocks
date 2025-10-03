@@ -14,7 +14,87 @@ A high-performance desktop application for stock analysis using Tauri (Rust back
 - **Desktop Framework**: Tauri for cross-platform desktop application
 - **UI Framework**: Web-based interface rendered in Tauri webview
 
-## SEC Company Facts-Based Freshness Checker Architecture
+## SEC Bulk Submissions-Based Freshness Checker Architecture
+
+### Overview
+The new architecture leverages SEC's bulk submissions data to efficiently check freshness across all S&P 500 stocks with a single API call, followed by fast local processing and comparison against our database.
+
+### Current Problem (Why Company Facts API Sucks)
+- Individual Company Facts API calls (484 API requests) create massive bottlenecks
+- Rate limiting delays (~48 seconds minimum) prevent real-time freshness checks  
+- Complex JSON parsing for financial concepts slows down processing
+- Inconsistent API responses cause reliability issues and timeouts
+
+### Solution: SEC Bulk Submissions Architecture DETAILED ALGORITHM
+
+#### Step 1: Bulk Submissions Download with Cleanup
+```rust
+// BEFORE downloading, remove old zip file to prevent disk storage issues
+async fn download_bulk_submissions_with_cleanup(&self) -> Result<Vec<u8>> {
+    let zip_cache_path = self.cache_dir.join("submissions.zip");
+    
+    // Cleanup: Remove old zip file first to prevent disk storage overflow
+    if zip_cache_path.exists() {
+        tokio::fs::remove_file(&zip_cache_path).await?;
+        println!("🗑️ Removed old submissions.zip to free disk space");
+    }
+    
+    let url = "https://www.sec.gov/Archives/edgar/daily-index/bulkdata/submissions.zip";
+    println!("🌐 Downloading bulk submissions from SEC...");
+    
+    let response = self.http_client
+        .get(url)
+        .header("User-Agent", "rust-stocks-edgar-client/1.0 (contact@example.com)")
+        .send()
+        .await?;
+    
+    let zip_data = response.bytes().await?.to_vec();
+    println!("✅ Downloaded {} MB of bulk submissions data", zip_data.len() / 1024 / 1024);
+    
+    Ok(zip_data)
+}
+```
+
+**Key Benefits:**
+- **Single API call** instead of 484 individual Company Facts calls
+- **Automatic cleanup** prevents disk storage overflow  
+- **~500MB compressed archive** contains ALL SEC submissions data
+- **Daily updates** refresh submissions data every business day
+
+#### Step 2: Extract Submission JSON Data Concurrently
+**Submission JSON Structure Analysis**: Sample from `https://data.sec.gov/submissions/CIK0000320193.json` (Apple)
+```json
+{
+  "cik": "0000320193",
+  "entityType": "operating", 
+  "name": "Apple Inc",
+  "tickers": ["AAPL"],
+  "website": "https://investor.apple.com",
+  "filings": {
+    "recent": {
+      "accessionNumber": ["0000320193-24-000083", "0000320193-24-000069", ...],
+      "filingDate": ["2024-01-26", "2024-01-10", "2024-01-02", ...],
+      "reportDate": ["2023-12-30", "2023-09-30", "2023-06-24", ...],
+      "form": ["8-K", "10-Q", "10-Q", "10-Q", "10-Q", ...],
+      "primaryDocDescription": [
+        "Apple Inc. filed a 10-Q for the period ending 2024-01-26",
+        "Apple Inc. filed a 10-Q for the period ending 2023-12-30",
+        ...
+      ]
+    }
+  }
+}
+```
+
+**Key Fields for Freshness Detection:**
+- `filings.recent.filingDate[i]`: Submission dates for all recent filings
+- `filings.recent.form[i]`: Form types (10-K, 10-Q, 8-K, etc.)  
+- `filings.recent.reportDate[i]`: Period end dates for financial data
+- **Pattern**: Arrays are aligned - `filingDate[i]`, `form[i]`, `reportDate[i]` belong together
+
+---
+
+## SEC Company Facts-Based Freshness Checker Architecture (DEPRECATED)
 
 ### Overview
 The current freshness checker uses time-based staleness (days since last update), which doesn't accurately reflect whether we have the latest SEC filings. The new architecture leverages the SEC Company Facts API (which we already use) to check actual filing dates and determine if our data is truly up-to-date.

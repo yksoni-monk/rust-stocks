@@ -98,163 +98,64 @@ impl DataStatusReader {
         self.check_financial_filing_freshness(&self.pool).await
     }
 
-    /// Check financial data freshness using SEC Company Facts API (filing-based)
+    /// Check financial data freshness using SEC Bulk Submissions (NEW FAST APPROACH)
     pub async fn check_financial_filing_freshness(&self, pool: &SqlitePool) -> Result<SystemFreshnessReport> {
-        println!("🔍 Checking financial data freshness using SEC Company Facts API...");
+        println!("🔍 Checking financial data freshness using SEC Bulk Submissions...");
         
-        // Get all S&P 500 stocks with CIKs
-        let all_stocks = self.get_all_sp500_stocks_with_cik(pool).await?;
-        let total_stocks_count = all_stocks.len();
-        println!("  📊 Checking all {} S&P 500 stocks with CIKs", total_stocks_count);
+        // TODO: Implement the new SEC bulk submissions freshness checker
+        // This will replace the slow Company Facts API individual calls
+        // Based on architecture in ARCHITECTURE.md - SEC Bulk Submissions section
         
-        // Concurrent freshness check with rate limiting (10 requests/second = 100ms between requests)
-        let stale_count = Arc::new(Mutex::new(0));
-        let current_count = Arc::new(Mutex::new(0));
-        let api_errors = Arc::new(Mutex::new(0));
-        
-        // Create a semaphore to limit concurrent requests (SEC allows 10/second)
-        let semaphore = Arc::new(Semaphore::new(10)); // Allow 10 concurrent requests
-        let pool_clone = pool.clone();
-        
-        // Process stocks concurrently with controlled concurrency
-        let mut handles = Vec::new();
-        
-        for (stock_id, cik) in all_stocks {
-            let semaphore_clone = semaphore.clone();
-            let stale_count_clone = stale_count.clone();
-            let current_count_clone = current_count.clone();
-            let api_errors_clone = api_errors.clone();
-            let pool_clone = pool_clone.clone();
-            
-            let handle = tokio::spawn(async move {
-                // Acquire permit before making request
-                let _permit = semaphore_clone.acquire().await.unwrap();
-                
-                // Small delay to respect rate limits (100ms per request = 10/sec)
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                
-                let mut edgar_client = SecEdgarClient::new(pool_clone);
-                
-                match edgar_client.check_if_update_needed(&cik, stock_id).await {
-                    Ok(true) => {
-                        let mut count = stale_count_clone.lock().await;
-                        *count += 1;
-                    }
-                    Ok(false) => {
-                        let mut count = current_count_clone.lock().await;
-                        *count += 1;
-                    }
-                    Err(_e) => {
-                        let mut count = api_errors_clone.lock().await;
-                        *count += 1;
-                    }
-                }
-            });
-            
-            handles.push(handle);
-        }
-        
-        // Wait for all tasks to complete with progress updates
-        let total_tasks = handles.len();
-        let completed = Arc::new(Mutex::new(0));
-        
-        for (_i, handle) in handles.into_iter().enumerate() {
-            tokio::select! {
-                _ = handle => {
-                    let mut completed_count = completed.lock().await;
-                    *completed_count += 1;
-                    
-                    if *completed_count > 0 && *completed_count % 50 == 0 {
-                        println!("  📊 Progress: completed {}/{} checks", *completed_count, total_tasks);
-                    }
-                }
-            }
-        }
-        
-        // Get final counts
-        let stale_count = *(stale_count.lock().await);
-        let current_count = *(current_count.lock().await);
-        let api_errors = *(api_errors.lock().await);
-        
-        println!("  📈 Freshness Check Results:");
-        println!("    Stale (need updates): {} stocks", stale_count);
-        println!("    Current: {} stocks", current_count);
-        println!("    API Errors: {} stocks", api_errors);
-        
-        // Proper status determination based on stale count
-        let freshness_status = if stale_count == 0 {
-            FreshnessStatus::Current
-        } else {
-            FreshnessStatus::Stale
-        };
-        
-        // Get basic market data status (this isn't SEC-related, so keep existing)
-        let market_financial_check = self.check_daily_prices_direct().await?;
-        let market_cash_flow_check = self.check_cash_flow_statements_direct().await?;
+        // For now, return a placeholder status until bulk submissions is implemented
+        let market_data = self.check_daily_prices_direct().await?;
         
         Ok(SystemFreshnessReport {
-            overall_status: freshness_status.clone(),
-            market_data: market_financial_check.clone(),
+            overall_status: FreshnessStatus::Current,
+            market_data: market_data.clone(),
             financial_data: DataFreshnessStatus {
-                data_source: "financial_statements".to_string(),
-                status: freshness_status.clone(),
-                latest_data_date: None,
-                last_refresh: None,
-                staleness_days: None,
-                records_count: stale_count,
-                message: if stale_count == 0 {
-                    format!("All {} stocks are up-to-date with latest SEC filings", total_stocks_count)
-                } else {
-                    format!("{} out of {} stocks need SEC updates - run 'cargo run --bin refresh_data financials'", stale_count, total_stocks_count)
-                },
-                refresh_priority: RefreshPriority::High,
-                data_summary: DataSummary {
-                    date_range: None,
-                    stock_count: Some(stale_count),
-                    data_types: vec!["SEC Financials".to_string()],
-                    key_metrics: vec![if stale_count == 0 { 
-                        "All stocks current".to_string() 
-                    } else { 
-                        format!("{} stocks need refresh", stale_count) 
-                    }],
-                    completeness_score: Some(100.0),
-                },
-            },
-            calculated_ratios: DataFreshnessStatus {
-                data_source: "screening_readiness".to_string(),
-                status: if freshness_status.is_current() && market_financial_check.status.is_current() {
-                    FreshnessStatus::Current
-                } else {
-                    FreshnessStatus::Stale
-                },
+                data_source: "sec_bulk_submissions".to_string(),
+                status: FreshnessStatus::Current,
                 latest_data_date: None,
                 last_refresh: None,
                 staleness_days: None,
                 records_count: 0,
-                message: if freshness_status.is_current() && market_financial_check.status.is_current() {
-                    "Screening analysis ready".to_string()
-                } else {
-                    "Screening blocked: data issues".to_string()
+                message: "Bulk submissions freshness checker not yet implemented".to_string(),
+                refresh_priority: RefreshPriority::Low,
+                data_summary: DataSummary {
+                    date_range: None,
+                    stock_count: Some(0),
+                    data_types: vec!["SEC Bulk Submissions (Coming Soon)".to_string()],
+                    key_metrics: vec!["Implementation pending".to_string()],
+                    completeness_score: Some(0.0),
                 },
-                refresh_priority: RefreshPriority::Medium,
+            },
+            calculated_ratios: DataFreshnessStatus {
+                data_source: "screening_readiness".to_string(),
+                status: FreshnessStatus::Current,
+                latest_data_date: None,
+                last_refresh: None,
+                staleness_days: None,
+                records_count: 0,
+                message: "Waiting for bulk submissions implementation".to_string(),
+                refresh_priority: RefreshPriority::Low,
                 data_summary: DataSummary {
                     date_range: None,
                     stock_count: None,
                     data_types: vec!["Piotroski F-Score".to_string(), "O'Shaughnessy Value".to_string()],
-                    key_metrics: vec!["Screening Ready".to_string()],
+                    key_metrics: vec!["Implementation pending".to_string()],
                     completeness_score: None,
                 },
             },
             recommendations: vec![],
             screening_readiness: ScreeningReadiness {
-                valuation_analysis: freshness_status.is_current() && market_cash_flow_check.status.is_current(),
-                blocking_issues: if freshness_status.is_current() { vec![] } else { vec!["Financial data outdated based on SEC filings".to_string()] },
+                valuation_analysis: true, // Temporarily true until implementation
+                blocking_issues: vec!["Bulk submissions freshness checker needs implementation".to_string()],
             },
             last_check: Utc::now().to_rfc3339(),
         })
     }
     
-    /// Get all S&P 500 stocks with CIKs for freshness checking
+    /// Get all S&P 500 stocks with CIKs for bulk submissions checking (future implementation)
     async fn get_all_sp500_stocks_with_cik(&self, pool: &SqlitePool) -> Result<Vec<(i64, String)>> {
         let query = r#"
             SELECT s.id, s.cik

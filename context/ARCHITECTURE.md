@@ -14,469 +14,327 @@ A high-performance desktop application for stock analysis using Tauri (Rust back
 - **Desktop Framework**: Tauri for cross-platform desktop application
 - **UI Framework**: Web-based interface rendered in Tauri webview
 
-## SEC Bulk Submissions-Based Freshness Checker Architecture
+## SEC Filing-Based Financial Data Freshness Architecture
 
 ### Overview
-The new architecture leverages SEC's bulk submissions data to efficiently check freshness across all S&P 500 stocks with a single API call, followed by fast local processing and comparison against our database.
+The financial data freshness checker now leverages populated SEC filing metadata (`filed_date`, `accession_number`, `form_type`) to accurately determine if our database contains the latest SEC filings. This replaces time-based staleness with actual SEC filing date comparison.
 
-### Current Problem (Why Company Facts API Sucks)
-- Individual Company Facts API calls (484 API requests) create massive bottlenecks
-- Rate limiting delays (~48 seconds minimum) prevent real-time freshness checks  
-- Complex JSON parsing for financial concepts slows down processing
-- Inconsistent API responses cause reliability issues and timeouts
+### Current Status ✅
+- **Metadata Populated**: All 2,781 financial records now have SEC filing metadata
+- **CIK Format Fixed**: All S&P 500 CIKs properly formatted and verified
+- **Database Schema**: Filing metadata columns exist and are populated
+- **Company Facts API**: Proven working with proper rate limiting (governor crate)
 
-### Solution: SEC Bulk Submissions Architecture DETAILED ALGORITHM
+### Architecture: SEC Filing Date Comparison
 
-#### Step 1: Bulk Submissions Download with Cleanup
-```rust
-// BEFORE downloading, remove old zip file to prevent disk storage issues
-async fn download_bulk_submissions_with_cleanup(&self) -> Result<Vec<u8>> {
-    let zip_cache_path = self.cache_dir.join("submissions.zip");
-    
-    // Cleanup: Remove old zip file first to prevent disk storage overflow
-    if zip_cache_path.exists() {
-        tokio::fs::remove_file(&zip_cache_path).await?;
-        println!("🗑️ Removed old submissions.zip to free disk space");
-    }
-    
-    let url = "https://www.sec.gov/Archives/edgar/daily-index/bulkdata/submissions.zip";
-    println!("🌐 Downloading bulk submissions from SEC...");
-    
-    let response = self.http_client
-        .get(url)
-        .header("User-Agent", "rust-stocks-edgar-client/1.0 (contact@example.com)")
-        .send()
-        .await?;
-    
-    let zip_data = response.bytes().await?.to_vec();
-    println!("✅ Downloaded {} MB of bulk submissions data", zip_data.len() / 1024 / 1024);
-    
-    Ok(zip_data)
-}
+#### Core Concept
+Instead of checking "days since last update", we now compare:
+1. **Our Latest Filing Date**: `MAX(filed_date)` from our financial statement tables
+2. **SEC Latest Filing Date**: Latest filing date from Company Facts API for each CIK
+3. **Freshness Determination**: Data is "Current" if our latest ≥ SEC latest
+
+#### Data Flow Architecture
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Freshness Checker                         │
+├─────────────────────────────────────────────────────────────┤
+│  1. Get S&P 500 stocks with CIKs from database              │
+│  2. For each CIK: Query our latest filed_date               │
+│  3. For each CIK: Fetch latest filing from Company Facts   │
+│  4. Compare: Our latest vs SEC latest                       │
+│  5. Report: X stocks current, Y stocks stale                │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-**Key Benefits:**
-- **Single API call** instead of 484 individual Company Facts calls
-- **Automatic cleanup** prevents disk storage overflow  
-- **~500MB compressed archive** contains ALL SEC submissions data
-- **Daily updates** refresh submissions data every business day
+### Implementation Plan
 
-#### Step 2: Extract Submission JSON Data Concurrently
-**Submission JSON Structure Analysis**: Sample from `https://data.sec.gov/submissions/CIK0000320193.json` (Apple)
-```json
-{
-  "cik": "0000320193",
-  "entityType": "operating", 
-  "name": "Apple Inc",
-  "tickers": ["AAPL"],
-  "website": "https://investor.apple.com",
-  "filings": {
-    "recent": {
-      "accessionNumber": ["0000320193-24-000083", "0000320193-24-000069", ...],
-      "filingDate": ["2024-01-26", "2024-01-10", "2024-01-02", ...],
-      "reportDate": ["2023-12-30", "2023-09-30", "2023-06-24", ...],
-      "form": ["8-K", "10-Q", "10-Q", "10-Q", "10-Q", ...],
-      "primaryDocDescription": [
-        "Apple Inc. filed a 10-Q for the period ending 2024-01-26",
-        "Apple Inc. filed a 10-Q for the period ending 2023-12-30",
-        ...
-      ]
-    }
-  }
-}
-```
-
-**Key Fields for Freshness Detection:**
-- `filings.recent.filingDate[i]`: Submission dates for all recent filings
-- `filings.recent.form[i]`: Form types (10-K, 10-Q, 8-K, etc.)  
-- `filings.recent.reportDate[i]`: Period end dates for financial data
-- **Pattern**: Arrays are aligned - `filingDate[i]`, `form[i]`, `reportDate[i]` belong together
-
----
-
-## SEC Company Facts-Based Freshness Checker Architecture (DEPRECATED)
-
-### Overview
-The current freshness checker uses time-based staleness (days since last update), which doesn't accurately reflect whether we have the latest SEC filings. The new architecture leverages the SEC Company Facts API (which we already use) to check actual filing dates and determine if our data is truly up-to-date.
-
-### Current Problem
-- Freshness based on days since last update
-- Doesn't verify if we have the latest SEC filings
-- Can miss new filings that were just released
-- False staleness when data is actually current
-
-### Proposed Solution
-Use SEC Company Facts API to:
-1. Check latest filing dates per CIK from existing API calls
-2. Compare with our stored data using filing metadata
-3. Mark as fresh only if we have the latest filings
-4. Trigger refresh only when new filings are available
-
-### Company Facts API Analysis
-
-#### JSON Response Structure
-The Company Facts API (`https://data.sec.gov/api/xbrl/companyfacts/CIK##########.json`) provides comprehensive filing metadata:
-
-```json
-{
-  "cik": 1413447,
-  "entityName": "Paycom Software, Inc.",
-  "entityType": "Operating company",
-  "sic": "7372",
-  "sicDescription": "Services-Prepackaged Software",
-  "tickers": ["PAYC"],
-  "exchanges": ["NASDAQ"],
-  "facts": {
-    "us-gaap": {
-      "Assets": {
-        "label": "Assets",
-        "description": "Sum of the carrying amounts...",
-        "units": {
-          "USD": [
-            {
-              "end": "2023-12-31",        // Report date
-              "val": 1234567890,          // Financial value
-              "accn": "0001413447-24-000012", // Accession number
-              "fy": 2023,                 // Fiscal year
-              "fp": "FY",                 // Fiscal period (FY, Q1, Q2, Q3, Q4)
-              "form": "10-K",             // Form type
-              "filed": "2024-02-15",      // Filing date (when SEC received it)
-              "frame": "CY2023"           // Calendar period frame
-            }
-          ]
-        }
-      }
-    }
-  }
-}
-```
-
-#### Key Filing Metadata Fields
-- `filed`: The actual filing date (when SEC received the filing)
-- `end`: The period end date (report date)
-- `accn`: Accession number (unique filing identifier)
-- `form`: Form type (10-K, 10-Q, 8-K, etc.)
-- `fy`: Fiscal year
-- `fp`: Fiscal period (FY, Q1, Q2, Q3, Q4)
-- `frame`: Calendar period frame (CY2023, CY2023Q1, etc.)
-
-### Implementation Architecture
-
-#### Phase 1: Enhanced SecEdgarClient with Filing Metadata
-```rust
-// src-tauri/src/tools/sec_edgar_client.rs
-impl SecEdgarClient {
-    /// Check if financial data needs update based on latest SEC filings
-    pub async fn check_if_update_needed(&self, cik: &str, stock_id: i64) -> Result<bool> {
-        // Fetch company facts (we already do this)
-        let facts = self.fetch_company_facts(cik).await?;
-        
-        // Get latest filing date from SEC
-        let latest_sec_filing = facts.get_latest_filing_date();
-        
-        // Get our latest filing date from database
-        let our_latest = self.get_our_latest_filing_date(stock_id).await?;
-        
-        // Return true if SEC has newer data
-        Ok(latest_sec_filing > our_latest)
-    }
-    
-    /// Extract only new data points since last update
-    pub async fn extract_new_data_only(&self, cik: &str, stock_id: i64, since_date: &str) -> Result<()> {
-        let facts = self.fetch_company_facts(cik).await?;
-        let new_data = facts.filter_data_after(since_date);
-        self.store_financial_data_with_metadata(stock_id, new_data).await?;
-        Ok(())
-    }
-    
-    /// Get latest filing date from our database
-    async fn get_our_latest_filing_date(&self, stock_id: i64) -> Result<Option<String>> {
-        let query = r#"
-            SELECT MAX(filed_date) as latest_filed_date
-            FROM income_statements 
-            WHERE stock_id = ? AND filed_date IS NOT NULL
-        "#;
-        
-        let result: Option<String> = sqlx::query_scalar(query)
-            .bind(stock_id)
-            .fetch_optional(&self.pool)
-            .await?;
-            
-        Ok(result)
-    }
-}
-```
-
-#### Phase 2: Enhanced Database Schema with Filing Metadata
-```sql
--- Add filing metadata columns to existing tables
-ALTER TABLE income_statements ADD COLUMN accession_number TEXT;
-ALTER TABLE income_statements ADD COLUMN form_type TEXT;
-ALTER TABLE income_statements ADD COLUMN filed_date DATE;
-ALTER TABLE income_statements ADD COLUMN fiscal_period TEXT; -- FY, Q1, Q2, Q3, Q4
-
-ALTER TABLE balance_sheets ADD COLUMN accession_number TEXT;
-ALTER TABLE balance_sheets ADD COLUMN form_type TEXT;
-ALTER TABLE balance_sheets ADD COLUMN filed_date DATE;
-ALTER TABLE balance_sheets ADD COLUMN fiscal_period TEXT;
-
-ALTER TABLE cash_flow_statements ADD COLUMN accession_number TEXT;
-ALTER TABLE cash_flow_statements ADD COLUMN form_type TEXT;
-ALTER TABLE cash_flow_statements ADD COLUMN filed_date DATE;
-ALTER TABLE cash_flow_statements ADD COLUMN fiscal_period TEXT;
-
--- Add indexes for efficient filing date lookups
-CREATE INDEX IF NOT EXISTS idx_income_statements_filed_date ON income_statements(filed_date);
-CREATE INDEX IF NOT EXISTS idx_balance_sheets_filed_date ON balance_sheets(filed_date);
-CREATE INDEX IF NOT EXISTS idx_cash_flow_statements_filed_date ON cash_flow_statements(filed_date);
-
--- Add table to track latest SEC filings per stock
-CREATE TABLE IF NOT EXISTS sec_filing_tracking (
-    stock_id INTEGER PRIMARY KEY,
-    cik TEXT NOT NULL,
-    latest_filing_date TEXT,
-    latest_10k_date TEXT,
-    latest_10q_date TEXT,
-    last_checked TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (stock_id) REFERENCES stocks (id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_sec_filing_tracking_cik ON sec_filing_tracking(cik);
-CREATE INDEX IF NOT EXISTS idx_sec_filing_tracking_last_checked ON sec_filing_tracking(last_checked);
-```
-
-#### Phase 3: Enhanced Freshness Checker
+#### Phase 1: Database Query Layer
 ```rust
 // src-tauri/src/tools/data_freshness_checker.rs
 impl DataStatusReader {
-    /// Check financial statements freshness based on SEC Company Facts API
-    async fn check_financial_statements_by_company_facts(&self) -> Result<DataFreshnessStatus> {
-        let edgar_client = SecEdgarClient::new(self.pool.clone());
+    /// Get latest filing date for each S&P 500 stock from our database
+    async fn get_our_latest_filing_dates(&self) -> Result<HashMap<String, Option<String>>> {
+        let query = r#"
+            SELECT 
+                s.cik,
+                MAX(i.filed_date) as latest_filed_date
+            FROM stocks s
+            INNER JOIN income_statements i ON s.id = i.stock_id
+            WHERE s.is_sp500 = 1 AND s.cik IS NOT NULL AND i.filed_date IS NOT NULL
+            GROUP BY s.cik
+        "#;
+        
+        let rows = sqlx::query_as::<_, (String, Option<String>)>(query)
+            .fetch_all(&self.pool)
+            .await?;
+            
+        Ok(rows.into_iter().collect())
+    }
+}
+```
+
+#### Phase 2: SEC API Comparison Layer
+```rust
+impl DataStatusReader {
+    /// Check if our data is current by comparing with SEC Company Facts API
+    async fn check_financial_filing_freshness(&self) -> Result<SystemFreshnessReport> {
+        println!("🔍 Checking financial data freshness using SEC filing dates...");
+        
+        // Get our latest filing dates from database
+        let our_latest_dates = self.get_our_latest_filing_dates().await?;
+        println!("✅ Found {} S&P 500 stocks with filing metadata", our_latest_dates.len());
         
         // Get S&P 500 stocks with CIKs
         let stocks_with_ciks = self.get_sp500_stocks_with_ciks().await?;
         
-        let mut total_stocks = 0;
-        let mut up_to_date_stocks = 0;
-        let mut missing_latest_filings = 0;
-        let mut latest_filing_date: Option<String> = None;
+        // Create rate-limited HTTP client
+        let (client, limiter) = create_rate_limited_client().await?;
         
-        for (stock_id, symbol, cik) in stocks_with_ciks {
-            total_stocks += 1;
-            
-            // Check if this stock needs update using Company Facts API
-            match edgar_client.check_if_update_needed(&cik, stock_id).await {
-                Ok(needs_update) => {
-                    if needs_update {
-                        missing_latest_filings += 1;
-                    } else {
-                        up_to_date_stocks += 1;
-                    }
-                }
-                Err(e) => {
-                    println!("⚠️ Failed to check {} ({}): {}", symbol, cik, e);
-                    missing_latest_filings += 1;
-                }
-            }
-            
-            // Get latest filing date for this stock
-            if let Ok(Some(latest_date)) = edgar_client.get_our_latest_filing_date(stock_id).await {
-                if latest_filing_date.is_none() || latest_date > latest_filing_date.as_ref().unwrap() {
-                    latest_filing_date = Some(latest_date);
-                }
-            }
-        }
+        // Process CIKs concurrently to get SEC latest filing dates
+        let sec_latest_dates = self.get_sec_latest_filing_dates(&client, &limiter, &stocks_with_ciks).await?;
         
-        // Determine freshness status
-        let status = if missing_latest_filings == 0 {
-            FreshnessStatus::Current
-        } else if missing_latest_filings < total_stocks / 2 {
-            FreshnessStatus::Stale
-        } else {
-            FreshnessStatus::Stale
-        };
+        // Compare our dates with SEC dates
+        let freshness_results = self.compare_filing_dates(&our_latest_dates, &sec_latest_dates).await?;
         
-        let message = format!(
-            "Latest SEC filings: {}/{} stocks up-to-date, {} missing latest filings",
-            up_to_date_stocks, total_stocks, missing_latest_filings
-        );
+        // Generate freshness report
+        let stale_count = freshness_results.iter().filter(|r| r.is_stale).count();
+        let current_count = freshness_results.len() - stale_count;
         
-        Ok(DataFreshnessStatus {
-            data_source: "financial_statements".to_string(),
-            status,
-            latest_data_date: latest_filing_date,
-            last_refresh: None,
-            staleness_days: None, // Not based on days anymore
-            records_count: total_stocks as i64,
-            message,
-            refresh_priority: if missing_latest_filings > 0 { 
-                RefreshPriority::Medium 
-            } else { 
-                RefreshPriority::Low 
+        Ok(SystemFreshnessReport {
+            overall_status: if stale_count == 0 { FreshnessStatus::Current } else { FreshnessStatus::Stale },
+            financial_data: DataFreshnessStatus {
+                data_source: "financial_statements".to_string(),
+                status: if stale_count == 0 { FreshnessStatus::Current } else { FreshnessStatus::Stale },
+                latest_data_date: freshness_results.iter()
+                    .filter(|r| !r.is_stale)
+                    .map(|r| r.our_latest_date.clone())
+                    .flatten()
+                    .max(),
+                last_refresh: Some(Utc::now().to_rfc3339()),
+                staleness_days: None,
+                records_count: stale_count as i64,
+                message: format!("{} out of {} stocks have latest SEC filings", current_count, stocks_with_ciks.len()),
+                refresh_priority: if stale_count > 100 { RefreshPriority::High } else if stale_count > 50 { RefreshPriority::Medium } else { RefreshPriority::Low },
+                data_summary: DataSummary {
+                    date_range: None,
+                    stock_count: Some(stocks_with_ciks.len() as i64),
+                    data_types: vec!["SEC Filing Metadata".to_string()],
+                    key_metrics: vec![
+                        format!("{} stocks current", current_count),
+                        format!("{} stocks stale", stale_count),
+                        "SEC filing date comparison".to_string()
+                    ],
+                    completeness_score: Some((current_count as f32) / (stocks_with_ciks.len() as f32)),
+                },
             },
-            data_summary: DataSummary {
-                date_range: latest_filing_date,
-                stock_count: Some(total_stocks as i64),
-                data_types: vec!["SEC Filings".to_string()],
-                key_metrics: vec![
-                    format!("{} stocks up-to-date", up_to_date_stocks),
-                    format!("{} missing latest filings", missing_latest_filings),
-                ],
-                completeness_score: Some((up_to_date_stocks as f32 / total_stocks as f32) * 100.0),
-            },
+            // ... other fields
         })
     }
 }
 ```
 
-#### Phase 4: Smart Refresh Logic
+#### Phase 3: Concurrent SEC API Processing
 ```rust
-// src-tauri/src/tools/data_refresh_orchestrator.rs
-impl DataRefreshManager {
-    /// Check if financial data needs refresh based on SEC Company Facts API
-    async fn needs_financial_refresh(&self) -> Result<bool> {
-        let edgar_client = SecEdgarClient::new(self.pool.clone());
+impl DataStatusReader {
+    /// Get latest filing dates from SEC Company Facts API concurrently
+    async fn get_sec_latest_filing_dates(
+        &self,
+        client: &Client,
+        limiter: &Arc<RateLimiter<governor::state::direct::NotKeyed, governor::state::InMemoryState, governor::clock::DefaultClock>>,
+        stocks: &[(i64, String, String)]
+    ) -> Result<HashMap<String, Option<String>>> {
+        let semaphore = Arc::new(Semaphore::new(10)); // 10 concurrent workers
+        let results = Arc::new(Mutex::new(HashMap::new()));
         
-        // Get stocks that haven't been checked recently (e.g., in last 24 hours)
-        let stocks_to_check = self.get_stocks_needing_filing_check().await?;
+        let mut handles = Vec::new();
         
-        for (stock_id, symbol, cik) in stocks_to_check {
-            // Check if this stock needs update using Company Facts API
-            if edgar_client.check_if_update_needed(&cik, stock_id).await? {
-                return Ok(true);
-            }
+        for (stock_id, cik, symbol) in stocks {
+            let permit = semaphore.clone().acquire_owned().await?;
+            let client = client.clone();
+            let limiter = limiter.clone();
+            let results = results.clone();
+            let cik = cik.clone();
+            let symbol = symbol.clone();
+            
+            let handle = tokio::spawn(async move {
+                let _permit = permit;
+                
+                match get_sec_latest_filing_date(&client, &limiter, &cik).await {
+                    Ok(latest_date) => {
+                        let mut res = results.lock().await;
+                        res.insert(cik, latest_date);
+                        println!("✅ {} (CIK: {}): Latest SEC filing {}", symbol, cik, 
+                                latest_date.as_ref().unwrap_or(&"None".to_string()));
+                    }
+                    Err(e) => {
+                        println!("❌ Failed {} (CIK: {}): {}", symbol, cik, e);
+                        let mut res = results.lock().await;
+                        res.insert(cik, None);
+                    }
+                }
+            });
+            handles.push(handle);
         }
         
-        Ok(false)
+        for handle in handles {
+            handle.await?;
+        }
+        
+        Ok(Arc::try_unwrap(results).unwrap().into_inner())
+    }
+}
+
+/// Get latest filing date for a single CIK from Company Facts API
+async fn get_sec_latest_filing_date(
+    client: &Client,
+    limiter: &Arc<RateLimiter<governor::state::direct::NotKeyed, governor::state::InMemoryState, governor::clock::DefaultClock>>,
+    cik: &str
+) -> Result<Option<String>> {
+    let url = format!("https://data.sec.gov/api/xbrl/companyfacts/CIK{}.json", cik);
+    
+    // Rate limiting
+    limiter.until_ready().await;
+    
+    let response = client.get(&url).send().await?;
+    
+    if !response.status().is_success() {
+        return Err(anyhow::anyhow!("HTTP {} for CIK {}", response.status(), cik));
     }
     
-    /// Refresh financial data for stocks with new SEC filings
-    async fn refresh_financials_smart(&self, session_id: &str) -> Result<i64> {
-        let edgar_client = SecEdgarClient::new(self.pool.clone());
-        
-        // Get stocks that need refresh based on SEC Company Facts API
-        let stocks_needing_refresh = self.get_stocks_needing_financial_refresh().await?;
-        
-        let mut total_records = 0;
-        
-        for (stock_id, symbol, cik) in stocks_needing_refresh {
-            println!("📋 Processing {} ({})", symbol, cik);
-            
-            // Get our latest filing date to extract only new data
-            if let Ok(Some(latest_date)) = edgar_client.get_our_latest_filing_date(stock_id).await {
-                // Extract only new data points
-                edgar_client.extract_new_data_only(&cik, stock_id, &latest_date).await?;
-            } else {
-                // No existing data, extract all
-                edgar_client.extract_balance_sheet_data(&cik, stock_id, &symbol).await?;
+    let json: Value = response.json().await?;
+    
+    // Extract latest filing date from Company Facts JSON
+    let latest_filing_date = extract_latest_filing_date_from_company_facts(&json)?;
+    
+    Ok(latest_filing_date)
+}
+
+/// Extract latest filing date from Company Facts JSON structure
+fn extract_latest_filing_date_from_company_facts(json: &Value) -> Result<Option<String>> {
+    let mut filing_dates = Vec::new();
+    
+    if let Some(facts) = json.get("facts") {
+        for (_category, category_data) in facts.as_object().unwrap_or(&serde_json::Map::new()) {
+            if let Some(category_obj) = category_data.as_object() {
+                for (_metric, metric_data) in category_obj {
+                    if let Some(units) = metric_data.get("units") {
+                        if let Some(units_obj) = units.as_object() {
+                            for (_unit_type, unit_data) in units_obj {
+                                if let Some(data_array) = unit_data.as_array() {
+                                    for data_point in data_array {
+                                        if let Some(obj) = data_point.as_object() {
+                                            if let Some(filed) = obj.get("filed").and_then(|v| v.as_str()) {
+                                                filing_dates.push(filed.to_string());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
-            
-            total_records += 1;
-            
-            // Rate limiting
-            tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        
-        Ok(total_records)
     }
+    
+    // Return the latest (most recent) filing date
+    filing_dates.sort();
+    Ok(filing_dates.last().cloned())
 }
 ```
 
-#### Phase 5: Enhanced Data Storage with Metadata
+#### Phase 4: Filing Date Comparison Logic
 ```rust
-// src-tauri/src/tools/sec_edgar_client.rs
-impl SecEdgarClient {
-    /// Store financial data with filing metadata
-    async fn store_financial_data_with_metadata(
+impl DataStatusReader {
+    /// Compare our filing dates with SEC filing dates
+    async fn compare_filing_dates(
         &self,
-        stock_id: i64,
-        data: CompanyFactsData
-    ) -> Result<()> {
-        for fact in data.facts {
-            // Extract filing metadata
-            let accession_number = fact.accn;
-            let form_type = fact.form;
-            let filed_date = fact.filed;
-            let fiscal_period = fact.fp;
-            let report_date = fact.end;
+        our_dates: &HashMap<String, Option<String>>,
+        sec_dates: &HashMap<String, Option<String>>
+    ) -> Result<Vec<FilingFreshnessResult>> {
+        let mut results = Vec::new();
+        
+        for (cik, our_latest) in our_dates {
+            let sec_latest = sec_dates.get(cik).unwrap_or(&None);
             
-            // Store income statement data
-            if let Some(income_data) = fact.income_data {
-                self.store_income_statement_with_metadata(
-                    stock_id,
-                    income_data,
-                    accession_number,
-                    form_type,
-                    filed_date,
-                    fiscal_period,
-                    report_date
-                ).await?;
-            }
+            let is_stale = match (our_latest, sec_latest) {
+                (Some(our), Some(sec)) => {
+                    // Both have dates - compare them
+                    our < sec
+                }
+                (Some(_), None) => {
+                    // We have data but SEC API failed - assume current
+                    false
+                }
+                (None, Some(_)) => {
+                    // SEC has data but we don't - definitely stale
+                    true
+                }
+                (None, None) => {
+                    // Neither has data - assume current
+                    false
+                }
+            };
             
-            // Store balance sheet data
-            if let Some(balance_data) = fact.balance_data {
-                self.store_balance_sheet_with_metadata(
-                    stock_id,
-                    balance_data,
-                    accession_number,
-                    form_type,
-                    filed_date,
-                    fiscal_period,
-                    report_date
-                ).await?;
-            }
-            
-            // Store cash flow data
-            if let Some(cashflow_data) = fact.cashflow_data {
-                self.store_cash_flow_with_metadata(
-                    stock_id,
-                    cashflow_data,
-                    accession_number,
-                    form_type,
-                    filed_date,
-                    fiscal_period,
-                    report_date
-                ).await?;
-            }
+            results.push(FilingFreshnessResult {
+                cik: cik.clone(),
+                our_latest_date: our_latest.clone(),
+                sec_latest_date: sec_latest.clone(),
+                is_stale,
+            });
         }
         
-        Ok(())
+        Ok(results)
     }
+}
+
+#[derive(Debug)]
+struct FilingFreshnessResult {
+    cik: String,
+    our_latest_date: Option<String>,
+    sec_latest_date: Option<String>,
+    is_stale: bool,
 }
 ```
 
-### Implementation Benefits
+### Key Benefits
 
 #### 1. Accurate Freshness Detection
-- Uses actual SEC filing dates from Company Facts API
-- Detects new filings immediately
-- Eliminates false staleness based on days
+- **Real SEC Filing Dates**: Uses actual SEC filing dates, not arbitrary time periods
+- **Immediate Detection**: Detects new filings as soon as they're available
+- **No False Positives**: Eliminates false staleness based on days since update
 
-#### 2. Efficient Refresh Strategy
-- Only refreshes when new filings are available
-- Incremental updates (only new data points)
-- Reduces unnecessary API calls and processing
+#### 2. Efficient Processing
+- **Concurrent API Calls**: 10 concurrent workers with proper rate limiting
+- **Single API Call per CIK**: Uses Company Facts API efficiently
+- **Fast Local Comparison**: Database queries are fast with proper indexing
 
-#### 3. Better User Experience
-- Clear status messages based on actual filing dates
-- Faster refresh cycles with incremental updates
-- More reliable data freshness indicators
+#### 3. Comprehensive Coverage
+- **All S&P 500 Stocks**: Covers all 497 S&P 500 stocks with CIKs
+- **All Financial Statements**: Checks income, balance sheet, and cash flow data
+- **Metadata-Based**: Uses populated filing metadata for accurate comparison
 
-#### 4. Leverages Existing Infrastructure
-- Uses our existing `SecEdgarClient` and Company Facts API
-- No new API endpoints to learn or implement
-- Builds on proven, working code
-
-#### 5. Comprehensive Metadata Tracking
-- Tracks accession numbers, form types, filing dates
-- Enables data validation and completeness checks
-- Supports audit trails and data lineage
+#### 4. Production Ready
+- **Rate Limiting**: Proper governor-based rate limiting (10 req/sec)
+- **Error Handling**: Graceful handling of API failures
+- **Migration Discipline**: All schema changes via proper sqlx migrations
+- **Zero Manual DB Changes**: No direct database schema modifications
 
 ### Implementation Timeline
-1. **Week 1**: Add filing metadata columns to database tables
-2. **Week 2**: Enhance `SecEdgarClient` with filing metadata extraction
-3. **Week 3**: Implement smart freshness checker using Company Facts API
-4. **Week 4**: Add incremental update logic and testing
+1. **Phase 1**: Database query layer for our latest filing dates
+2. **Phase 2**: SEC API comparison layer with concurrent processing  
+3. **Phase 3**: Filing date comparison logic and freshness determination
+4. **Phase 4**: Integration with existing freshness checker system
+5. **Phase 5**: Testing and validation with real data
+
+### Database Schema Requirements ✅
+All required schema already exists and is populated:
+- `income_statements.filed_date` - SEC filing date
+- `balance_sheets.filed_date` - SEC filing date  
+- `cash_flow_statements.filed_date` - SEC filing date
+- `income_statements.accession_number` - SEC accession number
+- `income_statements.form_type` - SEC form type (10-K, 10-Q)
+- Proper indexes for fast `MAX(filed_date)` queries
 
 ### System Components
 

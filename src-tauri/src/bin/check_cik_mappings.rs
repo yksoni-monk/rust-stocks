@@ -20,7 +20,7 @@ async fn main() -> Result<()> {
     .await?;
     
     for mapping in mappings {
-        let cik = mapping.cik.unwrap_or("".to_string());
+        let cik = mapping.cik;
         println!("  {}: {}", mapping.symbol, cik);
     }
     
@@ -32,8 +32,9 @@ async fn main() -> Result<()> {
     .fetch_all(&pool)
     .await?;
     
-    for stock in stocks {
-        let cik = stock.cik.unwrap_or("".to_string());
+    for stock in &stocks {
+        let empty_string = "".to_string();
+        let cik = stock.cik.as_ref().unwrap_or(&empty_string);
         println!("  {}: {}", stock.symbol, cik);
     }
     
@@ -71,13 +72,13 @@ async fn main() -> Result<()> {
     
     // Compare with our database CIKs
     println!("\n🔍 Comparison:");
-    for stock in &stocks {
+    for stock in stocks {
         let symbol = &stock.symbol;
-        let our_cik = stock.cik.as_ref().unwrap_or(&"".to_string());
+        let our_cik = stock.cik.unwrap_or("".to_string());
         
         if let Some(sec_cik) = sec_ciks.get(symbol) {
             let correct_cik = format!("{:010}", sec_cik.parse::<u64>().unwrap_or(0));
-            if our_cik == &correct_cik {
+            if our_cik == correct_cik {
                 println!("  ✅ {}: {} (CORRECT)", symbol, our_cik);
             } else {
                 println!("  ❌ {}: {} (OURS) vs {} (SEC)", symbol, our_cik, correct_cik);

@@ -1,7 +1,3 @@
----
-alwaysApply: true
----
-
 # Cursor Rules
 
 
@@ -40,6 +36,13 @@ alwaysApply: true
 - NEVER edit migration files after they've been applied (creates checksum mismatches)
 - ALWAYS run `sqlx migrate run` to apply new migrations in chronological order
 - ALWAYS validate that all migrations are installed with `sqlx migrate info`
+
+## Key Migration Principles I Will Follow:
+- NEVER modify migration files after creation
+- NEVER manually apply migrations with sqlite3
+- NEVER manually insert into _sqlx_migrations
+- ALWAYS use sqlx migrate run
+- ALWAYS fix issues properly, not bypass them
 
 ## API Contract Discipline (NON-NEGOTIABLE)
 - NEVER modify backend function signatures without checking all frontend callers
@@ -96,4 +99,3 @@ alwaysApply: true
 - ❌ Delete migration files once they've been applied
 - ❌ Run migrations without backing up the database first
 # Cursor Rules
-

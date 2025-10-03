@@ -324,6 +324,7 @@ impl DataStatusReader {
     ) -> Result<Vec<FilingFreshnessResult>> {
         let mut results = Vec::new();
         
+        // Process stocks that have metadata in our database
         for (cik, our_latest) in our_dates {
             let sec_latest = sec_dates.get(cik).unwrap_or(&None);
             
@@ -352,6 +353,21 @@ impl DataStatusReader {
                 sec_latest_date: sec_latest.clone(),
                 is_stale,
             });
+        }
+        
+        // Process stocks that have CIKs but NO metadata in our database
+        // These need full dataset download and are considered stale
+        for (cik, sec_latest) in sec_dates {
+            if !our_dates.contains_key(cik) {
+                // This stock has CIK and SEC data but no metadata in our DB
+                // It needs full dataset download - mark as stale
+                results.push(FilingFreshnessResult {
+                    cik: cik.clone(),
+                    our_latest_date: None,
+                    sec_latest_date: sec_latest.clone(),
+                    is_stale: true, // Always stale - needs full download
+                });
+            }
         }
         
         Ok(results)

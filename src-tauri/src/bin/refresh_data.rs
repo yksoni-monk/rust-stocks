@@ -210,8 +210,6 @@ async fn show_data_status(pool: &sqlx::SqlitePool, cli: &Cli) -> Result<()> {
             println!("   └─ {} (Est: {})", rec.reason, rec.estimated_duration);
         }
         println!();
-        println!("💡 Quick fix: cargo run --bin refresh_data market");
-        println!("💡 Full fix:  cargo run --bin refresh_data ratios");
     } else {
         println!("✅ All data sources are current. No refresh needed.");
     }

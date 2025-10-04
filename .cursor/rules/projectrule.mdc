@@ -36,6 +36,12 @@
 - NEVER edit migration files after they've been applied (creates checksum mismatches)
 - ALWAYS run `sqlx migrate run` to apply new migrations in chronological order
 - ALWAYS validate that all migrations are installed with `sqlx migrate info`
+- CRITICAL: ALWAYS use `--source db/migrations` flag with sqlx commands
+  - ALWAYS use: `sqlx migrate add --source db/migrations <description>`
+  - ALWAYS use: `sqlx migrate run --source db/migrations --database-url "sqlite:db/stocks.db"`
+  - ALWAYS use: `sqlx migrate info --source db/migrations --database-url "sqlite:db/stocks.db"`
+  - NEVER run sqlx commands without the `--source db/migrations` flag
+  - This prevents creating migrations in the wrong directory (`src-tauri/migrations/` vs `src-tauri/db/migrations/`)
 
 ## Key Migration Principles I Will Follow:
 - NEVER modify migration files after creation

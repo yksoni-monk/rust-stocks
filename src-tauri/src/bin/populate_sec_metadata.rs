@@ -292,7 +292,7 @@ async fn get_our_financial_records(pool: &sqlx::SqlitePool, stock_id: i64) -> Re
     
     // Get income statements
     let income_rows = sqlx::query!(
-        "SELECT id, report_date, fiscal_year FROM income_statements WHERE stock_id = ?",
+        "SELECT id, report_date as \"report_date: chrono::NaiveDate\", fiscal_year FROM income_statements WHERE stock_id = ?",
         stock_id
     )
     .fetch_all(pool)
@@ -310,7 +310,7 @@ async fn get_our_financial_records(pool: &sqlx::SqlitePool, stock_id: i64) -> Re
     
     // Get balance sheets
     let balance_rows = sqlx::query!(
-        "SELECT id, report_date, fiscal_year FROM balance_sheets WHERE stock_id = ?",
+        "SELECT id, report_date as \"report_date: chrono::NaiveDate\", fiscal_year FROM balance_sheets WHERE stock_id = ?",
         stock_id
     )
     .fetch_all(pool)
@@ -328,7 +328,7 @@ async fn get_our_financial_records(pool: &sqlx::SqlitePool, stock_id: i64) -> Re
     
     // Get cash flow statements
     let cashflow_rows = sqlx::query!(
-        "SELECT id, report_date, fiscal_year FROM cash_flow_statements WHERE stock_id = ?",
+        "SELECT id, report_date as \"report_date: chrono::NaiveDate\", fiscal_year FROM cash_flow_statements WHERE stock_id = ?",
         stock_id
     )
     .fetch_all(pool)

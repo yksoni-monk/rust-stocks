@@ -5,7 +5,9 @@ async fn test_oshaughnessy_api_basic() {
     println!("🧪 Testing O'Shaughnessy API...");
 
     // Test with empty stock list (should return from database)
+    println!("🔍 Calling get_oshaughnessy_screening_results...");
     let result = get_oshaughnessy_screening_results(vec![], None, Some(5)).await;
+    println!("🔍 Function call completed, processing result...");
 
     match result {
         Ok(stocks) => {

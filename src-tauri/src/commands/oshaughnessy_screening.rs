@@ -9,7 +9,6 @@ pub struct OShaughnessyValueResult {
     pub stock_id: i64,
     pub symbol: String,
     pub sector: Option<String>,
-    pub industry: Option<String>,
     pub current_price: Option<f64>,
     pub market_cap: Option<f64>,
     pub enterprise_value: Option<f64>,
@@ -81,13 +80,13 @@ async fn get_oshaughnessy_screening_results_internal(
     limit: Option<i32>,
 ) -> Result<Vec<OShaughnessyValueResult>, String> {
     let criteria = criteria.unwrap_or_default();
+    println!("🔍 Starting O'Shaughnessy screening with criteria: {:?}", criteria);
 
     let mut query = String::from(
         "SELECT
             stock_id,
             symbol,
             sector,
-            industry,
             current_price,
             market_cap,
             enterprise_value,
@@ -113,6 +112,7 @@ async fn get_oshaughnessy_screening_results_internal(
         WHERE 1=1"
     );
 
+    println!("🔍 Query built, applying filters...");
     let mut params = Vec::new();
 
     // Apply filters
@@ -165,6 +165,8 @@ async fn get_oshaughnessy_screening_results_internal(
     }
 
     // Build the query with parameters
+    println!("🔍 Final query: {}", query);
+    println!("🔍 Executing database query...");
     let mut sqlx_query = sqlx::query_as::<_, OShaughnessyValueResult>(&query);
     for param in params {
         sqlx_query = sqlx_query.bind(param);
@@ -175,6 +177,7 @@ async fn get_oshaughnessy_screening_results_internal(
         .await
         .map_err(|e| format!("Database query failed: {}", e))?;
 
+    println!("🔍 Query executed successfully, got {} results", results.len());
     Ok(results)
 }
 
@@ -186,7 +189,6 @@ impl sqlx::FromRow<'_, sqlx::sqlite::SqliteRow> for OShaughnessyValueResult {
             stock_id: row.try_get("stock_id")?,
             symbol: row.try_get("symbol")?,
             sector: row.try_get("sector")?,
-            industry: row.try_get("industry")?,
             current_price: row.try_get("current_price")?,
             market_cap: row.try_get("market_cap")?,
             enterprise_value: row.try_get("enterprise_value")?,

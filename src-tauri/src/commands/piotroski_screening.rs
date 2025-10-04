@@ -9,7 +9,6 @@ pub struct PiotoskiFScoreResult {
     pub stock_id: i64,
     pub symbol: String,
     pub sector: Option<String>,
-    pub industry: Option<String>,
     pub current_net_income: Option<f64>,
     pub f_score_complete: i32,
     pub data_completeness_score: i32,
@@ -87,7 +86,6 @@ pub async fn get_piotroski_screening_results_internal(
             stock_id,
             symbol,
             sector,
-            industry,
             current_net_income,
             f_score_complete,
             data_completeness_score,
@@ -111,7 +109,7 @@ pub async fn get_piotroski_screening_results_internal(
                 WHEN f_score_complete >= ? AND data_completeness_score >= ? THEN 1 
                 ELSE 0 
             END as passes_screening
-        FROM piotroski_screening_results
+        FROM piotroski_screening_results_new
         WHERE 1=1"
     );
 
@@ -198,7 +196,6 @@ pub async fn get_piotroski_screening_results_internal(
             stock_id: row.try_get::<i64, _>("stock_id").unwrap_or(0),
             symbol: row.try_get::<String, _>("symbol").unwrap_or_default(),
             sector: row.try_get::<String, _>("sector").ok(),
-            industry: row.try_get::<String, _>("industry").ok(),
             current_net_income: row.try_get::<Option<f64>, _>("current_net_income").ok().flatten(),
             f_score_complete: row.try_get::<i64, _>("f_score_complete").unwrap_or(0) as i32,
             data_completeness_score: row.try_get::<i64, _>("data_completeness_score").unwrap_or(0) as i32,
@@ -244,7 +241,7 @@ pub async fn get_piotroski_statistics() -> Result<serde_json::Value, String> {
             COUNT(CASE WHEN f_score_complete >= 6 THEN 1 END) as high_quality_stocks,
             COUNT(CASE WHEN f_score_complete >= 7 THEN 1 END) as excellent_stocks,
             COUNT(CASE WHEN f_score_complete >= 6 AND data_completeness_score >= 80 THEN 1 END) as passing_stocks
-        FROM piotroski_screening_results
+        FROM piotroski_screening_results_new
         WHERE stock_id IN (SELECT id FROM stocks WHERE is_sp500 = 1)"
     )
     .fetch_one(&pool)

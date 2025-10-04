@@ -212,11 +212,11 @@ impl DateRangeCalculator {
         trading_days.len() as i64
     }
 
-    /// Fetch company metadata from database
+    /// Fetch company metadata from database using v_price_data_coverage view
     pub fn get_company_metadata(&self, conn: &Connection, symbol: &str) -> Result<Option<CompanyMetadata>> {
         let mut stmt = conn.prepare(
-            "SELECT symbol, ipo_date, listing_date, earliest_data_date, latest_data_date, spinoff_date
-             FROM company_metadata
+            "SELECT symbol, earliest_data_date, latest_data_date
+             FROM v_price_data_coverage
              WHERE symbol = ?"
         )?;
 
@@ -232,11 +232,11 @@ impl DateRangeCalculator {
 
             Ok(CompanyMetadata {
                 symbol: row.get(0)?,
-                ipo_date: parse_date(row.get(1)?)?,
-                listing_date: parse_date(row.get(2)?)?,
-                earliest_data_date: parse_date(row.get(3)?)?,
-                latest_data_date: parse_date(row.get(4)?)?,
-                spinoff_date: parse_date(row.get(5)?)?,
+                ipo_date: None, // No longer available after removing company_metadata table
+                listing_date: None, // No longer available after removing company_metadata table
+                earliest_data_date: parse_date(row.get(1)?)?,
+                latest_data_date: parse_date(row.get(2)?)?,
+                spinoff_date: None, // No longer available after removing company_metadata table
             })
         });
 

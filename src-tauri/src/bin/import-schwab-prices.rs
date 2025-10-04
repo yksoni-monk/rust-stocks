@@ -324,8 +324,7 @@ impl BulkDownloader {
             total_bars += bars;
         }
 
-        // Update company metadata with new coverage info
-        self.update_company_metadata(stock_id, symbol).await?;
+        // Note: Price coverage metrics are now calculated on-demand via v_price_data_coverage view
 
         Ok(total_bars)
     }
@@ -354,34 +353,6 @@ impl BulkDownloader {
         Ok(price_bars.len())
     }
 
-    async fn update_company_metadata(&self, stock_id: i64, _symbol: &str) -> Result<()> {
-        // Update the company metadata with latest data coverage
-        sqlx::query(
-            r#"
-            UPDATE company_metadata
-            SET
-                earliest_data_date = (
-                    SELECT MIN(date) FROM daily_prices WHERE stock_id = ?
-                ),
-                latest_data_date = (
-                    SELECT MAX(date) FROM daily_prices WHERE stock_id = ?
-                ),
-                total_trading_days = (
-                    SELECT COUNT(*) FROM daily_prices WHERE stock_id = ?
-                ),
-                updated_at = CURRENT_TIMESTAMP
-            WHERE stock_id = ?
-            "#
-        )
-        .bind(stock_id)
-        .bind(stock_id)
-        .bind(stock_id)
-        .bind(stock_id)
-        .execute(&self.db_pool)
-        .await?;
-
-        Ok(())
-    }
     
     
     async fn get_stock_id(&self, symbol: &str) -> Result<i64> {

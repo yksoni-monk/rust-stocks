@@ -66,7 +66,7 @@ async fn main() -> Result<()> {
     }
 
     // Check CIK mappings
-    let cik_count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM cik_mappings_sp500")
+    let cik_count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM stocks WHERE is_sp500 = 1 AND cik IS NOT NULL")
         .fetch_one(&pool)
         .await?;
 

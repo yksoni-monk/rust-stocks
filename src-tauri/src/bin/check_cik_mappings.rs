@@ -12,15 +12,15 @@ async fn main() -> Result<()> {
     let pool = get_database_connection().await.map_err(|e| anyhow::anyhow!("Database connection failed: {}", e))?;
     
     // Check current CIK mappings
-    println!("📊 Current CIK mappings in cik_mappings_sp500:");
+    println!("📊 Current CIK mappings in stocks table:");
     let mappings = sqlx::query!(
-        "SELECT symbol, cik FROM cik_mappings_sp500 WHERE symbol IN ('AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'NVDA', 'META', 'BRK.A', 'UNH', 'JNJ') ORDER BY symbol"
+        "SELECT symbol, cik FROM stocks WHERE symbol IN ('AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'NVDA', 'META', 'BRK.A', 'UNH', 'JNJ') AND cik IS NOT NULL ORDER BY symbol"
     )
     .fetch_all(&pool)
     .await?;
     
     for mapping in mappings {
-        let cik = mapping.cik;
+        let cik = mapping.cik.unwrap_or_else(|| "NULL".to_string());
         println!("  {}: {}", mapping.symbol, cik);
     }
     

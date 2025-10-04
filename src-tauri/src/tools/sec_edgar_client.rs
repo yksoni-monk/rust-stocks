@@ -290,8 +290,9 @@ impl SecEdgarClient {
     /// Get all CIK mappings for S&P 500 companies
     pub async fn get_sp500_cik_mappings(&self) -> Result<Vec<CikMapping>> {
         let query = r#"
-            SELECT cik, stock_id, symbol, company_name
-            FROM cik_mappings_sp500
+            SELECT cik, id as stock_id, symbol, company_name
+            FROM stocks
+            WHERE is_sp500 = 1 AND cik IS NOT NULL
             ORDER BY symbol
         "#;
 

@@ -45,8 +45,7 @@ async fn main() -> Result<()> {
     
     // Check each table with CIK values
     let tables = vec![
-        ("cik_mappings_sp500", "SELECT symbol, cik FROM cik_mappings_sp500 ORDER BY symbol"),
-        ("stocks", "SELECT symbol, cik FROM stocks WHERE is_sp500 = 1 ORDER BY symbol"),
+        ("stocks", "SELECT symbol, cik FROM stocks WHERE is_sp500 = 1 AND cik IS NOT NULL ORDER BY symbol"),
     ];
     
     for (table_name, query) in tables {

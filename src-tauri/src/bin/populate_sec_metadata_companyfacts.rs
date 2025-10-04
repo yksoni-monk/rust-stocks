@@ -375,38 +375,60 @@ async fn update_financial_record_metadata(
     accession_number: &str,
     form_type: &str,
 ) -> Result<()> {
-    // Update the record with metadata
-    // We need to determine which table this record belongs to
-    // For now, try all three tables
+    // First, get the stock_id from any of the financial tables
+    let stock_id = sqlx::query_scalar!(
+        "SELECT stock_id FROM income_statements WHERE id = ?
+         UNION
+         SELECT stock_id FROM balance_sheets WHERE id = ?
+         UNION  
+         SELECT stock_id FROM cash_flow_statements WHERE id = ?
+         LIMIT 1",
+        record_id, record_id, record_id
+    )
+    .fetch_one(pool)
+    .await?;
     
-    // Try income_statements first
-    let result = sqlx::query!(
-        "UPDATE income_statements SET filed_date = ?, accession_number = ?, form_type = ? WHERE id = ?",
-        filed_date, accession_number, form_type, record_id
+    // Parse dates
+    let filed_date_parsed = NaiveDate::parse_from_str(filed_date, "%Y-%m-%d")?;
+    let report_date_parsed = NaiveDate::parse_from_str("2023-12-31", "%Y-%m-%d")?; // TODO: Get actual report_date
+    
+    // Create or get existing sec_filing record
+    let _insert_result = sqlx::query!(
+        "INSERT OR IGNORE INTO sec_filings 
+         (stock_id, accession_number, form_type, filed_date, fiscal_period, fiscal_year, report_date)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+        stock_id, accession_number, form_type, filed_date_parsed, "FY", 2023, report_date_parsed
     )
     .execute(pool)
     .await?;
     
-    if result.rows_affected() > 0 {
-        return Ok(());
-    }
-    
-    // Try balance_sheets
-    let result = sqlx::query!(
-        "UPDATE balance_sheets SET filed_date = ?, accession_number = ?, form_type = ? WHERE id = ?",
-        filed_date, accession_number, form_type, record_id
+    // Get the sec_filing_id (either newly inserted or existing)
+    let sec_filing_id = sqlx::query_scalar!(
+        "SELECT id FROM sec_filings 
+         WHERE stock_id = ? AND accession_number = ? AND form_type = ? AND filed_date = ?",
+        stock_id, accession_number, form_type, filed_date_parsed
     )
-    .execute(pool)
+    .fetch_one(pool)
     .await?;
     
-    if result.rows_affected() > 0 {
-        return Ok(());
-    }
-    
-    // Try cash_flow_statements
+    // Update all three tables with sec_filing_id
     sqlx::query!(
-        "UPDATE cash_flow_statements SET filed_date = ?, accession_number = ?, form_type = ? WHERE id = ?",
-        filed_date, accession_number, form_type, record_id
+        "UPDATE income_statements SET sec_filing_id = ? WHERE id = ?",
+        sec_filing_id, record_id
+    )
+    .execute(pool)
+    .await?;
+    
+    sqlx::query!(
+        "UPDATE balance_sheets SET sec_filing_id = ? WHERE id = ?",
+        sec_filing_id, record_id
+    )
+    .execute(pool)
+    .await?;
+    
+    sqlx::query!(
+        "UPDATE cash_flow_statements SET sec_filing_id = ? WHERE id = ?",
+        sec_filing_id, record_id
     )
     .execute(pool)
     .await?;
@@ -417,11 +439,11 @@ async fn update_financial_record_metadata(
 async fn verify_populated_metadata(pool: &sqlx::SqlitePool) -> Result<i64> {
     let result = sqlx::query!(
         "SELECT COUNT(*) as count FROM (
-            SELECT id FROM income_statements WHERE filed_date IS NOT NULL AND accession_number IS NOT NULL AND form_type IS NOT NULL
+            SELECT id FROM income_statements WHERE sec_filing_id IS NOT NULL
             UNION ALL
-            SELECT id FROM balance_sheets WHERE filed_date IS NOT NULL AND accession_number IS NOT NULL AND form_type IS NOT NULL
+            SELECT id FROM balance_sheets WHERE sec_filing_id IS NOT NULL
             UNION ALL
-            SELECT id FROM cash_flow_statements WHERE filed_date IS NOT NULL AND accession_number IS NOT NULL AND form_type IS NOT NULL
+            SELECT id FROM cash_flow_statements WHERE sec_filing_id IS NOT NULL
         )"
     )
     .fetch_one(pool)

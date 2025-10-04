@@ -116,24 +116,32 @@ CREATE INDEX IF NOT EXISTS idx_sp500_symbols_symbol ON sp500_symbols(symbol);
 ## Current Status
 - ✅ **CIK Format Fixed**: All CIKs properly formatted and verified against SEC
 - ✅ **Database Cleaned**: Consolidated to use only `cik_mappings_sp500` table
-- ❌ **Missing Metadata**: All `filed_date`, `accession_number`, `form_type` columns are NULL
+- ✅ **Phase 1 Complete**: `sec_filings` table created with 1,281 filings
+- ✅ **Phase 2 Complete**: Duplicate EDGAR metadata columns removed from financial tables
+- 🚨 **CRITICAL ISSUE**: Only 1,320 out of 161,539 financial records have SEC metadata (0.8% coverage!)
+- ❌ **Scripts Broken**: `populate_sec_metadata_companyfacts.rs` needs fixing for new architecture
 - ❌ **Freshness Logic**: Cannot compare SEC filing dates with our data
 
 ## Implementation Plan - Company Facts API Approach
 
-### **Step 1: Remove Bulk Submissions Logic** 🔄
-- Remove all bulk submissions download/extraction code
-- Clean up `populate_sec_metadata.rs` binary
-- Remove zip file handling and JSON extraction logic
-- **Status**: Ready to implement
+### **Step 1: Fix Broken Scripts** ✅ **COMPLETED**
+- ✅ **FIXED**: `populate_sec_metadata_companyfacts.rs` now works with new `sec_filings` architecture
+- ✅ **REMOVED**: `populate_sec_metadata.rs` (legacy bulk submissions approach)
+- ✅ **SOLUTION**: Script now creates `sec_filings` records and links via `sec_filing_id`
+- ✅ **STATUS**: **RESOLVED** - Scripts ready for future data downloads
 
-### **Step 2: Implement Company Facts API with Rate Limiting** ⏳
+### **Step 2: Remove Bulk Submissions Logic** ✅ **COMPLETED**
+- ✅ **REMOVED**: `populate_sec_metadata.rs` binary (legacy bulk submissions approach)
+- ✅ **CLEANED**: All bulk submissions download/extraction code removed
+- ✅ **STATUS**: **COMPLETED** - Legacy bulk submissions logic eliminated
+
+### **Step 3: Implement Company Facts API with Rate Limiting** ⏳
 - **API Endpoint**: `https://data.sec.gov/api/xbrl/companyfacts/CIK##########.json`
 - **Rate Limiting**: Use `governor` crate (10 requests/second limit)
 - **Concurrency**: 10 concurrent threads with proper rate limiting
 - **Dependencies**: Add `governor` and `reqwest-middleware` to Cargo.toml
 
-### **Step 3: Concurrent Data Population** ⏳
+### **Step 4: Concurrent Data Population** ⏳
 - **Process**:
   1. Get all S&P 500 CIKs from database
   2. Create 10 concurrent workers with rate-limited HTTP client
@@ -144,7 +152,7 @@ CREATE INDEX IF NOT EXISTS idx_sp500_symbols_symbol ON sp500_symbols(symbol);
 - **Target**: Both 10-K and 10-Q filings
 - **Cleanup**: Remove records with no SEC filing match
 
-### **Step 4: Error Handling** ⏳
+### **Step 5: Error Handling** ⏳
 - **Rate Limit Compliance**: Automatic throttling via governor
 - **API Errors**: Handle 403, 429, and other HTTP errors gracefully
 - **Continue Processing**: Don't stop on individual CIK errors

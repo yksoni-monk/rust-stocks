@@ -10,7 +10,6 @@ use clap::{Parser, Subcommand};
 use rust_stocks_tauri_lib::api::schwab_client::SchwabClient;
 use rust_stocks_tauri_lib::api::StockDataProvider;
 use rust_stocks_tauri_lib::models::Config;
-use rust_stocks_tauri_lib::tools::date_range_calculator::DateRangeCalculator;
 // DataStatusReader removed - using SEC filing-based freshness checking
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
@@ -20,7 +19,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::fs;
 use tokio::sync::Semaphore;
-use tracing::{info, warn, debug};
+use tracing::{info, warn};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -123,7 +122,6 @@ struct BulkDownloader {
     progress_file: PathBuf,
     rate_limiter: Arc<Semaphore>,
     start_time: Instant,
-    date_calculator: DateRangeCalculator,
     incremental_mode: bool,
 }
 
@@ -169,7 +167,6 @@ impl BulkDownloader {
             progress_file,
             rate_limiter,
             start_time: Instant::now(),
-            date_calculator: DateRangeCalculator::new(),
             incremental_mode,
         })
     }
@@ -293,40 +290,9 @@ impl BulkDownloader {
     }
 
     async fn download_incremental_data(&self, symbol: &str, stock_id: i64, default_start: NaiveDate, end_date: NaiveDate) -> Result<usize> {
-        // Convert SQLite connection for date calculator
-        let database_url = std::env::var("DATABASE_URL")
-            .unwrap_or_else(|_| "sqlite:./db/stocks.db".to_string());
-        let sqlite_path = database_url.strip_prefix("sqlite:").unwrap_or(&database_url);
-        let conn = rusqlite::Connection::open(sqlite_path)?;
-
-        // Calculate update plan using date range calculator
-        let update_plan = self.date_calculator.calculate_update_plan(
-            &conn, symbol, stock_id, default_start, end_date
-        )?;
-
-        if update_plan.missing_ranges.is_empty() {
-            info!("📊 {} - No missing data, skipping (coverage: {:.1}%)",
-                  symbol, update_plan.coverage_percentage);
-            return Ok(0);
-        }
-
-        info!("📊 {} - Found {} missing ranges, coverage: {:.1}%",
-              symbol, update_plan.missing_ranges.len(), update_plan.coverage_percentage);
-
-        let mut total_bars = 0;
-
-        // Download each missing range
-        for range in &update_plan.missing_ranges {
-            debug!("📅 {} - Downloading range: {} to {}",
-                   symbol, range.start_date, range.end_date);
-
-            let bars = self.download_date_range(symbol, stock_id, range.start_date, range.end_date).await?;
-            total_bars += bars;
-        }
-
-        // Note: Price coverage metrics are now calculated on-demand via v_price_data_coverage view
-
-        Ok(total_bars)
+        // Simplified: just download the full range since date calculator is unused
+        info!("📊 {} - Downloading full range: {} to {}", symbol, default_start, end_date);
+        self.download_date_range(symbol, stock_id, default_start, end_date).await
     }
 
     async fn download_full_range(&self, symbol: &str, stock_id: i64, start_date: NaiveDate, end_date: NaiveDate) -> Result<usize> {

@@ -209,10 +209,10 @@ impl DataStatusReader {
         let query = r#"
             SELECT 
                 s.cik,
-                MAX(i.filed_date) as latest_filed_date
+                MAX(sf.filed_date) as latest_filed_date
             FROM stocks s
-            INNER JOIN income_statements i ON s.id = i.stock_id
-            WHERE s.is_sp500 = 1 AND s.cik IS NOT NULL AND i.filed_date IS NOT NULL
+            INNER JOIN sec_filings sf ON s.id = sf.stock_id
+            WHERE s.is_sp500 = 1 AND s.cik IS NOT NULL AND sf.filed_date IS NOT NULL
             GROUP BY s.cik
         "#;
         

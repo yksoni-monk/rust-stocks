@@ -110,11 +110,11 @@ pub async fn get_stock_date_range(symbol: String) -> Result<DateRangeInfo, Strin
     
     let result = sqlx::query("
         SELECT s.symbol, MIN(dp.date) as earliest_date, MAX(dp.date) as latest_date, 
-               COUNT(*) as total_records, COALESCE(dp.data_source, 'unknown') as data_source
+               COUNT(*) as total_records, 'daily_prices' as data_source
         FROM daily_prices dp
         JOIN stocks s ON dp.stock_id = s.id
         WHERE s.symbol = ?1
-        GROUP BY s.symbol, dp.data_source")
+        GROUP BY s.symbol")
         .bind(&symbol)
         .fetch_optional(&pool).await;
     

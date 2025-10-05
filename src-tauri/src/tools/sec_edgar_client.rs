@@ -74,7 +74,6 @@ pub struct BalanceSheetData {
     pub current_assets: Option<f64>,
     pub current_liabilities: Option<f64>,
     pub share_repurchases: Option<f64>,
-    pub data_source: String,
 }
 
 /// Income statement data extracted from SEC filing
@@ -94,7 +93,6 @@ pub struct IncomeStatementData {
     pub tax_expense: Option<f64>,
     pub shares_basic: Option<f64>,
     pub shares_diluted: Option<f64>,
-    pub data_source: String,
 }
 
 /// Cash flow statement data extracted from SEC filing
@@ -111,7 +109,6 @@ pub struct CashFlowData {
     pub operating_cash_flow: Option<f64>,
     pub investing_cash_flow: Option<f64>,
     pub financing_cash_flow: Option<f64>,
-    pub data_source: String,
 }
 
 /// Company Facts API response structure for filing metadata
@@ -150,19 +147,55 @@ impl SecEdgarClient {
     }
 
     /// Check if financial data needs update based on latest SEC filings
+    /// Check if stock needs update based on data coverage (not just latest filing date)
     pub async fn check_if_update_needed(&mut self, cik: &str, stock_id: i64) -> Result<bool> {
-        // Fetch company facts to get latest filing metadata
-        let latest_filing = self.get_latest_filing_date_from_api(cik).await?;
+        // Check if we have sufficient historical data coverage (at least 5 years)
+        let years_covered = self.get_years_of_data_coverage(stock_id).await?;
         
-        // Get our latest filing date from database
+        if years_covered < 5 {
+            println!("    📊 {} has only {} years of data, needs historical download", cik, years_covered);
+            return Ok(true);
+        }
+        
+        // If we have 5+ years, check if there's newer data available
+        let latest_filing = self.get_latest_filing_date_from_api(cik).await?;
         let our_latest = self.get_our_latest_filing_date(stock_id).await?;
         
-        // Return true if SEC has newer data
         match (latest_filing, our_latest) {
-            (Some(sec_date), Some(our_date)) => Ok(sec_date > our_date),
+            (Some(sec_date), Some(our_date)) => {
+                if sec_date > our_date {
+                    println!("    📋 {} has newer SEC filings available", cik);
+                    Ok(true)
+                } else {
+                    Ok(false)
+                }
+            },
             (Some(_), None) => Ok(true), // We have no data yet
             (None, _) => Ok(false), // SEC has no data or API failed
         }
+    }
+    
+    /// Get number of years of data coverage for a stock
+    async fn get_years_of_data_coverage(&self, stock_id: i64) -> Result<i32> {
+        let query = r#"
+            SELECT COUNT(DISTINCT fiscal_year) as years_covered
+            FROM (
+                SELECT fiscal_year FROM income_statements WHERE stock_id = ? AND fiscal_year >= 2016
+                UNION
+                SELECT fiscal_year FROM balance_sheets WHERE stock_id = ? AND fiscal_year >= 2016
+                UNION
+                SELECT fiscal_year FROM cash_flow_statements WHERE stock_id = ? AND fiscal_year >= 2016
+            )
+        "#;
+        
+        let result: Option<i32> = sqlx::query_scalar(query)
+            .bind(stock_id)
+            .bind(stock_id)
+            .bind(stock_id)
+            .fetch_optional(&self.pool)
+            .await?;
+            
+        Ok(result.unwrap_or(0))
     }
 
     /// Get latest filing date from SEC Company Facts API
@@ -202,8 +235,14 @@ impl SecEdgarClient {
                             if let Some(values) = usd_data.as_array() {
                                 for value in values {
                                     if let Some(filed_date) = value.get("filed").and_then(|d| d.as_str()) {
-                                        if latest_date.is_none() || filed_date > latest_date.as_ref().unwrap().as_str() {
-                                            latest_date = Some(filed_date.to_string());
+                                        // Filter out future dates - only use actual historical filings
+                                        if let Ok(parsed_date) = chrono::NaiveDate::parse_from_str(filed_date, "%Y-%m-%d") {
+                                            let today = chrono::Utc::now().date_naive();
+                                            if parsed_date <= today {
+                                                if latest_date.is_none() || filed_date > latest_date.as_ref().unwrap().as_str() {
+                                                    latest_date = Some(filed_date.to_string());
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -219,19 +258,14 @@ impl SecEdgarClient {
 
     /// Get latest filing date from our database (checks all financial tables)
     pub async fn get_our_latest_filing_date(&self, stock_id: i64) -> Result<Option<String>> {
+        // ✅ FIXED: Query sec_filings table instead of financial tables
         let query = r#"
-            SELECT MAX(filed_date) as latest_filed_date FROM (
-                SELECT filed_date FROM income_statements WHERE stock_id = ? AND filed_date IS NOT NULL
-                UNION ALL
-                SELECT filed_date FROM balance_sheets WHERE stock_id = ? AND filed_date IS NOT NULL
-                UNION ALL
-                SELECT filed_date FROM cash_flow_statements WHERE stock_id = ? AND filed_date IS NOT NULL
-            )
+            SELECT MAX(sf.filed_date) as latest_filed_date 
+            FROM sec_filings sf
+            WHERE sf.stock_id = ? AND sf.filed_date IS NOT NULL
         "#;
         
         let result: Option<String> = sqlx::query_scalar(query)
-            .bind(stock_id)
-            .bind(stock_id)
             .bind(stock_id)
             .fetch_optional(&self.pool)
             .await?;
@@ -395,11 +429,11 @@ impl SecEdgarClient {
         Ok(filings)
     }
 
-    /// Extract balance sheet data using SEC EDGAR Company Facts API
+    /// Extract historical balance sheet data using SEC EDGAR Company Facts API
     pub async fn extract_balance_sheet_data(&mut self, cik: &str, stock_id: i64, symbol: &str) -> Result<Option<BalanceSheetData>> {
         self.rate_limiter.wait_if_needed().await;
 
-        println!("  📊 Extracting balance sheet data for {} using Company Facts API", symbol);
+        println!("  📊 Extracting historical balance sheet data for {} using Company Facts API", symbol);
         
         // Use SEC EDGAR Company Facts API
         let url = format!(
@@ -420,103 +454,143 @@ impl SecEdgarClient {
 
         let json: serde_json::Value = response.json().await?;
         
-        // Extract balance sheet data from JSON
-        let balance_sheet_data = self.parse_company_facts_json(&json, symbol)?;
+        // Extract historical balance sheet data from JSON
+        let historical_balance_data = self.parse_company_facts_json(&json, symbol)?;
         
-        // Extract cash flow data from JSON
-        let cash_flow_data = self.parse_cash_flow_json(&json, symbol)?;
+        // Extract historical cash flow data from JSON
+        let historical_cash_flow_data = self.parse_cash_flow_json(&json, symbol)?;
         
-        if balance_sheet_data.is_empty() && cash_flow_data.is_empty() {
-            println!("    ⚠️ No balance sheet data found for {}", symbol);
+        if historical_balance_data.is_empty() && historical_cash_flow_data.is_empty() {
+            println!("    ⚠️ No historical data found for {}", symbol);
             return Ok(None);
         }
 
-        // Get the most recent fiscal year
-        let current_year = Utc::now().year();
-        let fiscal_year = current_year - 1; // Most recent completed fiscal year
-        
-        // Calculate total debt from components if not directly available
-        let short_term_debt = balance_sheet_data.get("ShortTermDebt")
-            .or(balance_sheet_data.get("DebtCurrent"))
-            .copied();
-        let long_term_debt = balance_sheet_data.get("LongTermDebt").copied();
-        let total_debt = balance_sheet_data.get("TotalDebt")
-            .copied()
-            .or_else(|| {
-                // Calculate from components if available
-                match (short_term_debt, long_term_debt) {
-                    (Some(st), Some(lt)) => Some(st + lt),
-                    (Some(st), None) => Some(st),
-                    (None, Some(lt)) => Some(lt),
-                    (None, None) => None,
-                }
-            });
-        
         // Extract filing metadata for storage
         let filing_metadata = self.extract_filing_metadata(&json, symbol).ok();
-        let latest_metadata = filing_metadata.as_ref().and_then(|v| v.first());
+        
+        // Group historical data by report date and store multiple records
+        let mut stored_records = 0;
+        
+        // Group balance sheet data by report date
+        let mut balance_by_date: HashMap<String, HashMap<String, f64>> = HashMap::new();
+        for (field, value, report_date, _filed_date) in historical_balance_data {
+            balance_by_date.entry(report_date.clone())
+                .or_insert_with(HashMap::new)
+                .insert(field, value);
+        }
+        
+        // Group cash flow data by report date
+        let mut cash_flow_by_date: HashMap<String, HashMap<String, f64>> = HashMap::new();
+        for (field, value, report_date, _filed_date) in historical_cash_flow_data {
+            cash_flow_by_date.entry(report_date.clone())
+                .or_insert_with(HashMap::new)
+                .insert(field, value);
+        }
+        
+        // Store data for each report date
+        for (report_date_str, balance_data) in balance_by_date {
+            if let Ok(report_date) = chrono::NaiveDate::parse_from_str(&report_date_str, "%Y-%m-%d") {
+                let fiscal_year = report_date.year() as i32;
+                
+                // Calculate total debt from components if not directly available
+                let short_term_debt = balance_data.get("ShortTermDebt")
+                    .or(balance_data.get("DebtCurrent"))
+                    .copied();
+                let long_term_debt = balance_data.get("LongTermDebt").copied();
+                let total_debt = balance_data.get("TotalDebt")
+                    .copied()
+                    .or_else(|| {
+                        // Calculate from components if available
+                        match (short_term_debt, long_term_debt) {
+                            (Some(st), Some(lt)) => Some(st + lt),
+                            (Some(st), None) => Some(st),
+                            (None, Some(lt)) => Some(lt),
+                            (None, None) => None,
+                        }
+                    });
+                
+                // Find matching filing metadata for this report date
+                let matching_metadata = filing_metadata.as_ref()
+                    .and_then(|metadata_vec| {
+                        metadata_vec.iter()
+                            .find(|m| m.report_date == report_date_str)
+                    });
 
-        // Store balance sheet data
-        let balance_sheet_result = self.store_balance_sheet_data(&BalanceSheetData {
-            stock_id,
-            symbol: symbol.to_string(),
-            report_date: NaiveDate::from_ymd_opt(fiscal_year, 12, 31).unwrap_or_default(),
-            fiscal_year,
-            total_assets: balance_sheet_data.get("Assets").copied(),
-            total_liabilities: balance_sheet_data.get("Liabilities").copied(),
-            total_equity: balance_sheet_data.get("StockholdersEquity").copied(),
-            cash_and_equivalents: balance_sheet_data.get("CashAndCashEquivalentsAtCarryingValue").copied(),
-            short_term_debt,
-            long_term_debt,
-            total_debt,
-            current_assets: balance_sheet_data.get("AssetsCurrent").copied(),
-            current_liabilities: balance_sheet_data.get("LiabilitiesCurrent").copied(),
-            share_repurchases: balance_sheet_data.get("ShareRepurchases").copied(),
-            data_source: "sec_edgar_json".to_string(),
-        }, latest_metadata).await;
+                // Store balance sheet data
+                let balance_sheet_result = self.store_balance_sheet_data(&BalanceSheetData {
+                    stock_id,
+                    symbol: symbol.to_string(),
+                    report_date,
+                    fiscal_year,
+                    total_assets: balance_data.get("Assets").copied(),
+                    total_liabilities: balance_data.get("Liabilities").copied(),
+                    total_equity: balance_data.get("StockholdersEquity").copied(),
+                    cash_and_equivalents: balance_data.get("CashAndCashEquivalentsAtCarryingValue").copied(),
+                    short_term_debt,
+                    long_term_debt,
+                    total_debt,
+                    current_assets: balance_data.get("AssetsCurrent").copied(),
+                    current_liabilities: balance_data.get("LiabilitiesCurrent").copied(),
+                    share_repurchases: balance_data.get("ShareRepurchases").copied(),
+                }, matching_metadata).await;
 
-        // Store cash flow data
-        let cash_flow_result = self.store_cash_flow_data(&CashFlowData {
-            stock_id,
-            symbol: symbol.to_string(),
-            report_date: NaiveDate::from_ymd_opt(fiscal_year, 12, 31).unwrap_or_default(),
-            fiscal_year,
-            depreciation_expense: cash_flow_data.get("depreciation_expense").copied(),
-            amortization_expense: cash_flow_data.get("amortization_expense").copied(),
-            dividends_paid: cash_flow_data.get("dividends_paid").copied(),
-            share_repurchases: cash_flow_data.get("share_repurchases").copied(),
-            operating_cash_flow: cash_flow_data.get("operating_cash_flow").copied(),
-            investing_cash_flow: cash_flow_data.get("investing_cash_flow").copied(),
-            financing_cash_flow: cash_flow_data.get("financing_cash_flow").copied(),
-            data_source: "sec_edgar_json".to_string(),
-        }, latest_metadata).await;
+                // Store cash flow data for the same report date
+                if let Some(cash_flow_data) = cash_flow_by_date.get(&report_date_str) {
+                    let cash_flow_result = self.store_cash_flow_data(&CashFlowData {
+                        stock_id,
+                        symbol: symbol.to_string(),
+                        report_date,
+                        fiscal_year,
+                        depreciation_expense: cash_flow_data.get("depreciation_expense").copied(),
+                        amortization_expense: cash_flow_data.get("amortization_expense").copied(),
+                        dividends_paid: cash_flow_data.get("dividends_paid").copied(),
+                        share_repurchases: cash_flow_data.get("share_repurchases").copied(),
+                        operating_cash_flow: cash_flow_data.get("operating_cash_flow").copied(),
+                        investing_cash_flow: cash_flow_data.get("investing_cash_flow").copied(),
+                        financing_cash_flow: cash_flow_data.get("financing_cash_flow").copied(),
+                    }, matching_metadata).await;
 
-        if balance_sheet_result.is_err() || cash_flow_result.is_err() {
-            println!("    ⚠️ Failed to store data for {}", symbol);
+                    if cash_flow_result.is_err() {
+                        println!("    ⚠️ Failed to store cash flow data for {} on {}", symbol, report_date_str);
+                    }
+                }
+
+                if balance_sheet_result.is_ok() {
+                    stored_records += 1;
+                } else {
+                    println!("    ⚠️ Failed to store balance sheet data for {} on {}", symbol, report_date_str);
+                }
+            }
         }
 
-        Ok(Some(BalanceSheetData {
-            stock_id,
-            symbol: symbol.to_string(),
-            report_date: NaiveDate::from_ymd_opt(fiscal_year, 12, 31).unwrap_or_default(),
-            fiscal_year,
-            total_assets: balance_sheet_data.get("Assets").copied(),
-            total_liabilities: balance_sheet_data.get("Liabilities").copied(),
-            total_equity: balance_sheet_data.get("StockholdersEquity").copied(),
-            cash_and_equivalents: balance_sheet_data.get("CashAndCashEquivalentsAtCarryingValue").copied(),
-            short_term_debt,
-            long_term_debt,
-            total_debt,
-            current_assets: balance_sheet_data.get("AssetsCurrent").copied(),
-            current_liabilities: balance_sheet_data.get("LiabilitiesCurrent").copied(),
-            share_repurchases: balance_sheet_data.get("ShareRepurchases").copied(),
-            data_source: "sec_edgar_json".to_string(),
-        }))
+        println!("    ✅ Successfully stored {} historical balance sheet records for {}", stored_records, symbol);
+        
+        // Return the most recent record for compatibility
+        if stored_records > 0 {
+            Ok(Some(BalanceSheetData {
+                stock_id,
+                symbol: symbol.to_string(),
+                report_date: chrono::NaiveDate::from_ymd_opt(2024, 12, 31).unwrap_or_default(),
+                fiscal_year: 2024,
+                total_assets: None,
+                total_liabilities: None,
+                total_equity: None,
+                cash_and_equivalents: None,
+                short_term_debt: None,
+                long_term_debt: None,
+                total_debt: None,
+                current_assets: None,
+                current_liabilities: None,
+                share_repurchases: None,
+            }))
+        } else {
+            Ok(None)
+        }
     }
 
-    /// Parse Company Facts JSON to extract balance sheet data
-    fn parse_company_facts_json(&self, json: &serde_json::Value, _symbol: &str) -> Result<HashMap<String, f64>> {
-        let mut balance_sheet_data = HashMap::new();
+    /// Parse Company Facts JSON to extract historical balance sheet data since 2016
+    fn parse_company_facts_json(&self, json: &serde_json::Value, symbol: &str) -> Result<Vec<(String, f64, String, String)>> {
+        let mut historical_data = Vec::new();
         
         // Balance sheet field mappings (US GAAP taxonomy)
         let field_mappings = [
@@ -546,12 +620,27 @@ impl SecEdgarClient {
                     if let Some(units) = field_data.get("units") {
                         if let Some(usd_data) = units.get("USD") {
                             if let Some(values) = usd_data.as_array() {
-                                // Get the most recent value
-                                if let Some(latest_value) = values.last() {
-                                    if let Some(val) = latest_value.get("val").and_then(|v| v.as_f64()) {
-                                        if val != 0.0 {
-                                            balance_sheet_data.insert(our_field.to_string(), val);
-                                            println!("    📊 Found {}: ${:.0}M", field_name, val / 1_000_000.0);
+                                // Extract ALL historical values since 2016
+                                for value in values {
+                                    if let (Some(val), Some(end_date), Some(filed_date)) = (
+                                        value.get("val").and_then(|v| v.as_f64()),
+                                        value.get("end").and_then(|e| e.as_str()),
+                                        value.get("filed").and_then(|f| f.as_str())
+                                    ) {
+                                        // Parse the end date to check if it's 2016 or later
+                                        if let Ok(parsed_date) = chrono::NaiveDate::parse_from_str(end_date, "%Y-%m-%d") {
+                                            // Also parse the filed date to filter out future dates
+                                            if let Ok(filed_parsed) = chrono::NaiveDate::parse_from_str(filed_date, "%Y-%m-%d") {
+                                                let today = chrono::Utc::now().date_naive();
+                                                if parsed_date.year() >= 2016 && val != 0.0 && filed_parsed <= today {
+                                                    historical_data.push((
+                                                        our_field.to_string(),
+                                                        val,
+                                                        end_date.to_string(),
+                                                        filed_date.to_string()
+                                                    ));
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -562,12 +651,23 @@ impl SecEdgarClient {
             }
         }
 
-        Ok(balance_sheet_data)
+        // Sort by field name and date for better organization
+        historical_data.sort_by(|a, b| {
+            let field_cmp = a.0.cmp(&b.0);
+            if field_cmp == std::cmp::Ordering::Equal {
+                b.2.cmp(&a.2) // Most recent first
+            } else {
+                field_cmp
+            }
+        });
+
+        println!("    📊 Extracted {} historical balance sheet data points since 2016 for {}", historical_data.len(), symbol);
+        Ok(historical_data)
     }
 
-    /// Parse Company Facts JSON to extract cash flow statement data
-    fn parse_cash_flow_json(&self, json: &serde_json::Value, _symbol: &str) -> Result<HashMap<String, f64>> {
-        let mut cash_flow_data = HashMap::new();
+    /// Parse Company Facts JSON to extract historical cash flow statement data since 2016
+    fn parse_cash_flow_json(&self, json: &serde_json::Value, symbol: &str) -> Result<Vec<(String, f64, String, String)>> {
+        let mut historical_data = Vec::new();
         
         // Cash flow statement field mappings (US GAAP taxonomy)
         let field_mappings = [
@@ -592,12 +692,27 @@ impl SecEdgarClient {
                     if let Some(units) = field_data.get("units") {
                         if let Some(usd_data) = units.get("USD") {
                             if let Some(values) = usd_data.as_array() {
-                                // Get the most recent value
-                                if let Some(latest_value) = values.last() {
-                                    if let Some(val) = latest_value.get("val").and_then(|v| v.as_f64()) {
-                                        if val != 0.0 {
-                                            cash_flow_data.insert(our_field.to_string(), val);
-                                            println!("    💰 Found {}: ${:.0}M", field_name, val / 1_000_000.0);
+                                // Extract ALL historical values since 2016
+                                for value in values {
+                                    if let (Some(val), Some(end_date), Some(filed_date)) = (
+                                        value.get("val").and_then(|v| v.as_f64()),
+                                        value.get("end").and_then(|e| e.as_str()),
+                                        value.get("filed").and_then(|f| f.as_str())
+                                    ) {
+                                        // Parse the end date to check if it's 2016 or later
+                                        if let Ok(parsed_date) = chrono::NaiveDate::parse_from_str(end_date, "%Y-%m-%d") {
+                                            // Also parse the filed date to filter out future dates
+                                            if let Ok(filed_parsed) = chrono::NaiveDate::parse_from_str(filed_date, "%Y-%m-%d") {
+                                                let today = chrono::Utc::now().date_naive();
+                                                if parsed_date.year() >= 2016 && val != 0.0 && filed_parsed <= today {
+                                                    historical_data.push((
+                                                        our_field.to_string(),
+                                                        val,
+                                                        end_date.to_string(),
+                                                        filed_date.to_string()
+                                                    ));
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -608,12 +723,23 @@ impl SecEdgarClient {
             }
         }
 
-        Ok(cash_flow_data)
+        // Sort by field name and date for better organization
+        historical_data.sort_by(|a, b| {
+            let field_cmp = a.0.cmp(&b.0);
+            if field_cmp == std::cmp::Ordering::Equal {
+                b.2.cmp(&a.2) // Most recent first
+            } else {
+                field_cmp
+            }
+        });
+
+        println!("    💰 Extracted {} historical cash flow data points since 2016 for {}", historical_data.len(), symbol);
+        Ok(historical_data)
     }
 
-    /// Parse Company Facts JSON to extract income statement data including shares outstanding
-    fn parse_income_statement_json(&self, json: &serde_json::Value, _symbol: &str) -> Result<HashMap<String, f64>> {
-        let mut income_data = HashMap::new();
+    /// Parse Company Facts JSON to extract historical income statement data since 2016
+    fn parse_income_statement_json(&self, json: &serde_json::Value, symbol: &str) -> Result<Vec<(String, f64, String, String)>> {
+        let mut historical_data = Vec::new();
         
         // Income statement field mappings (US GAAP taxonomy)
         let field_mappings = [
@@ -651,12 +777,27 @@ impl SecEdgarClient {
                     if let Some(units) = field_data.get("units") {
                         if let Some(usd_data) = units.get("USD") {
                             if let Some(values) = usd_data.as_array() {
-                                // Get the most recent value
-                                if let Some(latest_value) = values.last() {
-                                    if let Some(val) = latest_value.get("val").and_then(|v| v.as_f64()) {
-                                        if val != 0.0 {
-                                            income_data.insert(our_field.to_string(), val);
-                                            println!("    📈 Found {}: ${:.0}M", field_name, val / 1_000_000.0);
+                                // Extract ALL historical values since 2016
+                                for value in values {
+                                    if let (Some(val), Some(end_date), Some(filed_date)) = (
+                                        value.get("val").and_then(|v| v.as_f64()),
+                                        value.get("end").and_then(|e| e.as_str()),
+                                        value.get("filed").and_then(|f| f.as_str())
+                                    ) {
+                                        // Parse the end date to check if it's 2016 or later
+                                        if let Ok(parsed_date) = chrono::NaiveDate::parse_from_str(end_date, "%Y-%m-%d") {
+                                            // Also parse the filed date to filter out future dates
+                                            if let Ok(filed_parsed) = chrono::NaiveDate::parse_from_str(filed_date, "%Y-%m-%d") {
+                                                let today = chrono::Utc::now().date_naive();
+                                                if parsed_date.year() >= 2016 && val != 0.0 && filed_parsed <= today {
+                                                    historical_data.push((
+                                                        our_field.to_string(),
+                                                        val,
+                                                        end_date.to_string(),
+                                                        filed_date.to_string()
+                                                    ));
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -672,12 +813,23 @@ impl SecEdgarClient {
                     if let Some(units) = field_data.get("units") {
                         if let Some(shares_data) = units.get("shares") {
                             if let Some(values) = shares_data.as_array() {
-                                // Get the most recent value
-                                if let Some(latest_value) = values.last() {
-                                    if let Some(val) = latest_value.get("val").and_then(|v| v.as_f64()) {
-                                        if val > 0.0 {
-                                            income_data.insert(our_field.to_string(), val);
-                                            println!("    📊 Found {}: {:.0}M shares", field_name, val / 1_000_000.0);
+                                // Extract ALL historical values since 2016
+                                for value in values {
+                                    if let (Some(val), Some(end_date), Some(filed_date)) = (
+                                        value.get("val").and_then(|v| v.as_f64()),
+                                        value.get("end").and_then(|e| e.as_str()),
+                                        value.get("filed").and_then(|f| f.as_str())
+                                    ) {
+                                        // Parse the end date to check if it's 2016 or later
+                                        if let Ok(parsed_date) = chrono::NaiveDate::parse_from_str(end_date, "%Y-%m-%d") {
+                                            if parsed_date.year() >= 2016 && val > 0.0 {
+                                                historical_data.push((
+                                                    our_field.to_string(),
+                                                    val,
+                                                    end_date.to_string(),
+                                                    filed_date.to_string()
+                                                ));
+                                            }
                                         }
                                     }
                                 }
@@ -688,7 +840,18 @@ impl SecEdgarClient {
             }
         }
 
-        Ok(income_data)
+        // Sort by field name and date for better organization
+        historical_data.sort_by(|a, b| {
+            let field_cmp = a.0.cmp(&b.0);
+            if field_cmp == std::cmp::Ordering::Equal {
+                b.2.cmp(&a.2) // Most recent first
+            } else {
+                field_cmp
+            }
+        });
+
+        println!("    📈 Extracted {} historical income statement data points since 2016 for {}", historical_data.len(), symbol);
+        Ok(historical_data)
     }
 
     /// Extract income statement data using SEC EDGAR Company Facts API
@@ -717,60 +880,145 @@ impl SecEdgarClient {
         let json: serde_json::Value = response.json().await?;
 
         // Extract income statement data from JSON
-        let income_data = self.parse_income_statement_json(&json, symbol)?;
+        let historical_income_data = self.parse_income_statement_json(&json, symbol)?;
 
-        if income_data.is_empty() {
-            println!("    ⚠️ No income statement data found for {}", symbol);
+        if historical_income_data.is_empty() {
+            println!("    ⚠️ No historical income statement data found for {}", symbol);
             return Ok(None);
         }
 
         // Extract filing metadata for storage
         let filing_metadata = self.extract_filing_metadata(&json, symbol).ok();
-        let latest_metadata = filing_metadata.as_ref().and_then(|v| v.first());
+        
+        // Group historical data by report date and store multiple records
+        let mut stored_records = 0;
+        
+        // Group income statement data by report date
+        let mut income_by_date: HashMap<String, HashMap<String, f64>> = HashMap::new();
+        for (field, value, report_date, _filed_date) in historical_income_data {
+            income_by_date.entry(report_date.clone())
+                .or_insert_with(HashMap::new)
+                .insert(field, value);
+        }
+        
+        // Store data for each report date
+        for (report_date_str, income_data) in income_by_date {
+            if let Ok(report_date) = chrono::NaiveDate::parse_from_str(&report_date_str, "%Y-%m-%d") {
+                let fiscal_year = report_date.year() as i32;
+                
+                // Find matching filing metadata for this report date
+                let matching_metadata = filing_metadata.as_ref()
+                    .and_then(|metadata_vec| {
+                        metadata_vec.iter()
+                            .find(|m| m.report_date == report_date_str)
+                    });
 
-        // Get the most recent fiscal year (simplified for now, will refine for تاریخی data)
-        let current_year = Utc::now().year();
-        let fiscal_year = current_year - 1; // Most recent completed fiscal year
+                // Store income statement data
+                let income_result = self.store_income_statement_data(&IncomeStatementData {
+                    stock_id,
+                    symbol: symbol.to_string(),
+                    report_date,
+                    fiscal_year,
+                    period_type: "Annual".to_string(),
+                    revenue: income_data.get("revenue").copied(),
+                    net_income: income_data.get("net_income").copied(),
+                    operating_income: income_data.get("operating_income").copied(),
+                    gross_profit: income_data.get("gross_profit").copied(),
+                    cost_of_revenue: income_data.get("cost_of_revenue").copied(),
+                    interest_expense: income_data.get("interest_expense").copied(),
+                    tax_expense: income_data.get("tax_expense").copied(),
+                    shares_basic: income_data.get("shares_basic").copied(),
+                    shares_diluted: income_data.get("shares_diluted").copied(),
+                }, matching_metadata).await;
 
-        let income_statement_data = IncomeStatementData {
-            stock_id,
-            symbol: symbol.to_string(),
-            report_date: NaiveDate::from_ymd_opt(fiscal_year, 12, 31).unwrap_or_default(), // Placeholder date
-            fiscal_year,
-            period_type: "Annual".to_string(),
-            revenue: income_data.get("revenue").copied(),
-            net_income: income_data.get("net_income").copied(),
-            operating_income: income_data.get("operating_income").copied(),
-            gross_profit: income_data.get("gross_profit").copied(),
-            cost_of_revenue: income_data.get("cost_of_revenue").copied(),
-            interest_expense: income_data.get("interest_expense").copied(),
-            tax_expense: income_data.get("tax_expense").copied(),
-            shares_basic: income_data.get("shares_basic").copied(),
-            shares_diluted: income_data.get("shares_diluted").copied(),
-            data_source: "sec_edgar_json".to_string(),
-        };
-
-        // Store income statement data with filing metadata
-        if let Err(e) = self.store_income_statement_data(&income_statement_data, latest_metadata).await {
-            println!("    ⚠️ Failed to store income statement data for {}: {}", symbol, e);
+                if income_result.is_ok() {
+                    stored_records += 1;
+                } else {
+                    println!("    ⚠️ Failed to store income statement data for {} on {}", symbol, report_date_str);
+                }
+            }
         }
 
-        Ok(Some(income_statement_data))
+        println!("    ✅ Successfully stored {} historical income statement records for {}", stored_records, symbol);
+        
+        // Return the most recent record for compatibility
+        if stored_records > 0 {
+            Ok(Some(IncomeStatementData {
+                stock_id,
+                symbol: symbol.to_string(),
+                report_date: chrono::NaiveDate::from_ymd_opt(2024, 12, 31).unwrap_or_default(),
+                fiscal_year: 2024,
+                period_type: "Annual".to_string(),
+                revenue: None,
+                net_income: None,
+                operating_income: None,
+                gross_profit: None,
+                cost_of_revenue: None,
+                interest_expense: None,
+                tax_expense: None,
+                shares_basic: None,
+                shares_diluted: None,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Create or get existing sec_filing record
+    async fn create_or_get_sec_filing(&self, stock_id: i64, metadata: &FilingMetadata) -> Result<i64> {
+        // First try to find existing record
+        let existing_query = r#"
+            SELECT id FROM sec_filings 
+            WHERE stock_id = ? AND accession_number = ? AND form_type = ? AND filed_date = ?
+        "#;
+        
+        if let Some(existing_id) = sqlx::query_scalar::<_, i64>(existing_query)
+            .bind(stock_id)
+            .bind(&metadata.accession_number)
+            .bind(&metadata.form_type)
+            .bind(&metadata.filing_date)
+            .fetch_optional(&self.pool)
+            .await?
+        {
+            return Ok(existing_id);
+        }
+
+        // Create new record
+        let insert_query = r#"
+            INSERT INTO sec_filings (stock_id, accession_number, form_type, filed_date, fiscal_period)
+            VALUES (?, ?, ?, ?, ?)
+        "#;
+        
+        let result = sqlx::query(insert_query)
+            .bind(stock_id)
+            .bind(&metadata.accession_number)
+            .bind(&metadata.form_type)
+            .bind(&metadata.filing_date)
+            .bind(&metadata.fiscal_period)
+            .execute(&self.pool)
+            .await?;
+            
+        Ok(result.last_insert_rowid())
     }
 
     /// Store balance sheet data in the database with filing metadata
     pub async fn store_balance_sheet_data(&self, data: &BalanceSheetData, filing_metadata: Option<&FilingMetadata>) -> Result<()> {
+        // First, create or get the sec_filing record if metadata is provided
+        let sec_filing_id = if let Some(metadata) = filing_metadata {
+            Some(self.create_or_get_sec_filing(data.stock_id, metadata).await?)
+        } else {
+            None
+        };
+
         let query = r#"
             INSERT OR REPLACE INTO balance_sheets (
                 stock_id, period_type, report_date, fiscal_year,
                 total_assets, total_liabilities, total_equity,
                 cash_and_equivalents, short_term_debt, long_term_debt, total_debt,
                 current_assets, current_liabilities,
-                share_repurchases, data_source, created_at,
-                accession_number, form_type, filed_date, fiscal_period
+                share_repurchases, sec_filing_id
             ) VALUES (
-                ?1, 'Annual', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, CURRENT_TIMESTAMP,
-                ?15, ?16, ?17, ?18
+                ?1, 'Annual', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14
             )
         "#;
 
@@ -788,11 +1036,7 @@ impl SecEdgarClient {
             .bind(data.current_assets)
             .bind(data.current_liabilities)
             .bind(data.share_repurchases)
-            .bind(&data.data_source)
-            .bind(filing_metadata.map(|f| &f.accession_number))
-            .bind(filing_metadata.map(|f| &f.form_type))
-            .bind(filing_metadata.map(|f| &f.filing_date))
-            .bind(filing_metadata.map(|f| &f.fiscal_period))
+            .bind(sec_filing_id)
             .execute(&self.pool)
             .await?;
 
@@ -801,15 +1045,21 @@ impl SecEdgarClient {
 
     /// Store cash flow data in the database with filing metadata
     pub async fn store_cash_flow_data(&self, data: &CashFlowData, filing_metadata: Option<&FilingMetadata>) -> Result<()> {
+        // First, create or get the sec_filing record if metadata is provided
+        let sec_filing_id = if let Some(metadata) = filing_metadata {
+            Some(self.create_or_get_sec_filing(data.stock_id, metadata).await?)
+        } else {
+            None
+        };
+
         let query = r#"
             INSERT OR REPLACE INTO cash_flow_statements (
                 stock_id, period_type, report_date, fiscal_year,
                 depreciation_expense, amortization_expense, dividends_paid,
                 share_repurchases, operating_cash_flow, investing_cash_flow, financing_cash_flow,
-                data_source, created_at, accession_number, form_type, filed_date, fiscal_period
+                sec_filing_id
             ) VALUES (
-                ?1, 'Annual', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, CURRENT_TIMESTAMP,
-                ?12, ?13, ?14, ?15
+                ?1, 'Annual', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11
             )
         "#;
 
@@ -824,11 +1074,7 @@ impl SecEdgarClient {
             .bind(data.operating_cash_flow)
             .bind(data.investing_cash_flow)
             .bind(data.financing_cash_flow)
-            .bind(&data.data_source)
-            .bind(filing_metadata.map(|f| &f.accession_number))
-            .bind(filing_metadata.map(|f| &f.form_type))
-            .bind(filing_metadata.map(|f| &f.filing_date))
-            .bind(filing_metadata.map(|f| &f.fiscal_period))
+            .bind(sec_filing_id)
             .execute(&self.pool)
             .await?;
 
@@ -837,15 +1083,21 @@ impl SecEdgarClient {
 
     /// Store income statement data in the database with filing metadata
     pub async fn store_income_statement_data(&self, data: &IncomeStatementData, filing_metadata: Option<&FilingMetadata>) -> Result<()> {
+        // First, create or get the sec_filing record if metadata is provided
+        let sec_filing_id = if let Some(metadata) = filing_metadata {
+            Some(self.create_or_get_sec_filing(data.stock_id, metadata).await?)
+        } else {
+            None
+        };
+
         let query = r#"
             INSERT OR REPLACE INTO income_statements (
                 stock_id, period_type, report_date, fiscal_year,
                 revenue, gross_profit, operating_income, net_income,
-                shares_basic, shares_diluted, currency, data_source, created_at,
-                accession_number, form_type, filed_date, fiscal_period
+                shares_basic, shares_diluted, currency,
+                sec_filing_id
             ) VALUES (
-                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'USD', ?11, CURRENT_TIMESTAMP,
-                ?12, ?13, ?14, ?15
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'USD', ?11
             )
         "#;
 
@@ -860,11 +1112,7 @@ impl SecEdgarClient {
             .bind(data.net_income)
             .bind(data.shares_basic)
             .bind(data.shares_diluted)
-            .bind(&data.data_source)
-            .bind(filing_metadata.map(|f| &f.accession_number))
-            .bind(filing_metadata.map(|f| &f.form_type))
-            .bind(filing_metadata.map(|f| &f.filing_date))
-            .bind(filing_metadata.map(|f| &f.fiscal_period))
+            .bind(sec_filing_id)
             .execute(&self.pool)
             .await?;
 

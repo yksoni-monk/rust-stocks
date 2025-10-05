@@ -109,15 +109,15 @@ impl DataStatusReader {
         self.check_financial_filing_freshness().await
     }
 
-    /// Check financial data freshness using SEC Company Facts API (NEW APPROACH)
+    /// Check financial data freshness using SEC Company Facts API (SIMPLE APPROACH)
     pub async fn check_financial_filing_freshness(&self) -> Result<SystemFreshnessReport> {
         println!("🔍 Checking financial data freshness using SEC filing dates...");
         
         let market_data = self.check_daily_prices_direct().await?;
         
-        // Step 1: Get our latest filing dates from database
-        let our_latest_dates = self.get_our_latest_filing_dates().await?;
-        println!("✅ Found {} S&P 500 stocks with filing metadata", our_latest_dates.len());
+        // Step 1: Get ALL our filing dates from database (since 2016)
+        let our_all_dates = self.get_our_all_filing_dates().await?;
+        println!("✅ Found {} S&P 500 stocks with filing metadata", our_all_dates.len());
         
         // Step 2: Get S&P 500 stocks with CIKs
         let stocks_with_ciks = self.get_sp500_stocks_with_ciks().await?;
@@ -125,11 +125,11 @@ impl DataStatusReader {
         // Step 3: Create rate-limited HTTP client
         let (client, limiter) = self.create_rate_limited_client().await?;
         
-        // Step 4: Process CIKs concurrently to get SEC latest filing dates
-        let sec_latest_dates = self.get_sec_latest_filing_dates(&client, &limiter, &stocks_with_ciks).await?;
+        // Step 4: Process CIKs concurrently to get ALL SEC filing dates
+        let sec_all_dates = self.get_sec_all_filing_dates(&client, &limiter, &stocks_with_ciks).await?;
         
-        // Step 5: Compare our dates with SEC dates
-        let freshness_results = self.compare_filing_dates(&our_latest_dates, &sec_latest_dates).await?;
+        // Step 5: Compare our dates with SEC dates using simple logic
+        let freshness_results = self.compare_all_filing_dates(&our_all_dates, &sec_all_dates).await?;
         
         // Step 6: Generate freshness report
         let stale_count = freshness_results.iter().filter(|r| r.is_stale).count();
@@ -148,7 +148,7 @@ impl DataStatusReader {
                     .max(),
                 last_refresh: Some(Utc::now().to_rfc3339()),
                 staleness_days: None,
-                records_count: stale_count as i64,
+                records_count: stocks_with_ciks.len() as i64,  // ✅ FIXED: Count total stocks, not stale count
                 message: format!("{} out of {} stocks have latest SEC filings", current_count, stocks_with_ciks.len()),
                 refresh_priority: if stale_count > 100 { RefreshPriority::High } else if stale_count > 50 { RefreshPriority::Medium } else { RefreshPriority::Low },
                 data_summary: DataSummary {
@@ -204,25 +204,29 @@ impl DataStatusReader {
         })
     }
 
-    /// Get latest filing date for each S&P 500 stock from our database
-    async fn get_our_latest_filing_dates(&self) -> Result<HashMap<String, Option<String>>> {
+    /// Get ALL filing dates for each S&P 500 stock from our database
+    async fn get_our_all_filing_dates(&self) -> Result<HashMap<String, Vec<String>>> {
         let query = r#"
             SELECT 
                 s.cik,
-                MAX(sf.filed_date) as latest_filed_date
+                sf.filed_date
             FROM stocks s
             INNER JOIN sec_filings sf ON s.id = sf.stock_id
-            WHERE s.is_sp500 = 1 AND s.cik IS NOT NULL AND sf.filed_date IS NOT NULL
-            GROUP BY s.cik
+            WHERE s.is_sp500 = 1 
+                AND s.cik IS NOT NULL 
+                AND sf.filed_date IS NOT NULL
+                AND sf.filed_date >= '2016-01-01'
+            ORDER BY s.cik, sf.filed_date
         "#;
         
         let rows = sqlx::query(query).fetch_all(&self.pool).await?;
-        let mut results = HashMap::new();
+        let mut results: HashMap<String, Vec<String>> = HashMap::new();
 
         for row in rows {
             let cik: String = row.get("cik");
-            let latest_date: Option<String> = row.get("latest_filed_date");
-            results.insert(cik, latest_date);
+            let filed_date: String = row.get("filed_date");
+            
+            results.entry(cik).or_insert_with(Vec::new).push(filed_date);
         }
         
         Ok(results)
@@ -269,6 +273,148 @@ impl DataStatusReader {
         Ok((client, limiter))
     }
 
+    /// Get ALL SEC filing dates for S&P 500 stocks (since 2016)
+    async fn get_sec_all_filing_dates(
+        &self,
+        client: &Client,
+        limiter: &Arc<RateLimiter<governor::state::direct::NotKeyed, governor::state::InMemoryState, governor::clock::DefaultClock>>,
+        stocks: &[(i64, String, String)]
+    ) -> Result<HashMap<String, Vec<String>>> {
+        let semaphore = Arc::new(Semaphore::new(10)); // 10 concurrent workers
+        let results = Arc::new(Mutex::new(HashMap::new()));
+        
+        let mut handles = Vec::new();
+        
+        for (_stock_id, cik, symbol) in stocks {
+            let permit = semaphore.clone().acquire_owned().await?;
+            let client = client.clone();
+            let _limiter = limiter.clone();
+            let results = results.clone();
+            let cik = cik.clone();
+            let symbol = symbol.clone();
+            
+            let handle = tokio::spawn(async move {
+                let _permit = permit;
+                
+                match Self::get_all_sec_filings_for_cik(&client, &cik).await {
+                    Ok(sec_dates) => {
+                        if !sec_dates.is_empty() {
+                            println!("✅ {} (CIK: {}): Found {} SEC filings since 2016", symbol, cik, sec_dates.len());
+                            let mut res = results.lock().await;
+                            res.insert(cik, sec_dates);
+                        } else {
+                            println!("⚠️ {} (CIK: {}): No SEC filings found", symbol, cik);
+                        }
+                    }
+                    Err(e) => {
+                        println!("❌ Failed {} (CIK: {}): {}", symbol, cik, e);
+                    }
+                }
+            });
+            handles.push(handle);
+        }
+        
+        for handle in handles {
+            handle.await?;
+        }
+        
+        Ok(Arc::try_unwrap(results).unwrap().into_inner())
+    }
+
+    /// Get ALL SEC filing dates for a single CIK (since 2016)
+    async fn get_all_sec_filings_for_cik(client: &Client, cik: &str) -> Result<Vec<String>> {
+        let url = format!("https://data.sec.gov/api/xbrl/companyfacts/CIK{}.json", cik);
+        
+        let response = client
+            .get(&url)
+            .header("User-Agent", "rust-stocks-tauri/1.0")
+            .timeout(Duration::from_secs(30))
+            .send()
+            .await?;
+            
+        if !response.status().is_success() {
+            return Err(anyhow::anyhow!("HTTP error: {}", response.status()));
+        }
+        
+        let json: serde_json::Value = response.json().await?;
+        
+        // Extract ALL filing dates from the JSON
+        let mut filing_dates = Vec::new();
+        let start_date = chrono::NaiveDate::from_ymd_opt(2016, 1, 1).unwrap();
+        let today = chrono::Utc::now().date_naive();
+        
+        if let Some(facts) = json.get("facts").and_then(|f| f.get("us-gaap")) {
+            if let Some(facts_obj) = facts.as_object() {
+                for (_field_name, field_data) in facts_obj {
+                    if let Some(units) = field_data.get("units") {
+                        if let Some(usd_data) = units.get("USD") {
+                            if let Some(values) = usd_data.as_array() {
+                                for value in values {
+                                    if let Some(filed_date) = value.get("filed").and_then(|f| f.as_str()) {
+                                        if let Ok(parsed_date) = chrono::NaiveDate::parse_from_str(filed_date, "%Y-%m-%d") {
+                                            if parsed_date >= start_date && parsed_date <= today {
+                                                filing_dates.push(filed_date.to_string());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Remove duplicates and sort
+        filing_dates.sort();
+        filing_dates.dedup();
+        
+        Ok(filing_dates)
+    }
+
+    /// Compare ALL filing dates using simple logic
+    async fn compare_all_filing_dates(
+        &self,
+        our_dates: &HashMap<String, Vec<String>>,
+        sec_dates: &HashMap<String, Vec<String>>
+    ) -> Result<Vec<FilingFreshnessResult>> {
+        let mut results = Vec::new();
+        
+        for (cik, sec_filing_dates) in sec_dates {
+            let our_filing_dates = our_dates.get(cik).cloned().unwrap_or_default();
+            
+            // Convert to HashSet for efficient lookup
+            let our_dates_set: std::collections::HashSet<String> = our_filing_dates.into_iter().collect();
+            
+            // Find missing dates
+            let mut stale_dates = Vec::new();
+            for sec_date in sec_filing_dates {
+                if !our_dates_set.contains(sec_date) {
+                    stale_dates.push(sec_date.clone());
+                }
+            }
+            
+            let is_stale = !stale_dates.is_empty();
+            let our_latest = our_dates.get(cik).and_then(|dates| dates.last().cloned());
+            let sec_latest = sec_filing_dates.last().cloned();
+            
+            results.push(FilingFreshnessResult {
+                cik: cik.clone(),
+                our_latest_date: our_latest,
+                sec_latest_date: sec_latest,
+                is_stale,
+            });
+            
+            if is_stale {
+                println!("⚠️ {}: Missing {} filing dates (stale)", cik, stale_dates.len());
+            } else {
+                println!("✅ {}: All {} filing dates present (current)", cik, sec_filing_dates.len());
+            }
+        }
+        
+        Ok(results)
+    }
+
     /// Get latest filing dates from SEC Company Facts API concurrently
     async fn get_sec_latest_filing_dates(
         &self,
@@ -284,7 +430,7 @@ impl DataStatusReader {
         for (_stock_id, cik, symbol) in stocks {
             let permit = semaphore.clone().acquire_owned().await?;
             let client = client.clone();
-            let limiter = limiter.clone();
+            let _limiter = limiter.clone();
             let results = results.clone();
             let cik = cik.clone();
             let symbol = symbol.clone();
@@ -292,12 +438,12 @@ impl DataStatusReader {
             let handle = tokio::spawn(async move {
                 let _permit = permit;
                 
-                match get_sec_latest_filing_date(&client, &limiter, &cik).await {
-                    Ok(latest_date) => {
+                match Self::get_all_sec_filings_for_cik(&client, &cik).await {
+                    Ok(sec_dates) => {
+                        let latest_date = sec_dates.last().cloned();
                         let mut res = results.lock().await;
-                        res.insert(cik.clone(), latest_date.clone());
-                        println!("✅ {} (CIK: {}): Latest SEC filing {}", symbol, cik, 
-                                latest_date.as_ref().unwrap_or(&"None".to_string()));
+                        res.insert(cik.clone(), latest_date);
+                        println!("✅ {} (CIK: {}): Found {} SEC filings since 2016", symbol, cik, sec_dates.len());
                     }
                     Err(e) => {
                         println!("❌ Failed {} (CIK: {}): {}", symbol, cik, e);
@@ -330,8 +476,18 @@ impl DataStatusReader {
             
             let is_stale = match (our_latest, sec_latest) {
                 (Some(our), Some(sec)) => {
-                    // Both have dates - compare them
-                    our < sec
+                    // Both have dates - parse and compare them properly
+                    match (
+                        chrono::NaiveDate::parse_from_str(our, "%Y-%m-%d"),
+                        chrono::NaiveDate::parse_from_str(sec, "%Y-%m-%d")
+                    ) {
+                        (Ok(our_date), Ok(sec_date)) => our_date < sec_date,
+                        _ => {
+                            // If parsing fails, fall back to string comparison (shouldn't happen with proper dates)
+                            println!("⚠️ Warning: Failed to parse dates for comparison: our={}, sec={}", our, sec);
+                            our < sec
+                        }
+                    }
                 }
                 (Some(_), None) => {
                     // We have data but SEC API failed - assume current

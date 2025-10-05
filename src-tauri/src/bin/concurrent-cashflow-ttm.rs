@@ -369,8 +369,8 @@ impl ConcurrentTTMCalculator {
                 INSERT OR REPLACE INTO cash_flow_statements
                 (stock_id, period_type, report_date, fiscal_year, fiscal_period,
                  operating_cash_flow, investing_cash_flow, financing_cash_flow, net_cash_flow,
-                 depreciation_expense, dividends_paid, share_repurchases, data_source)
-                VALUES (?, 'TTM', ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, 'calculated_ttm')
+                 depreciation_expense, dividends_paid, share_repurchases)
+                VALUES (?, 'TTM', ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)
                 "#
             )
             .bind(ttm_record.stock_id)

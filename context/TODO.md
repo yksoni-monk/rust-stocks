@@ -119,7 +119,7 @@ CREATE INDEX IF NOT EXISTS idx_sp500_symbols_symbol ON sp500_symbols(symbol);
 - ✅ **Phase 1 Complete**: `sec_filings` table created with 1,281 filings
 - ✅ **Phase 2 Complete**: Duplicate EDGAR metadata columns removed from financial tables
 - 🚨 **CRITICAL ISSUE**: Only 1,320 out of 161,539 financial records have SEC metadata (0.8% coverage!)
-- ❌ **Scripts Broken**: `populate_sec_metadata_companyfacts.rs` needs fixing for new architecture
+- ✅ **Scripts Cleaned**: Removed redundant `populate_sec_metadata_companyfacts.rs` - functionality integrated into main refresh system
 - ❌ **Freshness Logic**: Cannot compare SEC filing dates with our data
 
 ## Implementation Plan - Company Facts API Approach

@@ -512,17 +512,17 @@ impl DataRefreshManager {
             sleep(StdDuration::from_millis(110)).await;
         }
         
-        // Count total records extracted
+        // Count total records extracted (using sec_filing_id to identify SEC data)
         let income_records = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM income_statements WHERE data_source = 'sec_edgar_json'"
+            "SELECT COUNT(*) FROM income_statements WHERE sec_filing_id IS NOT NULL"
         ).fetch_one(&self.pool).await?;
         
         let balance_records = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM balance_sheets WHERE data_source = 'sec_edgar_json'"
+            "SELECT COUNT(*) FROM balance_sheets WHERE sec_filing_id IS NOT NULL"
         ).fetch_one(&self.pool).await?;
         
         let cashflow_records = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM cash_flow_statements WHERE data_source = 'sec_edgar_json'"
+            "SELECT COUNT(*) FROM cash_flow_statements WHERE sec_filing_id IS NOT NULL"
         ).fetch_one(&self.pool).await?;
         
         let total_records = income_records + balance_records + cashflow_records;
@@ -733,58 +733,26 @@ impl DataRefreshManager {
     }
 
     /// Record the start of a data source refresh
-    async fn record_refresh_start(&self, data_source: &str) -> Result<()> {
-        let query = r#"
-            UPDATE data_refresh_status
-            SET last_refresh_start = CURRENT_TIMESTAMP, refresh_status = 'refreshing'
-            WHERE data_source = ?
-        "#;
-
-        sqlx::query(query)
-            .bind(data_source)
-            .execute(&self.pool)
-            .await?;
-
+    async fn record_refresh_start(&self, _data_source: &str) -> Result<()> {
+        // data_refresh_status table was removed during cleanup
+        // This function is now a no-op
         Ok(())
     }
 
     /// Record the completion of a data source refresh
     async fn record_refresh_complete(&self, data_source: &str, records_updated: i64, _duration_seconds: i32) -> Result<()> {
         println!("📝 Recording completion for {}: {} records", data_source, records_updated);
-        self.update_refresh_status(data_source, true, Some(records_updated), None).await?;
+        // data_refresh_status table was removed during cleanup
+        // This function is now a no-op
         Ok(())
     }
 
     /// Update refresh status for a data source
-    async fn update_refresh_status(&self, data_source: &str, success: bool, records: Option<i64>, error: Option<String>) -> Result<()> {
+    async fn update_refresh_status(&self, data_source: &str, success: bool, records: Option<i64>, _error: Option<String>) -> Result<()> {
         let status = if success { "current" } else { "error" };
-
         println!("🔄 Updating refresh status for {}: success={}, records={:?}, status={}", data_source, success, records, status);
-
-        let query = r#"
-            UPDATE data_refresh_status
-            SET
-                last_successful_refresh = CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE last_successful_refresh END,
-                refresh_status = ?,
-                records_updated = COALESCE(?, records_updated),
-                latest_data_date = CASE WHEN ? THEN DATE('now') ELSE latest_data_date END,
-                error_message = ?,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE data_source = ?
-        "#;
-
-        let result = sqlx::query(query)
-            .bind(success)
-            .bind(status)
-            .bind(records)
-            .bind(success)  // For latest_data_date update
-            .bind(error)
-            .bind(data_source)
-            .execute(&self.pool)
-            .await?;
-
-        println!("✅ Database update result: {} rows affected", result.rows_affected());
-
+        // data_refresh_status table was removed during cleanup
+        // This function is now a no-op
         Ok(())
     }
 

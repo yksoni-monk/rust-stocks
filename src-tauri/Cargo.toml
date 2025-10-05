@@ -34,10 +34,6 @@ path = "src/bin/fetch_ciks.rs"
 name = "import-schwab-prices"
 path = "src/bin/import-schwab-prices.rs"
 
-[[bin]]
-name = "populate_sec_metadata_companyfacts"
-path = "src/bin/populate_sec_metadata_companyfacts.rs"
-
 
 
 

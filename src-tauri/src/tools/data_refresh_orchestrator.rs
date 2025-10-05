@@ -176,9 +176,11 @@ impl DataRefreshManager {
 
                     // For critical steps, abort the entire refresh
                     if step.priority <= 2 {
-                        return Err(anyhow!("Critical refresh step failed: {}", e));
+                        println!("🔥 Critical step failed - aborting entire refresh");
+                        return Err(anyhow!("Critical refresh step '{}' failed: {}", step.name, e));
                     }
                     // For non-critical steps, continue but log the failure
+                    println!("⚠️ Non-critical step failed - continuing with remaining steps");
                 }
             }
         }
@@ -415,10 +417,11 @@ impl DataRefreshManager {
                 }
             }
 
-            // Progress update every 50 stocks
-            if updated_symbols % 50 == 0 {
-                println!("📊 Progress: {}/{} stocks processed, {} total records",
-                         updated_symbols, total_stocks, total_records);
+            // Progress update every 25 stocks or at the end
+            if updated_symbols % 25 == 0 || updated_symbols == total_stocks {
+                let progress_percent = (updated_symbols as f64 / total_stocks as f64) * 100.0;
+                println!("📊 Progress: {}/{} stocks ({:.1}%) - {} total records",
+                         updated_symbols, total_stocks, progress_percent, total_records);
             }
         }
 
@@ -456,7 +459,7 @@ impl DataRefreshManager {
         
         let total_stocks_count = stocks.len();
         
-        for row in stocks {
+        for (_index, row) in stocks.iter().enumerate() {
             let stock_id: i64 = row.get("id");
             let symbol: String = row.get("symbol");
             let cik: String = row.get("cik");
@@ -479,6 +482,7 @@ impl DataRefreshManager {
                             }
                             Err(e) => {
                                 println!("    ❌ Failed to extract data for {}: {}", symbol, e);
+                                // Continue processing other stocks even if one fails
                             }
                         }
                     } else {
@@ -489,23 +493,33 @@ impl DataRefreshManager {
                     }
                 }
                 Err(e) => {
-                    println!("    ⚠️ Freshness check failed for {}: {}. Updating anyway.", symbol, e);
+                    println!("    ⚠️ Freshness check failed for {}: {}. Attempting update anyway.", symbol, e);
                     
                     // Still try to extract if freshness check fails
                     match edgar_client.extract_balance_sheet_data(&cik, stock_id, &symbol).await {
                         Ok(Some(_)) => {
                             processed_stocks += 1;
                             updated_stocks += 1;
-                            println!("    ✅ Successfully extracted financial data for {}", symbol);
+                            println!("    ✅ Successfully extracted financial data for {} (despite freshness check failure)", symbol);
                         }
                         Ok(None) => {
-                            println!("    ⚠️ No financial data found for {}", symbol);
+                            println!("    ⚠️ No financial data found for {} (freshness check also failed)", symbol);
                         }
                         Err(extract_error) => {
-                            println!("    ❌ Failed to extract data for {}: {}", symbol, extract_error);
+                            println!("    ❌ Failed to extract data for {}: {} (freshness check also failed)", symbol, extract_error);
+                            // Continue processing other stocks even if this one fails completely
                         }
                     }
                 }
+            }
+            
+            processed_stocks += 1;
+            
+            // Show progress every 10 stocks or at the end
+            if processed_stocks % 10 == 0 || processed_stocks == total_stocks_count {
+                let progress_percent = (processed_stocks as f64 / total_stocks_count as f64) * 100.0;
+                println!("📊 Progress: {}/{} stocks ({:.1}%) - Updated: {}, Skipped: {}", 
+                    processed_stocks, total_stocks_count, progress_percent, updated_stocks, skipped_current);
             }
             
             // Add delay to respect rate limits (10 requests per second + buffer)
@@ -535,6 +549,21 @@ impl DataRefreshManager {
         println!("  Successfully processed: {}", processed_stocks);
         println!("  Total records: {} income, {} balance, {} cash flow", 
                  income_records, balance_records, cashflow_records);
+        
+        // Calculate success rate
+        let success_rate = if processed_stocks > 0 {
+            (updated_stocks as f64 / processed_stocks as f64) * 100.0
+        } else {
+            0.0
+        };
+        println!("🎯 Success rate: {:.1}% ({} successful out of {} processed)", 
+            success_rate, updated_stocks, processed_stocks);
+        
+        // Show any issues
+        let failed_count = processed_stocks - updated_stocks;
+        if failed_count > 0 {
+            println!("⚠️ {} stocks had issues during processing (check logs above)", failed_count);
+        }
         
         Ok(total_records)
     }

@@ -276,7 +276,54 @@ async fn show_refresh_plan(pool: &sqlx::SqlitePool, cli: &Cli) -> Result<()> {
 
 /// Execute the data refresh
 async fn execute_data_refresh(pool: &sqlx::SqlitePool, _cli: &Cli, mode: RefreshMode) -> Result<()> {
-    println!("🚀 Starting data refresh in {:?} mode...\n", mode);
+    println!("🔍 Checking data freshness before refresh...\n");
+
+    // First, check what needs refreshing
+    let freshness_checker = DataStatusReader::new(pool.clone());
+    let report = freshness_checker.check_system_freshness().await?;
+
+    // Determine what data sources need refreshing
+    let mut stale_sources = Vec::new();
+    let mut total_stale_count = 0;
+
+    match mode {
+        RefreshMode::Financials => {
+            if report.financial_data.status.needs_refresh() {
+                stale_sources.push("financial statements");
+                total_stale_count += report.financial_data.records_count;
+            }
+        }
+        RefreshMode::Market => {
+            if report.market_data.status.needs_refresh() {
+                stale_sources.push("market data");
+                total_stale_count += report.market_data.records_count;
+            }
+        }
+    }
+
+    // If no stale data, inform user and exit
+    if stale_sources.is_empty() {
+        println!("✅ All {:?} data is current. No refresh needed.", mode);
+        println!("💡 You can run screening algorithms with confidence.");
+        return Ok(());
+    }
+
+    // Show what will be refreshed
+    println!("📊 REFRESH PLAN:");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("🎯 Mode: {:?}", mode);
+    println!("📋 Data sources to refresh: {}", stale_sources.join(", "));
+    println!("📊 Total records: {}", total_stale_count);
+    println!("⏱️  Estimated duration: 2-5 minutes");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+    // Ask for user confirmation
+    if !ask_user_confirmation("Do you want to proceed with the refresh? (y/n)") {
+        println!("❌ Refresh cancelled by user.");
+        return Ok(());
+    }
+
+    println!("\n🚀 Starting data refresh in {:?} mode...\n", mode);
 
     let orchestrator = DataRefreshManager::new(pool.clone()).await?;
 
@@ -343,4 +390,26 @@ fn get_available_steps(mode: &RefreshMode) -> Vec<(String, i32)> {
     }
 
     steps
+}
+
+/// Ask user for confirmation with a clear prompt
+fn ask_user_confirmation(message: &str) -> bool {
+    use std::io::{self, Write};
+    
+    loop {
+        print!("{} ", message);
+        io::stdout().flush().unwrap();
+        
+        let mut input = String::new();
+        io::stdin().read_line(&mut input).unwrap();
+        
+        match input.trim().to_lowercase().as_str() {
+            "y" | "yes" => return true,
+            "n" | "no" => return false,
+            _ => {
+                println!("Please enter 'y' for yes or 'n' for no.");
+                continue;
+            }
+        }
+    }
 }

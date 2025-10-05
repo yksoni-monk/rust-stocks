@@ -112,6 +112,161 @@ let current_stocks = total_stocks - stale_stocks;
 println!("📊 Progress: {}/{} stocks processed", processed, total);
 ```
 
+## 💻 COMPLETE FINANCIAL DATA REFRESH FLOW
+
+### **Step-by-Step Flow:**
+
+#### **Step 1: User Runs Command**
+```bash
+cargo run --bin refresh_data financials
+```
+
+#### **Step 2: Check Freshness (NO DOWNLOAD YET)**
+```rust
+// 1. Get ALL 497 S&P 500 stocks with CIKs
+let stocks_with_ciks = get_sp500_stocks_with_ciks().await?;
+println!("📊 Checking {} S&P 500 stocks for financial data freshness", stocks_with_ciks.len());
+
+// 2. Get our existing filing dates from database (since 2016)
+let our_all_dates = get_our_all_filing_dates().await?;
+println!("✅ Found {} S&P 500 stocks with existing filing metadata", our_all_dates.len());
+
+// 3. Create rate-limited HTTP client (10 req/sec)
+let (client, limiter) = create_rate_limited_client().await?;
+
+// 4. Process ALL 497 stocks concurrently (10 at a time)
+let sec_all_dates = get_sec_all_filing_dates(&client, &limiter, &stocks_with_ciks).await?;
+```
+
+#### **Step 3: Multi-Threaded SEC API Calls**
+```rust
+// For EACH of the 497 stocks:
+for (stock_id, cik, symbol) in stocks_with_ciks {
+    // Semaphore ensures only 10 concurrent threads
+    let permit = semaphore.acquire_owned().await?;
+    
+    tokio::spawn(async move {
+        // Rate limiter ensures max 10 API calls per second
+        limiter.until_ready().await;  // Wait if needed
+        
+        // Make API call to SEC
+        let response = client.get("https://data.sec.gov/api/xbrl/companyfacts/CIK{}.json").await?;
+        
+        // Extract ALL filing dates since 2016
+        let sec_filing_dates = extract_filing_dates_from_json(response);
+        
+        // Store result
+        results.insert(cik, sec_filing_dates);
+    });
+}
+
+// Wait for all 497 stocks to complete (10 at a time)
+```
+
+#### **Step 4: Compare Our Data vs SEC Data**
+```rust
+// For EACH of the 497 stocks:
+for (stock_id, cik, symbol) in stocks_with_ciks {
+    let our_filing_dates = our_all_dates.get(cik).unwrap_or_default();
+    let sec_filing_dates = sec_all_dates.get(cik).unwrap_or_default();
+    
+    let is_stale = if sec_filing_dates.is_empty() {
+        false  // No SEC data = current
+    } else if our_filing_dates.is_empty() {
+        true   // We have no data but SEC has data = stale
+    } else {
+        // Check if we're missing any SEC dates
+        let missing_dates = sec_filing_dates - our_filing_dates;
+        !missing_dates.is_empty()
+    };
+    
+    results.push(FilingFreshnessResult { cik, is_stale });
+}
+```
+
+#### **Step 5: Show Status Report**
+```rust
+let stale_count = results.iter().filter(|r| r.is_stale).count();
+let current_count = results.len() - stale_count;
+
+println!("📊 FRESHNESS REPORT:");
+println!("  📊 Total Stocks: 497");
+println!("  ✅ Current Stocks: {}", current_count);
+println!("  ⚠️ Stale Stocks: {}", stale_count);
+```
+
+#### **Step 6: Ask User Confirmation**
+```rust
+if stale_count > 0 {
+    println!("⚠️ {} stocks need financial data refresh", stale_count);
+    println!("This will take 2-5 minutes. Continue? (y/n)");
+    
+    let should_download = ask_user_confirmation("Do you want to proceed? (y/n)");
+    
+    if should_download {
+        // PROCEED TO DOWNLOAD
+    } else {
+        println!("❌ Refresh cancelled by user.");
+        return;
+    }
+} else {
+    println!("✅ All financial data is current. No action needed.");
+    return;
+}
+```
+
+#### **Step 7: Download Only Stale Data (WITH MULTI-THREADING + RATE LIMITING)**
+```rust
+// Get only the stale stocks
+let stale_stocks = results.iter()
+    .filter(|r| r.is_stale)
+    .map(|r| get_stock_by_cik(r.cik))
+    .collect();
+
+println!("📥 Downloading fresh financial data for {} stocks...", stale_stocks.len());
+
+// Create semaphore for concurrent downloads (same as freshness check)
+let semaphore = Arc::new(Semaphore::new(10)); // 10 concurrent threads
+let mut handles = Vec::new();
+
+// Process each stale stock with multi-threading + rate limiting
+for stock in stale_stocks {
+    let permit = semaphore.clone().acquire_owned().await?;
+    let limiter = limiter.clone();
+    
+    let handle = tokio::spawn(async move {
+        let _permit = permit;  // Semaphore ensures only 10 concurrent
+        
+        limiter.until_ready().await;  // Rate limiting (10 req/sec)
+        
+        // Download financial data for this stock
+        let financial_data = download_financial_data_for_stock(stock.cik).await?;
+        
+        // Store in database
+        store_financial_data(financial_data).await?;
+        
+        println!("✅ Updated {}", stock.symbol);
+    });
+    
+    handles.push(handle);
+}
+
+// Wait for all downloads to complete
+for handle in handles {
+    handle.await?;
+}
+```
+
+### **Key Architecture Points:**
+
+1. **497 stocks checked** - ALL S&P 500 stocks
+2. **10 concurrent threads** - semaphore limits concurrency
+3. **10 req/sec rate limit** - governor ensures SEC compliance
+4. **Only stale stocks downloaded** - incremental updates
+5. **User confirmation required** - no surprise downloads
+6. **Clear progress feedback** - user knows what's happening
+7. **Both phases use same architecture** - freshness check AND download
+
 ## 💻 COMPLETE IMPLEMENTATION (PSEUDO CODE)
 
 ### Main Entry Point
@@ -274,30 +429,32 @@ impl DataFreshnessChecker {
         Ok(results)
     }
     
-    /// Get ALL SEC filing dates for S&P 500 stocks (since 2016)
+    /// Get ALL SEC filing dates for S&P 500 stocks (since 2016) - MULTI-THREADED ARCHITECTURE
     async fn get_sec_all_filing_dates(
         &self,
         client: &Client,
         limiter: &Arc<RateLimiter<NotKeyed, InMemoryState, DefaultClock>>,
-        stocks: &[(i64, String, String)]
+        stocks: &[(i64, String, String)]  // ALL 497 stocks
     ) -> Result<HashMap<String, Vec<String>>> {
-        let semaphore = Arc::new(Semaphore::new(10)); // 10 concurrent workers
+        let semaphore = Arc::new(Semaphore::new(10)); // 10 concurrent threads
         let results = Arc::new(Mutex::new(HashMap::new()));
         
         let mut handles = Vec::new();
         
+        // Process ALL 497 stocks, but only 10 at a time due to semaphore
         for (_stock_id, cik, symbol) in stocks {
             let permit = semaphore.clone().acquire_owned().await?;
             let client = client.clone();
-            let limiter = limiter.clone();
+            let limiter = limiter.clone();  // Governor rate limiter (10 req/sec)
             let results = results.clone();
             let cik = cik.clone();
             let symbol = symbol.clone();
             
             let handle = tokio::spawn(async move {
-                let _permit = permit;
+                let _permit = permit;  // Semaphore ensures only 10 concurrent threads
                 
-                match Self::get_all_sec_filings_for_cik(&client, &cik).await {
+                // Rate limiter ensures max 10 API calls per second
+                match Self::get_all_sec_filings_for_cik(&client, &limiter, &cik).await {
                     Ok(sec_dates) => {
                         if !sec_dates.is_empty() {
                             println!("✅ {} (CIK: {}): Found {} SEC filings since 2016", symbol, cik, sec_dates.len());
@@ -315,6 +472,7 @@ impl DataFreshnessChecker {
             handles.push(handle);
         }
         
+        // Wait for all 497 stocks to be processed (10 at a time)
         for handle in handles {
             handle.await?;
         }
@@ -322,8 +480,15 @@ impl DataFreshnessChecker {
         Ok(Arc::try_unwrap(results).unwrap().into_inner())
     }
     
-    /// Get ALL SEC filing dates for a single CIK (since 2016)
-    async fn get_all_sec_filings_for_cik(client: &Client, cik: &str) -> Result<Vec<String>> {
+    /// Get ALL SEC filing dates for a single CIK (since 2016) - WITH RATE LIMITING
+    async fn get_all_sec_filings_for_cik(
+        client: &Client, 
+        limiter: &Arc<RateLimiter<governor::state::direct::NotKeyed, governor::state::InMemoryState, governor::clock::DefaultClock>>,
+        cik: &str
+    ) -> Result<Vec<String>> {
+        // Apply rate limiting (10 requests per second)
+        limiter.until_ready().await;
+        
         let url = format!("https://data.sec.gov/api/xbrl/companyfacts/CIK{}.json", cik);
         
         let response = client
@@ -533,50 +698,77 @@ fn ask_user_confirmation(message: &str) -> bool {
 }
 ```
 
-### Download Functions
+### Download Functions (WITH MULTI-THREADING + RATE LIMITING)
 
 ```rust
 async fn download_financial_data() -> Result<()> {
     println!("🔄 Starting financial data download...");
     
-    // Create EDGAR client
-    let mut edgar_client = SecEdgarClient::new(pool.clone());
-    
-    // Get stale stocks
+    // Get stale stocks from freshness check results
     let stale_stocks = get_stale_financial_stocks().await?;
     
     println!("📊 Found {} stocks with stale financial data", stale_stocks.len());
     
+    // Create rate-limited HTTP client (same as freshness check)
+    let (client, limiter) = create_rate_limited_client().await?;
+    
+    // Create semaphore for concurrent downloads (same as freshness check)
+    let semaphore = Arc::new(Semaphore::new(10)); // 10 concurrent threads
+    let mut handles = Vec::new();
+    
     let mut processed = 0;
     let mut updated = 0;
     
+    // Process each stale stock with multi-threading + rate limiting
     for stock in stale_stocks {
-        println!("  📋 Processing {} ({})", stock.symbol, stock.cik);
+        let permit = semaphore.clone().acquire_owned().await?;
+        let client = client.clone();
+        let limiter = limiter.clone();
         
-        // Check if update needed
-        if edgar_client.check_if_update_needed(&stock.cik, stock.id).await? {
-            // Extract financial data
-            match edgar_client.extract_balance_sheet_data(&stock.cik, stock.id, &stock.symbol).await {
+        let handle = tokio::spawn(async move {
+            let _permit = permit;  // Semaphore ensures only 10 concurrent
+            
+            println!("  📋 Processing {} ({})", stock.symbol, stock.cik);
+            
+            // Apply rate limiting (10 requests per second)
+            limiter.until_ready().await;
+            
+            // Download financial data for this stock
+            match download_financial_data_for_stock(&client, &stock.cik, stock.id, &stock.symbol).await {
                 Ok(Some(_)) => {
-                    updated += 1;
                     println!("    ✅ Updated financial data for {}", stock.symbol);
+                    Ok(1) // Return 1 for successful update
                 }
                 Ok(None) => {
                     println!("    ⚠️ No financial data found for {}", stock.symbol);
+                    Ok(0) // Return 0 for no data found
                 }
                 Err(e) => {
                     println!("    ❌ Failed to update {}: {}", stock.symbol, e);
+                    Err(e)
                 }
             }
-        } else {
-            println!("    ⏭️ {} is already current", stock.symbol);
-        }
+        });
         
-        processed += 1;
-        
-        // Show progress
-        if processed % 10 == 0 {
-            println!("  📊 Progress: {}/{} stocks processed", processed, stale_stocks.len());
+        handles.push(handle);
+    }
+    
+    // Wait for all downloads to complete
+    for handle in handles {
+        match handle.await? {
+            Ok(update_count) => {
+                processed += 1;
+                updated += update_count;
+                
+                // Show progress every 10 stocks
+                if processed % 10 == 0 {
+                    println!("  📊 Progress: {}/{} stocks processed", processed, stale_stocks.len());
+                }
+            }
+            Err(e) => {
+                println!("  ❌ Download failed: {}", e);
+                processed += 1;
+            }
         }
     }
     
@@ -585,6 +777,33 @@ async fn download_financial_data() -> Result<()> {
     println!("  📈 Updated: {} stocks", updated);
     
     Ok(())
+}
+
+/// Download financial data for a single stock (WITH RATE LIMITING)
+async fn download_financial_data_for_stock(
+    client: &Client,
+    cik: &str,
+    stock_id: i64,
+    symbol: &str
+) -> Result<Option<i64>> {
+    // Apply rate limiting (10 requests per second)
+    limiter.until_ready().await;
+    
+    // Create EDGAR client for this specific stock
+    let mut edgar_client = SecEdgarClient::new(pool.clone());
+    
+    // Check if update needed
+    if edgar_client.check_if_update_needed(cik, stock_id).await? {
+        // Extract financial data
+        match edgar_client.extract_balance_sheet_data(cik, stock_id, symbol).await {
+            Ok(Some(records)) => Ok(Some(records)),
+            Ok(None) => Ok(None),
+            Err(e) => Err(e),
+        }
+    } else {
+        println!("    ⏭️ {} is already current", symbol);
+        Ok(None)
+    }
 }
 
 async fn download_market_data() -> Result<()> {

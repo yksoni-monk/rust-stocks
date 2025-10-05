@@ -115,21 +115,22 @@ impl DataStatusReader {
         
         let market_data = self.check_daily_prices_direct().await?;
         
-        // Step 1: Get ALL our filing dates from database (since 2016)
-        let our_all_dates = self.get_our_all_filing_dates().await?;
-        println!("✅ Found {} S&P 500 stocks with filing metadata", our_all_dates.len());
-        
-        // Step 2: Get S&P 500 stocks with CIKs
+        // Step 1: Get S&P 500 stocks with CIKs (all stocks we should check)
         let stocks_with_ciks = self.get_sp500_stocks_with_ciks().await?;
+        println!("📊 Checking {} S&P 500 stocks for financial data freshness", stocks_with_ciks.len());
+        
+        // Step 2: Get ALL our filing dates from database (since 2016)
+        let our_all_dates = self.get_our_all_filing_dates().await?;
+        println!("✅ Found {} S&P 500 stocks with existing filing metadata", our_all_dates.len());
         
         // Step 3: Create rate-limited HTTP client
         let (client, limiter) = self.create_rate_limited_client().await?;
         
-        // Step 4: Process CIKs concurrently to get ALL SEC filing dates
+        // Step 4: Process ALL 497 stocks concurrently (10 at a time with rate limiting)
         let sec_all_dates = self.get_sec_all_filing_dates(&client, &limiter, &stocks_with_ciks).await?;
         
         // Step 5: Compare our dates with SEC dates using simple logic
-        let freshness_results = self.compare_all_filing_dates(&our_all_dates, &sec_all_dates).await?;
+        let freshness_results = self.compare_all_filing_dates(&our_all_dates, &sec_all_dates, &stocks_with_ciks).await?;
         
         // Step 6: Generate freshness report
         let stale_count = freshness_results.iter().filter(|r| r.is_stale).count();
@@ -259,10 +260,8 @@ impl DataStatusReader {
 
     /// Create rate-limited HTTP client using governor
     async fn create_rate_limited_client(&self) -> Result<(Client, Arc<RateLimiter<governor::state::direct::NotKeyed, governor::state::InMemoryState, governor::clock::DefaultClock>>)> {
-        // Define rate limit: 10 requests per second (SEC limit)
-        let quota = Quota::with_period(Duration::from_millis(100))
-            .unwrap()
-            .allow_burst(NonZeroU32::new(10).unwrap());
+        // Define rate limit: 10 requests per second (SEC limit) - sustained rate
+        let quota = Quota::per_second(NonZeroU32::new(10).unwrap());
         let limiter = Arc::new(RateLimiter::direct(quota));
 
         let client = Client::builder()
@@ -286,17 +285,17 @@ impl DataStatusReader {
         let mut handles = Vec::new();
         
         for (_stock_id, cik, symbol) in stocks {
-            let permit = semaphore.clone().acquire_owned().await?;
             let client = client.clone();
-            let _limiter = limiter.clone();
+            let limiter = limiter.clone();
             let results = results.clone();
+            let semaphore = semaphore.clone();
             let cik = cik.clone();
             let symbol = symbol.clone();
             
             let handle = tokio::spawn(async move {
-                let _permit = permit;
+                let _permit = semaphore.acquire_owned().await.unwrap();
                 
-                match Self::get_all_sec_filings_for_cik(&client, &cik).await {
+                match Self::get_all_sec_filings_for_cik(&client, &limiter, &cik).await {
                     Ok(sec_dates) => {
                         if !sec_dates.is_empty() {
                             println!("✅ {} (CIK: {}): Found {} SEC filings since 2016", symbol, cik, sec_dates.len());
@@ -321,8 +320,15 @@ impl DataStatusReader {
         Ok(Arc::try_unwrap(results).unwrap().into_inner())
     }
 
-    /// Get ALL SEC filing dates for a single CIK (since 2016)
-    async fn get_all_sec_filings_for_cik(client: &Client, cik: &str) -> Result<Vec<String>> {
+    /// Get ALL SEC filing dates for a single CIK (since 2016) - WITH RATE LIMITING
+    async fn get_all_sec_filings_for_cik(
+        client: &Client, 
+        limiter: &Arc<RateLimiter<governor::state::direct::NotKeyed, governor::state::InMemoryState, governor::clock::DefaultClock>>,
+        cik: &str
+    ) -> Result<Vec<String>> {
+        // Apply rate limiting (10 requests per second)
+        limiter.until_ready().await;
+        
         let url = format!("https://data.sec.gov/api/xbrl/companyfacts/CIK{}.json", cik);
         
         let response = client
@@ -372,31 +378,39 @@ impl DataStatusReader {
         Ok(filing_dates)
     }
 
-    /// Compare ALL filing dates using simple logic
+    /// Compare ALL filing dates using simple logic - checks ALL S&P 500 stocks
     async fn compare_all_filing_dates(
         &self,
         our_dates: &HashMap<String, Vec<String>>,
-        sec_dates: &HashMap<String, Vec<String>>
+        sec_dates: &HashMap<String, Vec<String>>,
+        all_stocks: &[(i64, String, String)]  // (stock_id, cik, symbol)
     ) -> Result<Vec<FilingFreshnessResult>> {
         let mut results = Vec::new();
         
-        for (cik, sec_filing_dates) in sec_dates {
+        for (_stock_id, cik, symbol) in all_stocks {
+            let sec_filing_dates = sec_dates.get(cik).cloned().unwrap_or_default();
             let our_filing_dates = our_dates.get(cik).cloned().unwrap_or_default();
             
-            // Convert to HashSet for efficient lookup
-            let our_dates_set: std::collections::HashSet<String> = our_filing_dates.into_iter().collect();
-            
-            // Find missing dates
-            let mut stale_dates = Vec::new();
-            for sec_date in sec_filing_dates {
-                if !our_dates_set.contains(sec_date) {
-                    stale_dates.push(sec_date.clone());
+            let is_stale = if sec_filing_dates.is_empty() {
+                // No SEC data available - consider current (nothing to download)
+                false
+            } else if our_filing_dates.is_empty() {
+                // We have no data but SEC has data - definitely stale
+                true
+            } else {
+                // Both have data - check if we're missing any SEC dates
+                let our_dates_set: std::collections::HashSet<String> = our_filing_dates.iter().cloned().collect();
+                let mut missing_dates = 0;
+                for sec_date in &sec_filing_dates {
+                    if !our_dates_set.contains(sec_date) {
+                        missing_dates += 1;
+                    }
                 }
-            }
+                missing_dates > 0
+            };
             
-            let is_stale = !stale_dates.is_empty();
             let our_latest = our_dates.get(cik).and_then(|dates| dates.last().cloned());
-            let sec_latest = sec_filing_dates.last().cloned();
+            let sec_latest = sec_dates.get(cik).and_then(|dates| dates.last().cloned());
             
             results.push(FilingFreshnessResult {
                 cik: cik.clone(),
@@ -406,9 +420,18 @@ impl DataStatusReader {
             });
             
             if is_stale {
-                println!("⚠️ {}: Missing {} filing dates (stale)", cik, stale_dates.len());
+                if our_filing_dates.is_empty() {
+                    println!("⚠️ {} ({}): No data in database, SEC has {} filings (stale)", symbol, cik, sec_filing_dates.len());
+                } else {
+                    let missing_count = sec_filing_dates.len() - our_filing_dates.len();
+                    println!("⚠️ {} ({}): Missing {} filing dates (stale)", symbol, cik, missing_count);
+                }
             } else {
-                println!("✅ {}: All {} filing dates present (current)", cik, sec_filing_dates.len());
+                if sec_filing_dates.is_empty() {
+                    println!("✅ {} ({}): No SEC data available (current)", symbol, cik);
+                } else {
+                    println!("✅ {} ({}): All {} filing dates present (current)", symbol, cik, sec_filing_dates.len());
+                }
             }
         }
         
@@ -428,17 +451,17 @@ impl DataStatusReader {
         let mut handles = Vec::new();
         
         for (_stock_id, cik, symbol) in stocks {
-            let permit = semaphore.clone().acquire_owned().await?;
             let client = client.clone();
-            let _limiter = limiter.clone();
+            let limiter = limiter.clone();
             let results = results.clone();
+            let semaphore = semaphore.clone();
             let cik = cik.clone();
             let symbol = symbol.clone();
             
             let handle = tokio::spawn(async move {
-                let _permit = permit;
+                let _permit = semaphore.acquire_owned().await.unwrap();
                 
-                match Self::get_all_sec_filings_for_cik(&client, &cik).await {
+                match Self::get_all_sec_filings_for_cik(&client, &limiter, &cik).await {
                     Ok(sec_dates) => {
                         let latest_date = sec_dates.last().cloned();
                         let mut res = results.lock().await;

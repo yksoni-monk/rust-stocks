@@ -274,7 +274,7 @@ impl SecEdgarClient {
     }
 
     /// Extract filing metadata from Company Facts API response
-    fn extract_filing_metadata(&self, json: &serde_json::Value, _symbol: &str) -> Result<Vec<FilingMetadata>> {
+    pub fn extract_filing_metadata(&self, json: &serde_json::Value, _symbol: &str) -> Result<Vec<FilingMetadata>> {
         let mut metadata_vec = Vec::new();
         
         if let Some(facts) = json.get("facts").and_then(|f| f.get("us-gaap")) {
@@ -589,7 +589,7 @@ impl SecEdgarClient {
     }
 
     /// Parse Company Facts JSON to extract historical balance sheet data since 2016
-    fn parse_company_facts_json(&self, json: &serde_json::Value, symbol: &str) -> Result<Vec<(String, f64, String, String)>> {
+    pub fn parse_company_facts_json(&self, json: &serde_json::Value, symbol: &str) -> Result<Vec<(String, f64, String, String)>> {
         let mut historical_data = Vec::new();
         
         // Balance sheet field mappings (US GAAP taxonomy)
@@ -666,7 +666,7 @@ impl SecEdgarClient {
     }
 
     /// Parse Company Facts JSON to extract historical cash flow statement data since 2016
-    fn parse_cash_flow_json(&self, json: &serde_json::Value, symbol: &str) -> Result<Vec<(String, f64, String, String)>> {
+    pub fn parse_cash_flow_json(&self, json: &serde_json::Value, symbol: &str) -> Result<Vec<(String, f64, String, String)>> {
         let mut historical_data = Vec::new();
         
         // Cash flow statement field mappings (US GAAP taxonomy)
@@ -738,7 +738,7 @@ impl SecEdgarClient {
     }
 
     /// Parse Company Facts JSON to extract historical income statement data since 2016
-    fn parse_income_statement_json(&self, json: &serde_json::Value, symbol: &str) -> Result<Vec<(String, f64, String, String)>> {
+    pub fn parse_income_statement_json(&self, json: &serde_json::Value, symbol: &str) -> Result<Vec<(String, f64, String, String)>> {
         let mut historical_data = Vec::new();
         
         // Income statement field mappings (US GAAP taxonomy)

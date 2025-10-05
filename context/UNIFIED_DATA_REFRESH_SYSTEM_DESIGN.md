@@ -1326,3 +1326,707 @@ else:
 **Your simple logic is now implemented and working perfectly!**
 
 **Ready for implementation with high confidence of success.**
+
+---
+
+# 🚀 OPTIMIZED SINGLE-STAGE ARCHITECTURE
+
+## 🎯 **OBJECTIVE**
+
+**Eliminate duplicate API calls** by combining freshness checking and data extraction into a single atomic operation. Instead of downloading SEC JSON files twice (once for checking, once for extracting), we download once and do both operations.
+
+## 🔍 **CURRENT INEFFICIENT FLOW:**
+
+1. **Stage 1**: Download SEC JSON → Check staleness → Show report
+2. **Stage 2**: Ask user permission → Download same SEC JSON again → Extract & store data
+
+**Problem**: We're making duplicate API calls to the same endpoints!
+
+## ✅ **NEW OPTIMIZED FLOW:**
+
+1. **Single Stage**: Download SEC JSON → Check staleness → Extract & store missing data → Show final report
+
+## 🔧 **DETAILED IMPLEMENTATION PLAN**
+
+### **Phase 1: Modify Worker Function**
+
+#### **Current Worker Function:**
+```rust
+async fn get_all_sec_filings_for_cik(
+    client: &Client, 
+    limiter: &Arc<RateLimiter<...>>,
+    cik: &str
+) -> Result<Vec<String>> {
+    // Only extracts filing dates
+    // Returns: Vec<String> (filing dates)
+}
+```
+
+#### **New Worker Function:**
+```rust
+async fn get_all_sec_filings_for_cik_and_extract_data(
+    client: &Client, 
+    limiter: &Arc<RateLimiter<...>>,
+    cik: &str,
+    stock_id: i64,
+    symbol: &str,
+    pool: &SqlitePool  // ✅ FIXED: Add database pool
+) -> Result<(Vec<String>, i64)> {
+    // Apply rate limiting
+    limiter.until_ready().await;
+    
+    // Download JSON (same as current)
+    let url = format!("https://data.sec.gov/api/xbrl/companyfacts/CIK{}.json", cik);
+    let response = client
+        .get(&url)
+        .header("User-Agent", "rust-stocks-tauri/1.0")
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await?;
+        
+    if !response.status().is_success() {
+        return Err(anyhow::anyhow!("HTTP error: {}", response.status()));
+    }
+    
+    let json: serde_json::Value = response.json().await?;
+    
+    // Extract filing dates (same as current logic)
+    let mut filing_dates = Vec::new();
+    let start_date = chrono::NaiveDate::from_ymd_opt(2016, 1, 1).unwrap();
+    let today = chrono::Utc::now().date_naive();
+    
+    if let Some(facts) = json.get("facts").and_then(|f| f.get("us-gaap")) {
+        if let Some(facts_obj) = facts.as_object() {
+            for (_field_name, field_data) in facts_obj {
+                if let Some(units) = field_data.get("units") {
+                    if let Some(usd_data) = units.get("USD") {
+                        if let Some(values) = usd_data.as_array() {
+                            for value in values {
+                                if let Some(filed_date) = value.get("filed").and_then(|f| f.as_str()) {
+                                    if let Ok(parsed_date) = chrono::NaiveDate::parse_from_str(filed_date, "%Y-%m-%d") {
+                                        if parsed_date >= start_date && parsed_date <= today {
+                                            filing_dates.push(filed_date.to_string());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // Remove duplicates and sort
+    filing_dates.sort();
+    filing_dates.dedup();
+    
+    // NEW: Extract and store missing financial data
+    let mut records_stored = 0;
+    
+    // Get our existing filing dates for this CIK
+    let our_dates = Self::get_our_filing_dates_for_cik(pool, cik).await?;
+    let our_dates_set: std::collections::HashSet<String> = our_dates.into_iter().collect();
+    
+    // Find missing dates
+    let missing_dates: Vec<String> = filing_dates.iter()
+        .filter(|date| !our_dates_set.contains(*date))
+        .cloned()
+        .collect();
+    
+    if !missing_dates.is_empty() {
+        println!("📊 Extracting {} missing financial records for {}", missing_dates.len(), symbol);
+        
+        // ✅ FIXED: Use existing sec_edgar_client logic
+        let mut edgar_client = SecEdgarClient::new(pool.clone());
+        
+        // Extract and store balance sheet data for missing dates
+        let balance_result = Self::extract_and_store_balance_sheet_data(&mut edgar_client, &json, stock_id, symbol, &missing_dates).await?;
+        records_stored += balance_result;
+        
+        // Extract and store income statement data for missing dates  
+        let income_result = Self::extract_and_store_income_statement_data(&mut edgar_client, &json, stock_id, symbol, &missing_dates).await?;
+        records_stored += income_result;
+        
+        // Extract and store cash flow data for missing dates
+        let cashflow_result = Self::extract_and_store_cash_flow_data(&mut edgar_client, &json, stock_id, symbol, &missing_dates).await?;
+        records_stored += cashflow_result;
+        
+        println!("✅ Stored {} financial records for {}", records_stored, symbol);
+    } else {
+        println!("✅ {} already has all financial data (current)", symbol);
+    }
+    
+    Ok((filing_dates, records_stored))
+}
+```
+
+### **Phase 2: Modify Manager Function**
+
+#### **Current Manager Function:**
+```rust
+async fn get_sec_all_filing_dates(
+    &self,
+    client: &Client,
+    limiter: &Arc<RateLimiter<...>>,
+    stocks: &[(i64, String, String)]
+) -> Result<HashMap<String, Vec<String>>> {
+    // Only collects filing dates
+    // Returns: HashMap<String, Vec<String>>
+}
+```
+
+#### **New Manager Function:**
+```rust
+async fn get_sec_all_filing_dates_and_extract_data(
+    &self,
+    client: &Client,
+    limiter: &Arc<RateLimiter<...>>,
+    stocks: &[(i64, String, String)],  // (stock_id, cik, symbol)
+    pool: &SqlitePool  // ✅ FIXED: Add database pool
+) -> Result<(HashMap<String, Vec<String>>, i64)> {
+    let semaphore = Arc::new(Semaphore::new(10)); // 10 concurrent workers
+    let results = Arc::new(Mutex::new(HashMap::new()));
+    let total_records = Arc::new(Mutex::new(0i64));
+    let error_reports = Arc::new(Mutex::new(Vec::new()));
+    
+    let mut handles = Vec::new();
+    
+    for (stock_id, cik, symbol) in stocks {
+        let client = client.clone();
+        let limiter = limiter.clone();
+        let results = results.clone();
+        let total_records = total_records.clone();
+        let error_reports = error_reports.clone();
+        let semaphore = semaphore.clone();
+        let pool = pool.clone();  // ✅ FIXED: Clone pool
+        let cik = cik.clone();
+        let symbol = symbol.clone();
+        
+        let handle = tokio::spawn(async move {
+            let _permit = semaphore.acquire_owned().await.unwrap();
+            
+            match Self::get_all_sec_filings_for_cik_and_extract_data(&client, &limiter, &cik, *stock_id, &symbol, &pool).await {
+                Ok((sec_dates, records_stored)) => {
+                    if !sec_dates.is_empty() {
+                        let mut res = results.lock().await;
+                        res.insert(cik, sec_dates);
+                        
+                        let mut total = total_records.lock().await;
+                        *total += records_stored;
+                    }
+                }
+                Err(e) => {
+                    println!("❌ Failed {} (CIK: {}): {}", symbol, cik, e);
+                    let mut errors = error_reports.lock().await;
+                    errors.push((symbol, cik, e.to_string()));
+                }
+            }
+        });
+        handles.push(handle);
+    }
+    
+    // Wait for all tasks to complete
+    for handle in handles {
+        handle.await?;
+    }
+    
+    let results_map = Arc::try_unwrap(results).unwrap().into_inner();
+    let total_records_count = Arc::try_unwrap(total_records).unwrap().into_inner();
+    let error_list = Arc::try_unwrap(error_reports).unwrap().into_inner();
+    
+    // Store error reports for final summary
+    Self::store_error_reports(error_list).await?;
+    
+    Ok((results_map, total_records_count))
+}
+```
+
+### **Phase 3: Update Main Freshness Checker**
+
+#### **Current Flow:**
+```rust
+async fn check_financial_filing_freshness(&self) -> Result<DataFreshnessStatus> {
+    // Step 1: Get our existing dates
+    let our_all_dates = self.get_our_all_filing_dates().await?;
+    
+    // Step 2: Get S&P 500 stocks
+    let stocks_with_ciks = self.get_sp500_stocks_with_ciks().await?;
+    
+    // Step 3: Create rate-limited client
+    let (client, limiter) = self.create_rate_limited_client().await?;
+    
+    // Step 4: Process ALL stocks - get dates only
+    let sec_all_dates = self.get_sec_all_filing_dates(&client, &limiter, &stocks_with_ciks).await?;
+    
+    // Step 5: Compare dates
+    let freshness_results = self.compare_all_filing_dates(&our_all_dates, &sec_all_dates, &stocks_with_ciks).await?;
+    
+    // Step 6: Generate report
+    let stale_count = freshness_results.iter().filter(|r| r.is_stale).count();
+    let current_count = freshness_results.len() - stale_count;
+    
+    Ok(DataFreshnessStatus {
+        status: if stale_count == 0 { FreshnessStatus::Current } else { FreshnessStatus::Stale },
+        records_count: stocks_with_ciks.len() as i64,
+        last_update_date: Some(chrono::Utc::now().date_naive()),
+        data_summary: DataSummary {
+            total_records: 0, // No extraction happened yet
+            key_metrics: vec!["Financial statements".to_string()],
+            completeness_score: Some((current_count as f32 / stocks_with_ciks.len() as f32) * 100.0),
+        },
+    })
+}
+```
+
+#### **New Flow:**
+```rust
+async fn check_financial_filing_freshness(&self) -> Result<DataFreshnessStatus> {
+    println!("🔍 Checking financial data freshness and extracting missing data...");
+    
+    // Step 1: Get our existing dates
+    let our_all_dates = self.get_our_all_filing_dates().await?;
+    println!("✅ Found {} S&P 500 stocks with existing filing metadata", our_all_dates.len());
+    
+    // Step 2: Get S&P 500 stocks
+    let stocks_with_ciks = self.get_sp500_stocks_with_ciks().await?;
+    println!("📊 Processing {} S&P 500 stocks for financial data extraction", stocks_with_ciks.len());
+    
+    // Step 3: Create rate-limited client
+    let (client, limiter) = self.create_rate_limited_client().await?;
+    
+    // Step 4: Process ALL stocks - get dates AND extract missing data
+    let (sec_all_dates, total_records_stored) = self.get_sec_all_filing_dates_and_extract_data(&client, &limiter, &stocks_with_ciks, &self.pool).await?;
+    
+    // Step 5: Compare dates (for reporting purposes)
+    let freshness_results = self.compare_all_filing_dates(&our_all_dates, &sec_all_dates, &stocks_with_ciks).await?;
+    
+    // Step 6: Generate final report
+    let processed_count = freshness_results.len();
+    let success_count = freshness_results.iter().filter(|r| !r.is_stale).count();
+    
+    println!("\n🎉 FINANCIAL DATA EXTRACTION COMPLETE!");
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println!("📊 Total stocks processed: {}", processed_count);
+    println!("✅ Successfully processed: {}", success_count);
+    println!("📈 Total records extracted: {}", total_records_stored);
+    println!("📅 Completion time: {}", chrono::Utc::now().format("%Y-%m-%d %H:%M:%S"));
+    
+    // Show error report if any
+    let error_count = self.get_error_count().await?;
+    if error_count > 0 {
+        println!("⚠️ {} stocks had processing errors (check logs above)", error_count);
+    }
+    
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    
+    Ok(DataFreshnessStatus {
+        status: FreshnessStatus::Current, // Always current after processing
+        records_count: stocks_with_ciks.len() as i64,
+        last_update_date: Some(chrono::Utc::now().date_naive()),
+        data_summary: DataSummary {
+            total_records: total_records_stored, // Show how many records were extracted
+            key_metrics: vec!["Financial statements".to_string()],
+            completeness_score: Some(100.0), // Always 100% after processing
+        },
+    })
+}
+```
+
+### **Phase 4: Remove User Confirmation**
+
+#### **Remove from `refresh_data.rs`:**
+```rust
+// REMOVE this entire section:
+if stale_count > 0 {
+    println!("⚠️ {} stocks need financial data refresh", stale_count);
+    println!("This will take 2-5 minutes. Continue? (y/n)");
+    
+    let should_download = ask_user_confirmation("Do you want to proceed? (y/n)");
+    
+    if should_download {
+        // PROCEED TO DOWNLOAD
+    } else {
+        println!("❌ Refresh cancelled by user.");
+        return Ok(());
+    }
+} else {
+    println!("✅ All financial data is current. No action needed.");
+    return Ok(());
+}
+
+// REPLACE with direct execution:
+println!("🔄 Processing {} stocks for financial data extraction...", stocks_with_ciks.len());
+```
+
+### **Phase 5: Add Helper Functions**
+
+#### **Get Our Filing Dates for Single CIK:**
+```rust
+async fn get_our_filing_dates_for_cik(pool: &SqlitePool, cik: &str) -> Result<Vec<String>> {
+    let query = r#"
+        SELECT sf.filed_date
+        FROM stocks s
+        INNER JOIN sec_filings sf ON s.id = sf.stock_id
+        WHERE s.cik = ? 
+            AND sf.filed_date IS NOT NULL
+            AND sf.filed_date >= '2016-01-01'
+        ORDER BY sf.filed_date
+    "#;
+    
+    let rows = sqlx::query(query)
+        .bind(cik)
+        .fetch_all(pool)
+        .await?;
+    
+    let mut results = Vec::new();
+    for row in rows {
+        let filed_date: String = row.get("filed_date");
+        results.push(filed_date);
+    }
+    
+    Ok(results)
+}
+```
+
+#### **Extract and Store Financial Data (Using Existing Logic):**
+```rust
+async fn extract_and_store_balance_sheet_data(
+    edgar_client: &mut SecEdgarClient,
+    json: &serde_json::Value,
+    stock_id: i64,
+    symbol: &str,
+    missing_dates: &[String]
+) -> Result<i64> {
+    // ✅ FIXED: Use existing parse_company_facts_json logic
+    let historical_data = edgar_client.parse_company_facts_json(json, symbol)?;
+    
+    if historical_data.is_empty() {
+        return Ok(0);
+    }
+    
+    // Extract filing metadata
+    let filing_metadata = edgar_client.extract_filing_metadata(json, symbol).ok();
+    
+    // Group by report date and store only missing dates
+    let mut records_stored = 0;
+    let mut balance_by_date: HashMap<String, HashMap<String, f64>> = HashMap::new();
+    
+    for data_point in historical_data {
+        let report_date = data_point.report_date.format("%Y-%m-%d").to_string();
+        
+        // Only process missing dates
+        if missing_dates.contains(&report_date) {
+            balance_by_date.entry(report_date.clone()).or_insert_with(HashMap::new)
+                .insert(data_point.field_name.clone(), data_point.value);
+        }
+    }
+    
+    // Store balance sheet data for missing dates
+    for (report_date, balance_data) in balance_by_date {
+        let fiscal_year = report_date.split('-').next().unwrap().parse::<i32>().unwrap_or(0);
+        
+        // Calculate derived values
+        let short_term_debt = balance_data.get("ShortTermDebt").copied()
+            .or_else(|| balance_data.get("DebtCurrent").copied());
+        let long_term_debt = balance_data.get("LongTermDebt").copied()
+            .or_else(|| balance_data.get("LongTermDebtAndCapitalLeaseObligations").copied());
+        let total_debt = match (short_term_debt, long_term_debt) {
+            (Some(st), Some(lt)) => Some(st + lt),
+            (Some(st), None) => Some(st),
+            (None, Some(lt)) => Some(lt),
+            (None, None) => None,
+        };
+        
+        let balance_sheet_data = BalanceSheetData {
+            stock_id,
+            symbol: symbol.to_string(),
+            report_date: chrono::NaiveDate::parse_from_str(&report_date, "%Y-%m-%d")?,
+            fiscal_year: Some(fiscal_year),
+            total_assets: balance_data.get("Assets").copied(),
+            total_liabilities: balance_data.get("Liabilities").copied(),
+            total_equity: balance_data.get("StockholdersEquity").copied(),
+            cash_and_equivalents: balance_data.get("CashAndCashEquivalentsAtCarryingValue").copied(),
+            short_term_debt,
+            long_term_debt,
+            total_debt,
+            current_assets: balance_data.get("AssetsCurrent").copied(),
+            current_liabilities: balance_data.get("LiabilitiesCurrent").copied(),
+            share_repurchases: balance_data.get("ShareRepurchases").copied(),
+        };
+        
+        edgar_client.store_balance_sheet_data(&balance_sheet_data, filing_metadata.as_ref()).await?;
+        records_stored += 1;
+    }
+    
+    Ok(records_stored)
+}
+
+async fn extract_and_store_income_statement_data(
+    edgar_client: &mut SecEdgarClient,
+    json: &serde_json::Value,
+    stock_id: i64,
+    symbol: &str,
+    missing_dates: &[String]
+) -> Result<i64> {
+    // ✅ FIXED: Use existing parse_income_statement_json logic
+    let historical_data = edgar_client.parse_income_statement_json(json, symbol)?;
+    
+    if historical_data.is_empty() {
+        return Ok(0);
+    }
+    
+    // Extract filing metadata
+    let filing_metadata = edgar_client.extract_filing_metadata(json, symbol).ok();
+    
+    // Group by report date and store only missing dates
+    let mut records_stored = 0;
+    let mut income_by_date: HashMap<String, HashMap<String, f64>> = HashMap::new();
+    
+    for data_point in historical_data {
+        let report_date = data_point.report_date.format("%Y-%m-%d").to_string();
+        
+        // Only process missing dates
+        if missing_dates.contains(&report_date) {
+            income_by_date.entry(report_date.clone()).or_insert_with(HashMap::new)
+                .insert(data_point.field_name.clone(), data_point.value);
+        }
+    }
+    
+    // Store income statement data for missing dates
+    for (report_date, income_data) in income_by_date {
+        let fiscal_year = report_date.split('-').next().unwrap().parse::<i32>().unwrap_or(0);
+        
+        let income_statement_data = IncomeStatementData {
+            stock_id,
+            symbol: symbol.to_string(),
+            period_type: "Annual".to_string(),
+            report_date: chrono::NaiveDate::parse_from_str(&report_date, "%Y-%m-%d")?,
+            fiscal_year: Some(fiscal_year),
+            revenue: income_data.get("Revenues").copied()
+                .or_else(|| income_data.get("RevenueFromContractWithCustomerExcludingAssessedTax").copied()),
+            gross_profit: income_data.get("GrossProfit").copied(),
+            operating_income: income_data.get("OperatingIncomeLoss").copied(),
+            net_income: income_data.get("NetIncomeLoss").copied(),
+            shares_basic: income_data.get("WeightedAverageNumberOfSharesOutstandingBasic").copied(),
+            shares_diluted: income_data.get("WeightedAverageNumberOfSharesOutstandingDiluted").copied(),
+        };
+        
+        edgar_client.store_income_statement_data(&income_statement_data, filing_metadata.as_ref()).await?;
+        records_stored += 1;
+    }
+    
+    Ok(records_stored)
+}
+
+async fn extract_and_store_cash_flow_data(
+    edgar_client: &mut SecEdgarClient,
+    json: &serde_json::Value,
+    stock_id: i64,
+    symbol: &str,
+    missing_dates: &[String]
+) -> Result<i64> {
+    // ✅ FIXED: Use existing parse_cash_flow_json logic
+    let historical_data = edgar_client.parse_cash_flow_json(json, symbol)?;
+    
+    if historical_data.is_empty() {
+        return Ok(0);
+    }
+    
+    // Extract filing metadata
+    let filing_metadata = edgar_client.extract_filing_metadata(json, symbol).ok();
+    
+    // Group by report date and store only missing dates
+    let mut records_stored = 0;
+    let mut cashflow_by_date: HashMap<String, HashMap<String, f64>> = HashMap::new();
+    
+    for data_point in historical_data {
+        let report_date = data_point.report_date.format("%Y-%m-%d").to_string();
+        
+        // Only process missing dates
+        if missing_dates.contains(&report_date) {
+            cashflow_by_date.entry(report_date.clone()).or_insert_with(HashMap::new)
+                .insert(data_point.field_name.clone(), data_point.value);
+        }
+    }
+    
+    // Store cash flow data for missing dates
+    for (report_date, cashflow_data) in cashflow_by_date {
+        let fiscal_year = report_date.split('-').next().unwrap().parse::<i32>().unwrap_or(0);
+        
+        let cash_flow_data = CashFlowData {
+            stock_id,
+            symbol: symbol.to_string(),
+            report_date: chrono::NaiveDate::parse_from_str(&report_date, "%Y-%m-%d")?,
+            fiscal_year: Some(fiscal_year),
+            operating_cash_flow: cashflow_data.get("NetCashProvidedByUsedInOperatingActivities").copied(),
+            depreciation_amortization: cashflow_data.get("DepreciationDepletionAndAmortization").copied(),
+            depreciation_expense: cashflow_data.get("DepreciationExpense").copied(),
+            amortization_expense: cashflow_data.get("AmortizationExpense").copied(),
+            investing_cash_flow: cashflow_data.get("NetCashProvidedByUsedInInvestingActivities").copied(),
+            capital_expenditures: cashflow_data.get("PaymentsToAcquirePropertyPlantAndEquipment").copied(),
+            financing_cash_flow: cashflow_data.get("NetCashProvidedByUsedInFinancingActivities").copied(),
+            dividends_paid: cashflow_data.get("PaymentsOfDividends").copied(),
+            share_repurchases: cashflow_data.get("PaymentsForRepurchaseOfCommonStock").copied(),
+            net_cash_flow: cashflow_data.get("NetCashFlow").copied(),
+        };
+        
+        edgar_client.store_cash_flow_data(&cash_flow_data, filing_metadata.as_ref()).await?;
+        records_stored += 1;
+    }
+    
+    Ok(records_stored)
+}
+```
+
+#### **Error Reporting:**
+```rust
+async fn store_error_reports(errors: Vec<(String, String, String)>) -> Result<()> {
+    // Store errors for final summary
+    for (symbol, cik, error) in errors {
+        println!("❌ Error processing {} ({}): {}", symbol, cik, error);
+    }
+    Ok(())
+}
+
+async fn get_error_count() -> Result<i64> {
+    // Return count of errors encountered
+    Ok(0) // Placeholder - could be implemented with a global error counter
+}
+```
+
+## 🚨 **CRITICAL ISSUES IDENTIFIED & FIXED**
+
+### **❌ Issue 1: Missing Required Columns in sec_filings**
+**Problem**: The `sec_filings` table requires `fiscal_year` and `report_date` columns, but our implementation plan didn't extract these.
+
+**✅ Fix**: The `create_or_get_sec_filing` function needs to be updated to include these required fields:
+```rust
+// ✅ FIXED: Include all required columns
+INSERT INTO sec_filings (stock_id, accession_number, form_type, filed_date, fiscal_period, fiscal_year, report_date)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+```
+
+**⚠️ CRITICAL**: The current `create_or_get_sec_filing` function in `sec_edgar_client.rs` is missing `fiscal_year` and `report_date` parameters. This needs to be fixed before implementation:
+
+```rust
+// ❌ CURRENT (BROKEN):
+async fn create_or_get_sec_filing(&self, stock_id: i64, metadata: &FilingMetadata) -> Result<i64> {
+    let insert_query = r#"
+        INSERT INTO sec_filings (stock_id, accession_number, form_type, filed_date, fiscal_period)
+        VALUES (?, ?, ?, ?, ?)
+    "#;
+    // Missing fiscal_year and report_date!
+}
+
+// ✅ FIXED VERSION NEEDED:
+async fn create_or_get_sec_filing(&self, stock_id: i64, metadata: &FilingMetadata, fiscal_year: i32, report_date: &str) -> Result<i64> {
+    let insert_query = r#"
+        INSERT INTO sec_filings (stock_id, accession_number, form_type, filed_date, fiscal_period, fiscal_year, report_date)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    "#;
+    
+    let result = sqlx::query(insert_query)
+        .bind(stock_id)
+        .bind(&metadata.accession_number)
+        .bind(&metadata.form_type)
+        .bind(&metadata.filing_date)
+        .bind(&metadata.fiscal_period)
+        .bind(fiscal_year)  // ✅ ADDED
+        .bind(report_date)  // ✅ ADDED
+        .execute(&self.pool)
+        .await?;
+        
+    Ok(result.last_insert_rowid())
+}
+```
+
+### **❌ Issue 2: Wrong Function Signatures**
+**Problem**: Implementation plan showed incorrect function signatures that don't match existing code.
+
+**✅ Fix**: Use existing `SecEdgarClient` methods with correct signatures:
+- `store_balance_sheet_data(&self, data: &BalanceSheetData, filing_metadata: Option<&FilingMetadata>) -> Result<()>`
+- `store_income_statement_data(&self, data: &IncomeStatementData, filing_metadata: Option<&FilingMetadata>) -> Result<()>`
+- `store_cash_flow_data(&self, data: &CashFlowData, filing_metadata: Option<&FilingMetadata>) -> Result<()>`
+
+### **❌ Issue 3: Missing FilingMetadata Extraction**
+**Problem**: The implementation plan didn't define how to create `FilingMetadata` from JSON.
+
+**✅ Fix**: Use existing `extract_filing_metadata` method from `SecEdgarClient`.
+
+### **❌ Issue 4: Missing Database Pool Parameter**
+**Problem**: Functions need access to database pool for operations.
+
+**✅ Fix**: Add `pool: &SqlitePool` parameter to all functions that need database access.
+
+### **❌ Issue 5: Missing Data Structure Definitions**
+**Problem**: Implementation plan referenced undefined data structures.
+
+**✅ Fix**: Use existing `BalanceSheetData`, `IncomeStatementData`, `CashFlowData`, and `FilingMetadata` structs.
+
+---
+
+## 📊 **BENEFITS OF NEW ARCHITECTURE:**
+
+1. ✅ **50% fewer API calls** - No duplicate downloads
+2. ✅ **Faster execution** - Single pass through all stocks
+3. ✅ **Simpler UX** - No user confirmation needed
+4. ✅ **Atomic operation** - Check and update in one go
+5. ✅ **Better resource utilization** - Same threads do more work
+6. ✅ **Detailed progress output** - User sees what's happening
+7. ✅ **Comprehensive summary** - Shows total records extracted
+8. ✅ **Error handling** - Reports failed CIKs at the end
+
+## 🎯 **USER EXPERIENCE:**
+
+### **Before (Inefficient):**
+```bash
+$ cargo run --bin refresh_data financials
+🔍 Checking data freshness...
+📊 Found 450 stale stocks
+Do you want to download fresh financial data? (y/n): y
+📥 Downloading fresh financial data...
+✅ Financial data refresh completed!
+```
+
+### **After (Optimized):**
+```bash
+$ cargo run --bin refresh_data financials
+🔍 Checking financial data freshness and extracting missing data...
+📊 Processing 497 S&P 500 stocks for financial data extraction
+📊 Extracting 15 missing financial records for AAPL
+✅ Stored 45 financial records for AAPL
+📊 Extracting 8 missing financial records for MSFT
+✅ Stored 24 financial records for MSFT
+...
+
+🎉 FINANCIAL DATA EXTRACTION COMPLETE!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📊 Total stocks processed: 497
+✅ Successfully processed: 495
+📈 Total records extracted: 12,847
+📅 Completion time: 2025-10-04 19:15:32
+⚠️ 2 stocks had processing errors (check logs above)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+## 🚀 **IMPLEMENTATION ORDER:**
+
+1. **Phase 1**: Modify `get_all_sec_filings_for_cik()` to also extract data
+2. **Phase 2**: Modify `get_sec_all_filing_dates()` to collect extraction results
+3. **Phase 3**: Update main freshness checker to use new functions
+4. **Phase 4**: Remove user confirmation from `refresh_data.rs`
+5. **Phase 5**: Add helper functions for data extraction and storage
+6. **Phase 6**: Test and validate the complete flow
+
+## ✅ **SUCCESS CRITERIA:**
+
+- [ ] Single API call per CIK (no duplicates)
+- [ ] Detailed progress output during processing
+- [ ] Comprehensive summary at the end
+- [ ] Error handling and reporting
+- [ ] All 497 stocks processed in ~50 seconds
+- [ ] No user confirmation needed
+- [ ] Atomic operation (check + extract in one go)
+
+**This optimized architecture eliminates inefficiency while maintaining all benefits of concurrent processing and rate limiting.**

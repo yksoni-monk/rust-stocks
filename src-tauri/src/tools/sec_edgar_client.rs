@@ -965,7 +965,7 @@ impl SecEdgarClient {
     }
 
     /// Create or get existing sec_filing record
-    async fn create_or_get_sec_filing(&self, stock_id: i64, metadata: &FilingMetadata) -> Result<i64> {
+    async fn create_or_get_sec_filing(&self, stock_id: i64, metadata: &FilingMetadata, fiscal_year: i32, report_date: &str) -> Result<i64> {
         // First try to find existing record
         let existing_query = r#"
             SELECT id FROM sec_filings 
@@ -983,10 +983,10 @@ impl SecEdgarClient {
             return Ok(existing_id);
         }
 
-        // Create new record
+        // Create new record with all required columns
         let insert_query = r#"
-            INSERT INTO sec_filings (stock_id, accession_number, form_type, filed_date, fiscal_period)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO sec_filings (stock_id, accession_number, form_type, filed_date, fiscal_period, fiscal_year, report_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         "#;
         
         let result = sqlx::query(insert_query)
@@ -995,6 +995,8 @@ impl SecEdgarClient {
             .bind(&metadata.form_type)
             .bind(&metadata.filing_date)
             .bind(&metadata.fiscal_period)
+            .bind(fiscal_year)
+            .bind(report_date)
             .execute(&self.pool)
             .await?;
             
@@ -1005,7 +1007,7 @@ impl SecEdgarClient {
     pub async fn store_balance_sheet_data(&self, data: &BalanceSheetData, filing_metadata: Option<&FilingMetadata>) -> Result<()> {
         // First, create or get the sec_filing record if metadata is provided
         let sec_filing_id = if let Some(metadata) = filing_metadata {
-            Some(self.create_or_get_sec_filing(data.stock_id, metadata).await?)
+            Some(self.create_or_get_sec_filing(data.stock_id, metadata, data.fiscal_year, &data.report_date.format("%Y-%m-%d").to_string()).await?)
         } else {
             None
         };
@@ -1047,7 +1049,7 @@ impl SecEdgarClient {
     pub async fn store_cash_flow_data(&self, data: &CashFlowData, filing_metadata: Option<&FilingMetadata>) -> Result<()> {
         // First, create or get the sec_filing record if metadata is provided
         let sec_filing_id = if let Some(metadata) = filing_metadata {
-            Some(self.create_or_get_sec_filing(data.stock_id, metadata).await?)
+            Some(self.create_or_get_sec_filing(data.stock_id, metadata, data.fiscal_year, &data.report_date.format("%Y-%m-%d").to_string()).await?)
         } else {
             None
         };
@@ -1085,7 +1087,7 @@ impl SecEdgarClient {
     pub async fn store_income_statement_data(&self, data: &IncomeStatementData, filing_metadata: Option<&FilingMetadata>) -> Result<()> {
         // First, create or get the sec_filing record if metadata is provided
         let sec_filing_id = if let Some(metadata) = filing_metadata {
-            Some(self.create_or_get_sec_filing(data.stock_id, metadata).await?)
+            Some(self.create_or_get_sec_filing(data.stock_id, metadata, data.fiscal_year, &data.report_date.format("%Y-%m-%d").to_string()).await?)
         } else {
             None
         };

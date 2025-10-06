@@ -8,9 +8,12 @@ use tokio::time::sleep;
 use std::time::Duration as StdDuration;
 use uuid::Uuid;
 
-use crate::tools::data_freshness_checker::{DataStatusReader, SystemFreshnessReport};
+use crate::tools::data_freshness_checker::{
+    DataStatusReader, SystemFreshnessReport, DataFreshnessStatus, FreshnessStatus,
+    RefreshPriority, DataSummary, ScreeningReadiness
+};
 use crate::tools::date_range_calculator::DateRangeCalculator;
-use crate::tools::sec_edgar_client::SecEdgarClient;
+// use crate::tools::sec_edgar_client::SecEdgarClient; // removed; unified path uses DataStatusReader
 use crate::api::schwab_client::SchwabClient;
 use crate::api::StockDataProvider;
 use crate::models::Config;
@@ -29,6 +32,7 @@ pub struct RefreshRequest {
     pub force_sources: Vec<String>,
     pub initiated_by: String,
     pub session_id: Option<String>,
+    pub only_cik: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -126,30 +130,51 @@ impl DataRefreshManager {
         let mut sources_failed = Vec::new();
         let mut total_records_processed = 0i64;
 
-        // 1. Check current freshness status
-        println!("🔍 Checking current data freshness...");
-        let freshness_report = self.status_reader.check_system_freshness().await?;
-        self.update_progress(&session_id, 1, "Checking data freshness", 100.0).await?;
+        // 1. Check current freshness status (skip if filtering by ticker)
+        let refresh_plan = if request.only_cik.is_some() {
+            // Skip freshness check when filtering - just create plan based on request mode
+            println!("🎯 Skipping freshness check (filtered by ticker)");
+            vec![RefreshStep {
+                name: match request.mode {
+                    RefreshMode::Financials => "Refresh financial statements".to_string(),
+                    RefreshMode::Market => "Refresh market data".to_string(),
+                },
+                data_source: match request.mode {
+                    RefreshMode::Financials => "financial_statements".to_string(),
+                    RefreshMode::Market => "daily_prices".to_string(),
+                },
+                estimated_duration_minutes: 1,
+                command: String::new(),
+                dependencies: Vec::new(),
+                priority: 1,
+            }]
+        } else {
+            println!("🔍 Checking current data freshness...");
+            let freshness_report = self.status_reader.check_system_freshness().await?;
+            self.update_progress(&session_id, 1, "Checking data freshness", 100.0).await?;
 
-        // 2. Determine what needs to be refreshed
-        let refresh_plan = self.create_refresh_plan(&request, &freshness_report).await?;
-        println!("📋 Refresh plan: {} steps identified", refresh_plan.len());
+            // Determine what needs to be refreshed
+            let plan = self.create_refresh_plan(&request, &freshness_report).await?;
+            println!("📋 Refresh plan: {} steps identified", plan.len());
 
-        if refresh_plan.is_empty() {
-            println!("✅ All data is current, no refresh needed");
-            return Ok(RefreshResult {
-                session_id,
-                success: true,
-                start_time,
-                end_time: Some(Utc::now()),
-                duration_seconds: Some(0),
-                sources_refreshed: vec!["none (all current)".to_string()],
-                sources_failed: Vec::new(),
-                total_records_processed: 0,
-                error_message: None,
-                recommendations: vec!["All data sources are current".to_string()],
-            });
-        }
+            if plan.is_empty() {
+                println!("✅ All data is current, no refresh needed");
+                return Ok(RefreshResult {
+                    session_id,
+                    success: true,
+                    start_time,
+                    end_time: Some(Utc::now()),
+                    duration_seconds: Some(0),
+                    sources_refreshed: vec!["none (all current)".to_string()],
+                    sources_failed: Vec::new(),
+                    total_records_processed: 0,
+                    error_message: None,
+                    recommendations: vec!["All data sources are current".to_string()],
+                });
+            }
+
+            plan
+        };
 
         // 3. Execute refresh steps in dependency order
         let total_steps = refresh_plan.len() as i32 + 2; // +2 for start/finish steps
@@ -161,7 +186,7 @@ impl DataRefreshManager {
 
             self.update_progress(&session_id, step_number, &step.name, 0.0).await?;
 
-            match self.execute_refresh_step(step, &session_id).await {
+            match self.execute_refresh_step(step, &session_id, request.only_cik.as_ref()).await {
                 Ok(records) => {
                     sources_refreshed.push(step.data_source.clone());
                     total_records_processed += records;
@@ -185,9 +210,75 @@ impl DataRefreshManager {
             }
         }
 
-        // 4. Final verification and cleanup
+        // 4. Final verification and cleanup (skip full freshness check if filtering)
         self.update_progress(&session_id, total_steps, "Finalizing refresh", 100.0).await?;
-        let final_report = self.status_reader.check_system_freshness().await?;
+        let final_report = if request.only_cik.is_some() {
+            // Skip final freshness check when filtering - use a minimal placeholder
+            println!("🎯 Skipping final freshness check (filtered by ticker)");
+            // Create minimal placeholder report (will be ignored for filtered refreshes)
+            SystemFreshnessReport {
+                overall_status: FreshnessStatus::Current,
+                market_data: DataFreshnessStatus {
+                    data_source: "skip".to_string(),
+                    status: FreshnessStatus::Current,
+                    latest_data_date: None,
+                    last_refresh: None,
+                    staleness_days: None,
+                    records_count: 0,
+                    message: "Skipped (filtered refresh)".to_string(),
+                    refresh_priority: RefreshPriority::Low,
+                    data_summary: DataSummary {
+                        date_range: None,
+                        stock_count: None,
+                        data_types: vec![],
+                        key_metrics: vec![],
+                        completeness_score: None,
+                    },
+                },
+                financial_data: DataFreshnessStatus {
+                    data_source: "skip".to_string(),
+                    status: FreshnessStatus::Current,
+                    latest_data_date: None,
+                    last_refresh: None,
+                    staleness_days: None,
+                    records_count: total_records_processed,
+                    message: format!("Filtered refresh: {} records stored", total_records_processed),
+                    refresh_priority: RefreshPriority::Low,
+                    data_summary: DataSummary {
+                        date_range: None,
+                        stock_count: None,
+                        data_types: vec![],
+                        key_metrics: vec![],
+                        completeness_score: None,
+                    },
+                },
+                calculated_ratios: DataFreshnessStatus {
+                    data_source: "skip".to_string(),
+                    status: FreshnessStatus::Current,
+                    latest_data_date: None,
+                    last_refresh: None,
+                    staleness_days: None,
+                    records_count: 0,
+                    message: "Skipped (filtered refresh)".to_string(),
+                    refresh_priority: RefreshPriority::Low,
+                    data_summary: DataSummary {
+                        date_range: None,
+                        stock_count: None,
+                        data_types: vec![],
+                        key_metrics: vec![],
+                        completeness_score: None,
+                    },
+                },
+                recommendations: vec![],
+                screening_readiness: ScreeningReadiness {
+                    valuation_analysis: true,
+                    blocking_issues: vec![],
+                },
+                last_check: chrono::Utc::now().to_rfc3339(),
+            }
+        } else {
+            self.status_reader.check_system_freshness().await?
+        };
 
         let end_time = Utc::now();
         let duration_seconds = end_time.signed_duration_since(start_time).num_seconds();
@@ -251,7 +342,7 @@ impl DataRefreshManager {
     }
 
     /// Execute a single refresh step
-    async fn execute_refresh_step(&self, step: &RefreshStep, session_id: &str) -> Result<i64> {
+    async fn execute_refresh_step(&self, step: &RefreshStep, session_id: &str, only_cik: Option<&String>) -> Result<i64> {
         let start_time = Utc::now();
 
         // Record the start of this refresh
@@ -259,8 +350,7 @@ impl DataRefreshManager {
 
         let records_processed = match step.data_source.as_str() {
             "daily_prices" => self.refresh_market_internal(session_id).await?,
-            "financial_statements" => self.refresh_financials_internal(session_id).await?,
-            "cash_flow_statements" => self.refresh_cash_flow_internal(session_id).await?,
+            "financial_statements" => self.refresh_financials_unified(session_id, only_cik).await?,
             _ => return Err(anyhow!("Unknown data source: {}", step.data_source)),
         };
 
@@ -429,173 +519,43 @@ impl DataRefreshManager {
         Ok(total_records as i64)
     }
 
-    /// Refresh all EDGAR financial data (income, balance, cash flow) - Smart Incremental Updates
-    async fn refresh_financials_internal(&self, _session_id: &str) -> Result<i64> {
-        println!("📈 Refreshing EDGAR financial data using smart incremental updates...");
-        
-        // Create EDGAR client
-        let mut edgar_client = SecEdgarClient::new(self.pool.clone());
-        
-        // Get S&P 500 stocks for EDGAR data extraction
-        let stocks_query = r#"
-            SELECT s.id, s.symbol, s.cik
-            FROM stocks s
-            INNER JOIN sp500_symbols sp ON s.symbol = sp.symbol
-            WHERE s.cik IS NOT NULL AND s.cik != ''
-            ORDER BY s.symbol
-        "#;
-        
-        let stocks = sqlx::query(stocks_query)
-            .fetch_all(&self.pool)
-            .await?;
-        
-        println!("📊 Found {} S&P 500 stocks with CIK for EDGAR extraction", stocks.len());
-        
-        let mut processed_stocks = 0;
-        let mut skipped_current = 0;
-        let mut updated_stocks = 0;
-        
-        println!("🔄 Checking freshness and performing incremental updates...");
-        
-        let total_stocks_count = stocks.len();
-        
-        for (_index, row) in stocks.iter().enumerate() {
-            let stock_id: i64 = row.get("id");
-            let symbol: String = row.get("symbol");
-            let cik: String = row.get("cik");
-            
-            // Check if this stock needs update using Company Facts API
-            match edgar_client.check_if_update_needed(&cik, stock_id).await {
-                Ok(needs_update) => {
-                    if needs_update {
-                        println!("  📋 Updating {} ({}) - has newer SEC filings", symbol, cik);
-                        
-                        // Extract financial data for stocks that need updates
-                        match edgar_client.extract_balance_sheet_data(&cik, stock_id, &symbol).await {
-                            Ok(Some(_)) => {
-                                processed_stocks += 1;
-                                updated_stocks += 1;
-                                println!("    ✅ Successfully updated financial data for {}", symbol);
-                            }
-                            Ok(None) => {
-                                println!("    ⚠️ No financial data found for {}", symbol);
-                            }
-                            Err(e) => {
-                                println!("    ❌ Failed to extract data for {}: {}", symbol, e);
-                                // Continue processing other stocks even if one fails
-                            }
-                        }
-                    } else {
-                        skipped_current += 1;
-                        if skipped_current % 10 == 0 {
-                            println!("    ⏭️ Skipping {} stocks with current data...", skipped_current);
-                        }
-                    }
-                }
-                Err(e) => {
-                    println!("    ⚠️ Freshness check failed for {}: {}. Attempting update anyway.", symbol, e);
-                    
-                    // Still try to extract if freshness check fails
-                    match edgar_client.extract_balance_sheet_data(&cik, stock_id, &symbol).await {
-                        Ok(Some(_)) => {
-                            processed_stocks += 1;
-                            updated_stocks += 1;
-                            println!("    ✅ Successfully extracted financial data for {} (despite freshness check failure)", symbol);
-                        }
-                        Ok(None) => {
-                            println!("    ⚠️ No financial data found for {} (freshness check also failed)", symbol);
-                        }
-                        Err(extract_error) => {
-                            println!("    ❌ Failed to extract data for {}: {} (freshness check also failed)", symbol, extract_error);
-                            // Continue processing other stocks even if this one fails completely
-                        }
-                    }
-                }
+    /// Refresh all EDGAR financial data using unified single-stage approach
+    async fn refresh_financials_unified(&self, _session_id: &str, only_cik: Option<&String>) -> Result<i64> {
+        println!("📈 Refreshing EDGAR financial data using unified single-stage approach...");
+
+        // Get filtered or all stocks using early filtering
+        let stocks_with_ciks = self.status_reader.get_sp500_stocks_with_ciks(only_cik).await?;
+
+        if stocks_with_ciks.is_empty() {
+            if let Some(cik) = only_cik {
+                println!("❌ CIK {} not found in S&P 500 stocks", cik);
+            } else {
+                println!("❌ No S&P 500 stocks found");
             }
-            
-            processed_stocks += 1;
-            
-            // Show progress every 10 stocks or at the end
-            if processed_stocks % 10 == 0 || processed_stocks == total_stocks_count {
-                let progress_percent = (processed_stocks as f64 / total_stocks_count as f64) * 100.0;
-                println!("📊 Progress: {}/{} stocks ({:.1}%) - Updated: {}, Skipped: {}", 
-                    processed_stocks, total_stocks_count, progress_percent, updated_stocks, skipped_current);
-            }
-            
-            // Add delay to respect rate limits (10 requests per second + buffer)
-            sleep(StdDuration::from_millis(110)).await;
+            return Ok(0);
         }
-        
-        // Count total records extracted (using sec_filing_id to identify SEC data)
-        let income_records = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM income_statements WHERE sec_filing_id IS NOT NULL"
-        ).fetch_one(&self.pool).await?;
-        
-        let balance_records = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM balance_sheets WHERE sec_filing_id IS NOT NULL"
-        ).fetch_one(&self.pool).await?;
-        
-        let cashflow_records = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM cash_flow_statements WHERE sec_filing_id IS NOT NULL"
-        ).fetch_one(&self.pool).await?;
-        
-        let total_records = income_records + balance_records + cashflow_records;
-        
-        println!("✅ EDGAR financial data smart refresh completed");
-        println!("📊 Summary:");
-        println!("  Total stocks checked: {}", total_stocks_count);
-        println!("  Stocks skipped (current): {}", skipped_current);
-        println!("  Stocks updated: {}", updated_stocks);
-        println!("  Successfully processed: {}", processed_stocks);
-        println!("  Total records: {} income, {} balance, {} cash flow", 
-                 income_records, balance_records, cashflow_records);
-        
-        // Calculate success rate
-        let success_rate = if processed_stocks > 0 {
-            (updated_stocks as f64 / processed_stocks as f64) * 100.0
+
+        if let Some(cik) = only_cik {
+            println!("🎯 Processing single stock: CIK {}", cik);
         } else {
-            0.0
-        };
-        println!("🎯 Success rate: {:.1}% ({} successful out of {} processed)", 
-            success_rate, updated_stocks, processed_stocks);
-        
-        // Show any issues
-        let failed_count = processed_stocks - updated_stocks;
-        if failed_count > 0 {
-            println!("⚠️ {} stocks had issues during processing (check logs above)", failed_count);
-        }
-        
-        Ok(total_records)
-    }
-
-    /// Calculate TTM cash flow data for complete Piotroski F-Score
-    async fn refresh_cash_flow_internal(&self, _session_id: &str) -> Result<i64> {
-        println!("💰 Calculating TTM cash flow data using concurrent processor...");
-
-        // Run the concurrent cash flow TTM calculation binary
-        let output = Command::new("cargo")
-            .args(&["run", "--bin", "concurrent-cashflow-ttm", "--", "calculate"])
-            .current_dir("../src-tauri")
-            .output()
-            .await
-            .map_err(|e| anyhow!("Failed to run TTM calculator: {}", e))?;
-
-        if !output.status.success() {
-            let error_msg = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow!("TTM calculator failed: {}", error_msg));
+            println!("📊 Processing {} S&P 500 stocks for financial data extraction", stocks_with_ciks.len());
         }
 
-        let success_msg = String::from_utf8_lossy(&output.stdout);
-        println!("✅ TTM cash flow calculation completed: {}", success_msg);
+        // Call the unified method with filtered stocks
+        let total_records_stored = self.status_reader
+            .run_unified_financials_for_stocks(&stocks_with_ciks)
+            .await?;
 
-        // Count total TTM cash flow records created
-        let ttm_records = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM cash_flow_statements WHERE period_type = 'TTM'"
-        ).fetch_one(&self.pool).await?;
+        if let Some(_cik) = only_cik {
+            println!("✅ Single-stock refresh completed: {} records stored", total_records_stored);
+        } else {
+            println!("✅ Full refresh completed: {} records stored", total_records_stored);
+        }
 
-        println!("📊 Total TTM cash flow records: {}", ttm_records);
-        Ok(ttm_records)
+        Ok(total_records_stored)
     }
+
+    // (Removed obsolete per-stock orchestrator paths.)
 
 
 
@@ -654,23 +614,15 @@ impl DataRefreshManager {
             },
         ]);
 
-        // Financials mode: All EDGAR data (independent)
+        // Financials mode: Unified single-stage EDGAR extraction (all statements together)
         steps.insert(RefreshMode::Financials, vec![
             RefreshStep {
-                name: "Extract EDGAR financial data".to_string(),
+                name: "Extract EDGAR financial data (all statements)".to_string(),
                 data_source: "financial_statements".to_string(),
                 estimated_duration_minutes: 90,
                 command: "internal".to_string(), // Internal function call
                 dependencies: vec![],
                 priority: 1,
-            },
-            RefreshStep {
-                name: "Calculate TTM cash flow data".to_string(),
-                data_source: "cash_flow_statements".to_string(),
-                estimated_duration_minutes: 10,
-                command: "internal".to_string(), // Internal function call
-                dependencies: vec!["financial_statements".to_string()],
-                priority: 2,
             },
         ]);
 
@@ -678,6 +630,8 @@ impl DataRefreshManager {
 
         steps
     }
+
+    // Removed duplicate rate-limited client creation; DataStatusReader owns the unified client/limiter
 
     /// Create progress tracking record
     async fn create_progress_record(&self, session_id: &str, request: &RefreshRequest) -> Result<()> {

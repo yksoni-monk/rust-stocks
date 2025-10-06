@@ -276,16 +276,12 @@ impl SecEdgarClient {
     /// Extract filing metadata from Company Facts API response
     pub fn extract_filing_metadata(&self, json: &serde_json::Value, _symbol: &str) -> Result<Vec<FilingMetadata>> {
         let mut metadata_vec = Vec::new();
-        
+
         if let Some(facts) = json.get("facts").and_then(|f| f.get("us-gaap")) {
-            // Check a bunch of financial concepts to get comprehensive filing metadata
-            let concepts_to_check = [
-                "Assets", "Revenues", "NetIncomeLoss", "OperatingIncomeLoss",
-                "Liabilities", "StockholdersEquity", "CashAndCashEquivalentsAtCarryingValue"
-            ];
-            
-            for concept in &concepts_to_check {
-                if let Some(field_data) = facts.get(concept) {
+            // Iterate ALL us-gaap fields instead of just 7 specific ones
+            // This ensures we capture all filing metadata comprehensively
+            if let Some(facts_obj) = facts.as_object() {
+                for (_field_name, field_data) in facts_obj {
                     if let Some(units) = field_data.get("units") {
                         if let Some(usd_data) = units.get("USD") {
                             if let Some(values) = usd_data.as_array() {
@@ -313,11 +309,11 @@ impl SecEdgarClient {
                 }
             }
         }
-        
+
         // Remove duplicates based on accession number
         metadata_vec.sort_by(|a, b| a.accession_number.cmp(&b.accession_number));
         metadata_vec.dedup_by(|a, b| a.accession_number == b.accession_number);
-        
+
         Ok(metadata_vec)
     }
 
@@ -980,6 +976,7 @@ impl SecEdgarClient {
             .fetch_optional(&self.pool)
             .await?
         {
+            println!("    📋 Found existing sec_filing record ID={} for filed_date={}", existing_id, metadata.filing_date);
             return Ok(existing_id);
         }
 
@@ -988,6 +985,9 @@ impl SecEdgarClient {
             INSERT INTO sec_filings (stock_id, accession_number, form_type, filed_date, fiscal_period, fiscal_year, report_date)
             VALUES (?, ?, ?, ?, ?, ?, ?)
         "#;
+        
+        println!("    📋 Creating new sec_filing record: stock_id={}, filed_date={}, report_date={}, fiscal_year={}", 
+                 stock_id, metadata.filing_date, report_date, fiscal_year);
         
         let result = sqlx::query(insert_query)
             .bind(stock_id)
@@ -1000,7 +1000,9 @@ impl SecEdgarClient {
             .execute(&self.pool)
             .await?;
             
-        Ok(result.last_insert_rowid())
+        let new_id = result.last_insert_rowid();
+        println!("    ✅ Created sec_filing record ID={} for filed_date={}", new_id, metadata.filing_date);
+        Ok(new_id)
     }
 
     /// Store balance sheet data in the database with filing metadata

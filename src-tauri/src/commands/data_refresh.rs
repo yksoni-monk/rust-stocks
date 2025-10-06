@@ -56,6 +56,7 @@ pub async fn start_data_refresh(app_handle: tauri::AppHandle, request: RefreshRe
         force_sources: request.force_sources.unwrap_or_default(),
         initiated_by: request.initiated_by.unwrap_or_else(|| "ui".to_string()),
         session_id: None, // Auto-generated
+        only_cik: None, // UI doesn't support single CIK filtering
     };
 
     // Start refresh in background and return session ID

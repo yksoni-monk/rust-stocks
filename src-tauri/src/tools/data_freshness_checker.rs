@@ -117,9 +117,9 @@ impl DataStatusReader {
         println!("📅 Started at: {}", chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC"));
         
         let market_data = self.check_daily_prices_direct().await?;
-        
+
         // Step 1: Get S&P 500 stocks with CIKs (all stocks we should check)
-        let stocks_with_ciks = self.get_sp500_stocks_with_ciks().await?;
+        let stocks_with_ciks = self.get_sp500_stocks_with_ciks(None).await?;
         println!("📊 Processing {} S&P 500 stocks for financial data extraction", stocks_with_ciks.len());
         println!("🔧 Using 10 concurrent threads with 10 requests/second rate limiting");
         
@@ -155,28 +155,51 @@ impl DataStatusReader {
         
         println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
         
-        // Generate freshness report (always current after processing)
+        // Generate freshness report based on actual outcome
         let stale_count = freshness_results.iter().filter(|r| r.is_stale).count();
         let _current_count = freshness_results.len() - stale_count;
-        
+
+        // Determine actual status based on results
+        let financial_status = if total_records_stored == 0 && stale_count > 0 {
+            FreshnessStatus::Error  // Failed to store anything despite stale data
+        } else if stale_count == 0 {
+            FreshnessStatus::Current  // All data is current
+        } else {
+            FreshnessStatus::Stale  // Some data still stale
+        };
+
+        let overall_status = if total_records_stored == 0 && stale_count > 0 {
+            FreshnessStatus::Error  // System failure
+        } else if stale_count == 0 {
+            FreshnessStatus::Current  // Success
+        } else {
+            FreshnessStatus::Stale  // Partial success
+        };
+
         Ok(SystemFreshnessReport {
-            overall_status: FreshnessStatus::Current, // Always current after processing
+            overall_status,
             market_data: market_data.clone(),
             financial_data: DataFreshnessStatus {
                 data_source: "sec_edgar".to_string(),
-                status: FreshnessStatus::Current, // Always current after processing
+                status: financial_status,
                 latest_data_date: Some(chrono::Utc::now().date_naive().format("%Y-%m-%d").to_string()),
                 last_refresh: Some(chrono::Utc::now().to_rfc3339()),
-                staleness_days: Some(0),
+                staleness_days: if stale_count == 0 { Some(0) } else { None },
                 records_count: stocks_with_ciks.len() as i64,
-                message: format!("Extracted {} financial records from {} stocks", total_records_stored, processed_count),
-                refresh_priority: RefreshPriority::Low,
+                message: if total_records_stored == 0 && stale_count > 0 {
+                    format!("🔴 FAILED: {} stocks remain stale, 0 records stored (check warnings above)", stale_count)
+                } else if total_records_stored > 0 && stale_count > 0 {
+                    format!("⚠️ PARTIAL: Extracted {} records, but {} stocks still stale", total_records_stored, stale_count)
+                } else {
+                    format!("✅ SUCCESS: Extracted {} records from {} stocks, all current", total_records_stored, processed_count)
+                },
+                refresh_priority: if stale_count == 0 { RefreshPriority::Low } else { RefreshPriority::High },
                 data_summary: DataSummary {
                     date_range: Some("2016-present".to_string()),
                     stock_count: Some(stocks_with_ciks.len() as i64),
                     data_types: vec!["Balance Sheets".to_string(), "Income Statements".to_string(), "Cash Flow Statements".to_string()],
                     key_metrics: vec!["Financial statements".to_string()],
-                    completeness_score: Some(100.0), // Always 100% after processing
+                    completeness_score: if stale_count == 0 { Some(100.0) } else { None },
                 },
             },
             calculated_ratios: DataFreshnessStatus {
@@ -248,21 +271,41 @@ impl DataStatusReader {
         Ok(results)
     }
 
-    /// Get S&P 500 stocks with CIKs
-    async fn get_sp500_stocks_with_ciks(&self) -> Result<Vec<(i64, String, String)>> {
-        let query = r#"
-            SELECT s.id, s.cik, s.symbol
-            FROM stocks s
-            WHERE s.is_sp500 = 1
-                AND s.cik IS NOT NULL 
-                AND s.cik != ''
-                AND s.cik != 'Unknown'
-            ORDER BY s.symbol
-        "#;
-        
-        let rows = sqlx::query(query).fetch_all(&self.pool).await?;
+    /// Get S&P 500 stocks with CIKs (optionally filtered by CIK)
+    pub async fn get_sp500_stocks_with_ciks(&self, only_cik: Option<&String>) -> Result<Vec<(i64, String, String)>> {
+        let (query, bind_cik) = if let Some(cik) = only_cik {
+            // Filtered query for single CIK
+            (r#"
+                SELECT s.id, s.cik, s.symbol
+                FROM stocks s
+                WHERE s.is_sp500 = 1
+                    AND s.cik = ?
+                    AND s.cik IS NOT NULL
+                    AND s.cik != ''
+                    AND s.cik != 'Unknown'
+                ORDER BY s.symbol
+            "#, Some(cik))
+        } else {
+            // All stocks query
+            (r#"
+                SELECT s.id, s.cik, s.symbol
+                FROM stocks s
+                WHERE s.is_sp500 = 1
+                    AND s.cik IS NOT NULL
+                    AND s.cik != ''
+                    AND s.cik != 'Unknown'
+                ORDER BY s.symbol
+            "#, None)
+        };
+
+        let mut query_builder = sqlx::query(query);
+        if let Some(cik) = bind_cik {
+            query_builder = query_builder.bind(cik);
+        }
+
+        let rows = query_builder.fetch_all(&self.pool).await?;
         let mut stocks = Vec::new();
-        
+
         for row in rows {
             let stock_id: i64 = row.get("id");
             let cik: String = row.get("cik");
@@ -271,6 +314,20 @@ impl DataStatusReader {
         }
         
         Ok(stocks)
+    }
+
+    /// Public unified entry point: process a provided list of stocks using the unified pipeline
+    pub async fn run_unified_financials_for_stocks(
+        &self,
+        stocks: &[(i64, String, String)]
+    ) -> Result<i64> {
+        // Create rate-limited client
+        let (client, limiter) = self.create_rate_limited_client().await?;
+        // Run unified extraction/store
+        let (_sec_all_dates, total_records_stored) = self
+            .get_sec_all_filing_dates_and_extract_data(&client, &limiter, stocks)
+            .await?;
+        Ok(total_records_stored)
     }
 
     /// Create rate-limited HTTP client using governor
@@ -624,25 +681,25 @@ impl DataStatusReader {
         
         // Extract filing metadata
         let filing_metadata_vec = edgar_client.extract_filing_metadata(json, symbol).ok();
-        let filing_metadata = filing_metadata_vec.as_ref().and_then(|vec| vec.first());
         
-        // Group by report date and store only missing dates
+        // Group by FILED DATE and store only those filed dates we are missing
         let mut records_stored = 0;
-        let mut balance_by_date: HashMap<String, HashMap<String, f64>> = HashMap::new();
+        let mut balance_by_filed: HashMap<String, (String, HashMap<String, f64>)> = HashMap::new();
         
-        for (field_name, value, report_date, _filed_date) in historical_data {
-            // Only process missing dates
-            if missing_dates.contains(&report_date) {
-                balance_by_date.entry(report_date.clone()).or_insert_with(HashMap::new)
-                    .insert(field_name, value);
+        for (field_name, value, report_date, filed_date) in historical_data {
+            if missing_dates.contains(&filed_date) {
+                let entry = balance_by_filed.entry(filed_date.clone()).or_insert_with(|| (report_date.clone(), HashMap::new()));
+                // Keep the first non-empty report_date if multiple tuples differ
+                if entry.0.is_empty() && !report_date.is_empty() { entry.0 = report_date.clone(); }
+                entry.1.insert(field_name, value);
             }
         }
         
-        // Store balance sheet data for missing dates
-        for (report_date, balance_data) in balance_by_date {
+        // Store balance sheet data for missing filed dates
+        for (filed_date, (report_date, balance_data)) in balance_by_filed {
             let fiscal_year = report_date.split('-').next().unwrap().parse::<i32>().unwrap_or(0);
             
-            println!("    💾 Storing balance sheet for {} ({})", symbol, report_date);
+            println!("    💾 Storing balance sheet for {} filed_date={} report_date={}", symbol, filed_date, report_date);
             
             // Calculate derived values
             let short_term_debt = balance_data.get("ShortTermDebt").copied()
@@ -673,8 +730,20 @@ impl DataStatusReader {
                 share_repurchases: balance_data.get("ShareRepurchases").copied(),
             };
             
-            edgar_client.store_balance_sheet_data(&balance_sheet_data, filing_metadata).await?;
-            records_stored += 1;
+            // Pick matching metadata for this filed_date
+            let meta = filing_metadata_vec
+                .as_ref()
+                .and_then(|vec| vec.iter().find(|m| m.filing_date == filed_date));
+
+            if let Some(metadata) = meta {
+                edgar_client.store_balance_sheet_data(&balance_sheet_data, Some(metadata)).await?;
+                records_stored += 1;
+            } else {
+                println!("🔴 WARNING: No matching metadata for {} filed_date={}", symbol, filed_date);
+                println!("   Available metadata filing_dates: {:?}",
+                    filing_metadata_vec.as_ref().map(|v| v.iter().map(|m| &m.filing_date).collect::<Vec<_>>()));
+                println!("   This balance sheet filing will be SKIPPED. Check if extract_filing_metadata is comprehensive.");
+            }
         }
         
         Ok(records_stored)
@@ -702,25 +771,24 @@ impl DataStatusReader {
         
         // Extract filing metadata
         let filing_metadata_vec = edgar_client.extract_filing_metadata(json, symbol).ok();
-        let filing_metadata = filing_metadata_vec.as_ref().and_then(|vec| vec.first());
         
-        // Group by report date and store only missing dates
+        // Group by FILED DATE and store only those filed dates we are missing
         let mut records_stored = 0;
-        let mut income_by_date: HashMap<String, HashMap<String, f64>> = HashMap::new();
+        let mut income_by_filed: HashMap<String, (String, HashMap<String, f64>)> = HashMap::new();
         
-        for (field_name, value, report_date, _filed_date) in historical_data {
-            // Only process missing dates
-            if missing_dates.contains(&report_date) {
-                income_by_date.entry(report_date.clone()).or_insert_with(HashMap::new)
-                    .insert(field_name, value);
+        for (field_name, value, report_date, filed_date) in historical_data {
+            if missing_dates.contains(&filed_date) {
+                let entry = income_by_filed.entry(filed_date.clone()).or_insert_with(|| (report_date.clone(), HashMap::new()));
+                if entry.0.is_empty() && !report_date.is_empty() { entry.0 = report_date.clone(); }
+                entry.1.insert(field_name, value);
             }
         }
         
-        // Store income statement data for missing dates
-        for (report_date, income_data) in income_by_date {
+        // Store income statement data for missing filed dates
+        for (filed_date, (report_date, income_data)) in income_by_filed {
             let fiscal_year = report_date.split('-').next().unwrap().parse::<i32>().unwrap_or(0);
             
-            println!("    💾 Storing income statement for {} ({})", symbol, report_date);
+            println!("    💾 Storing income statement for {} filed_date={} report_date={}", symbol, filed_date, report_date);
             
             let income_statement_data = IncomeStatementData {
                 stock_id,
@@ -740,8 +808,19 @@ impl DataStatusReader {
                 shares_diluted: income_data.get("WeightedAverageNumberOfSharesOutstandingDiluted").copied(),
             };
             
-            edgar_client.store_income_statement_data(&income_statement_data, filing_metadata).await?;
-            records_stored += 1;
+            let meta = filing_metadata_vec
+                .as_ref()
+                .and_then(|vec| vec.iter().find(|m| m.filing_date == filed_date));
+
+            if let Some(metadata) = meta {
+                edgar_client.store_income_statement_data(&income_statement_data, Some(metadata)).await?;
+                records_stored += 1;
+            } else {
+                println!("🔴 WARNING: No matching metadata for {} filed_date={}", symbol, filed_date);
+                println!("   Available metadata filing_dates: {:?}",
+                    filing_metadata_vec.as_ref().map(|v| v.iter().map(|m| &m.filing_date).collect::<Vec<_>>()));
+                println!("   This income statement filing will be SKIPPED. Check if extract_filing_metadata is comprehensive.");
+            }
         }
         
         Ok(records_stored)
@@ -769,25 +848,24 @@ impl DataStatusReader {
         
         // Extract filing metadata
         let filing_metadata_vec = edgar_client.extract_filing_metadata(json, symbol).ok();
-        let filing_metadata = filing_metadata_vec.as_ref().and_then(|vec| vec.first());
         
-        // Group by report date and store only missing dates
+        // Group by FILED DATE and store only those filed dates we are missing
         let mut records_stored = 0;
-        let mut cashflow_by_date: HashMap<String, HashMap<String, f64>> = HashMap::new();
+        let mut cashflow_by_filed: HashMap<String, (String, HashMap<String, f64>)> = HashMap::new();
         
-        for (field_name, value, report_date, _filed_date) in historical_data {
-            // Only process missing dates
-            if missing_dates.contains(&report_date) {
-                cashflow_by_date.entry(report_date.clone()).or_insert_with(HashMap::new)
-                    .insert(field_name, value);
+        for (field_name, value, report_date, filed_date) in historical_data {
+            if missing_dates.contains(&filed_date) {
+                let entry = cashflow_by_filed.entry(filed_date.clone()).or_insert_with(|| (report_date.clone(), HashMap::new()));
+                if entry.0.is_empty() && !report_date.is_empty() { entry.0 = report_date.clone(); }
+                entry.1.insert(field_name, value);
             }
         }
         
-        // Store cash flow data for missing dates
-        for (report_date, cashflow_data) in cashflow_by_date {
+        // Store cash flow data for missing filed dates
+        for (filed_date, (report_date, cashflow_data)) in cashflow_by_filed {
             let fiscal_year = report_date.split('-').next().unwrap().parse::<i32>().unwrap_or(0);
             
-            println!("    💾 Storing cash flow for {} ({})", symbol, report_date);
+            println!("    💾 Storing cash flow for {} filed_date={} report_date={}", symbol, filed_date, report_date);
             
             let cash_flow_data = CashFlowData {
                 stock_id,
@@ -804,8 +882,19 @@ impl DataStatusReader {
                 share_repurchases: cashflow_data.get("PaymentsForRepurchaseOfCommonStock").copied(),
             };
             
-            edgar_client.store_cash_flow_data(&cash_flow_data, filing_metadata).await?;
-            records_stored += 1;
+            let meta = filing_metadata_vec
+                .as_ref()
+                .and_then(|vec| vec.iter().find(|m| m.filing_date == filed_date));
+
+            if let Some(metadata) = meta {
+                edgar_client.store_cash_flow_data(&cash_flow_data, Some(metadata)).await?;
+                records_stored += 1;
+            } else {
+                println!("🔴 WARNING: No matching metadata for {} filed_date={}", symbol, filed_date);
+                println!("   Available metadata filing_dates: {:?}",
+                    filing_metadata_vec.as_ref().map(|v| v.iter().map(|m| &m.filing_date).collect::<Vec<_>>()));
+                println!("   This cash flow filing will be SKIPPED. Check if extract_filing_metadata is comprehensive.");
+            }
         }
         
         Ok(records_stored)

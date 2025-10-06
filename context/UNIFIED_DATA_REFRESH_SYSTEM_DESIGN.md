@@ -2030,3 +2030,901 @@ $ cargo run --bin refresh_data financials
 - [ ] Atomic operation (check + extract in one go)
 
 **This optimized architecture eliminates inefficiency while maintaining all benefits of concurrent processing and rate limiting.**
+
+---
+
+## 🛠️ HOTFIX PLAN: Align on filed_date, Correct Metadata Matching, Fix Final Status
+
+### Why this is needed
+- Logs show hundreds of stocks reported as stale with “No data in database,” but “Total records extracted: 0” and final status claims “All Financials data is current.”
+- Root causes:
+  - Freshness uses SEC `filed_date`, but extraction filters by `report_date` → nothing matches.
+  - We pick the first `FilingMetadata` for all records instead of the one matching the specific `filed_date`.
+  - Final status unconditionally sets Current even when no records were stored.
+
+### Scope of change
+- No schema changes. Pure code alignment and reporting corrections.
+- Maintain single-stage architecture and concurrency/rate limiting.
+
+### Step-by-step plan
+1) Compute missing dates using `filed_date` only
+   - In the worker (`get_all_sec_filings_for_cik_and_extract_data`), keep `missing_filed_dates: Vec<String>` derived from SEC `filed_date` minus DB `sec_filings.filed_date`.
+   - Pass `missing_filed_dates` to extraction helpers.
+
+2) Parse once; retain both dates
+   - Continue using existing parse functions that return `(field_name, value, report_date, filed_date)` tuples for all three statements.
+   - Do NOT derive filed_date from report_date.
+
+3) Group and store by filed_date → report_date
+   - In helpers (`extract_and_store_*`):
+     - Filter tuples by membership in `missing_filed_dates` via tuple.filed_date.
+     - Group values by tuple.filed_date; for each group, determine `report_date` (use tuple.report_date) and compute `fiscal_year` from `report_date`.
+     - When calling `store_*`, pass `report_date` and `fiscal_year` from the group.
+
+4) Select the correct FilingMetadata for each filed_date
+   - Use `extract_filing_metadata(json, symbol)` → `Vec<FilingMetadata>`.
+   - For each `filed_date` being stored, find `filing_metadata_vec.iter().find(|m| m.filing_date == filed_date)` and pass that `&FilingMetadata` to `store_*` so `create_or_get_sec_filing` gets the correct metadata, `fiscal_year`, and `report_date`.
+
+5) Improve logging for traceability
+   - Log both dates when storing: e.g., “Storing BS SYMBOL filed_date=YYYY-MM-DD report_date=YYYY-MM-DD”.
+   - Keep per-stock summaries of records written.
+
+6) Fix final status reporting
+   - After processing, recompute `stale_count` using the same comparison of SEC vs DB `filed_date` (or reuse the pre-processing results if unchanged).
+   - Set `financial_data.status = Current` only if `stale_count == 0`; otherwise `Stale`.
+   - Do not claim “All Financials data is current” when `total_records_stored == 0` and many stale remain.
+
+### Acceptance criteria
+- Missing SEC `filed_date` groups lead to created `sec_filings` rows and linked financial rows.
+- `FilingMetadata` matches the specific `filed_date` used for insert.
+- “Total records extracted” is non-zero when stale stocks are processed.
+- Final status reflects truth: Current only if no stale remain; otherwise Stale with counts.
+
+### Rollback
+- Changes are localized; safe to revert the helper/worker edits and status computation if needed.
+
+---
+
+## 🔧 COMPREHENSIVE FIX PLAN (2025-10-06 AUDIT)
+
+### Executive Summary
+
+After thorough audit of the data refresh system, the following critical issues were identified:
+
+**Status**:
+- ✅ Detection logic works perfectly (finds all missing `filed_date` values)
+- ❌ Extraction completely broken (0 records stored, 100% failure rate)
+- ❌ Metadata matching fails due to incomplete `extract_filing_metadata`
+- ❌ Final status reporting misleading (claims success when failed)
+- ❌ `--only-ticker` option processes all 497 stocks instead of filtering early
+
+**Impact**: Production system fails silently. Users think data is current when it's months/years old.
+
+### Root Cause Analysis
+
+**Problem 1: Incomplete Metadata Extraction**
+
+`extract_filing_metadata` only looks at 7 specific us-gaap fields:
+```rust
+let concepts_to_check = [
+    "Assets", "Revenues", "NetIncomeLoss", "OperatingIncomeLoss",
+    "Liabilities", "StockholdersEquity", "CashAndCashEquivalentsAtCarryingValue"
+];
+```
+
+But `parse_company_facts_json` looks at **different fields**:
+```rust
+let field_mappings = [
+    ("Assets", "Assets"),
+    ("ShortTermDebt", "ShortTermDebt"),  // ← NOT in extract_filing_metadata!
+    ("DebtCurrent", "DebtCurrent"),       // ← NOT in extract_filing_metadata!
+    ("PaymentsForRepurchaseOfCommonStock", "ShareRepurchases"), // ← NOT in extract_filing_metadata!
+    // ... 10+ more fields
+];
+```
+
+**Result**:
+- Parse functions find data with `filed_date = "2024-09-30"`
+- `extract_filing_metadata` doesn't look at those fields, so misses that `filed_date`
+- Matching fails → Falls back to first metadata → Gets wrong `accession_number` from 2009
+- Database constraint violation → 0 records stored
+
+**Problem 2: Dangerous Fallback Logic**
+
+```rust
+let meta = filing_metadata_vec
+    .iter()
+    .find(|m| m.filing_date == filed_date)
+    .or(filing_metadata_vec.first());  // ❌ PICKS WRONG METADATA!
+```
+
+When matching fails, uses first metadata from list (often years old).
+
+**Problem 3: --only-ticker Doesn't Filter Early**
+
+User runs: `cargo run --bin refresh_data financials --only-ticker WMT`
+
+Expected: Process only WMT
+Actual:
+1. `check_financial_filing_freshness()` processes all 497 stocks
+2. Downloads JSON for all 497 stocks
+3. Only then filters to WMT for storage
+4. Wastes ~5 minutes checking 496 unnecessary stocks
+
+**Problem 4: Incorrect Final Status**
+
+```rust
+Ok(SystemFreshnessReport {
+    overall_status: FreshnessStatus::Current, // ❌ HARDCODED!
+    // Even when total_records_stored == 0 and errors everywhere
+})
+```
+
+### Database Schema (Reference)
+
+**Tables we populate**:
+
+1. **sec_filings** (metadata for each filing):
+   - `filed_date` (DATE NOT NULL) - When filed with SEC
+   - `report_date` (DATE NOT NULL) - Period end date
+   - `fiscal_year` (INTEGER NOT NULL) - Fiscal year
+   - `accession_number` (TEXT NOT NULL) - Unique filing ID
+   - `form_type` (TEXT NOT NULL) - e.g., "10-K", "10-Q"
+   - `fiscal_period` (TEXT) - e.g., "FY", "Q1"
+   - **Constraints**: UNIQUE(stock_id, accession_number), UNIQUE(stock_id, form_type, report_date, fiscal_year)
+
+2. **balance_sheets** (assets, liabilities, equity):
+   - Links to `sec_filings` via `sec_filing_id`
+   - Fields: total_assets, total_liabilities, total_equity, cash_and_equivalents, current_assets, current_liabilities, short_term_debt, long_term_debt, total_debt, share_repurchases
+
+3. **income_statements** (revenue, profit):
+   - Links to `sec_filings` via `sec_filing_id`
+   - Fields: revenue, gross_profit, operating_income, net_income, shares_basic, shares_diluted, cost_of_revenue, interest_expense
+
+4. **cash_flow_statements** (cash flows):
+   - Links to `sec_filings` via `sec_filing_id`
+   - Fields: operating_cash_flow, investing_cash_flow, financing_cash_flow, depreciation_expense, amortization_expense, dividends_paid, share_repurchases, capital_expenditures
+
+**Data Extraction Strategy**:
+- Parse SEC JSON once per stock
+- Extract all us-gaap fields that map to our schema
+- Group by `filed_date` (primary key for freshness)
+- Create one `sec_filings` record per `filed_date`
+- Link financial statement records to `sec_filing_id`
+
+### Comprehensive Fix Specifications
+
+#### Fix 1: Make extract_filing_metadata Comprehensive (DRY Principle)
+
+**File**: `src-tauri/src/tools/sec_edgar_client.rs`
+**Function**: `extract_filing_metadata` (lines 277-322)
+
+**Current Behavior**:
+- Only iterates 7 hardcoded us-gaap fields
+- Misses most filing dates because it doesn't look at all fields
+
+**Required Change**:
+```rust
+// BEFORE (limited):
+let concepts_to_check = [
+    "Assets", "Revenues", "NetIncomeLoss", "OperatingIncomeLoss",
+    "Liabilities", "StockholdersEquity", "CashAndCashEquivalentsAtCarryingValue"
+];
+
+for concept in &concepts_to_check {
+    if let Some(field_data) = facts.get(concept) {
+        // ...
+    }
+}
+
+// AFTER (comprehensive):
+if let Some(facts) = json.get("facts").and_then(|f| f.get("us-gaap")) {
+    if let Some(facts_obj) = facts.as_object() {
+        // Iterate ALL us-gaap fields instead of just 7
+        for (_field_name, field_data) in facts_obj {
+            if let Some(units) = field_data.get("units") {
+                if let Some(usd_data) = units.get("USD") {
+                    if let Some(values) = usd_data.as_array() {
+                        for value in values {
+                            if let (Some(accn), Some(form), Some(filed), Some(fp), Some(end)) = (
+                                value.get("accn").and_then(|a| a.as_str()),
+                                value.get("form").and_then(|f| f.as_str()),
+                                value.get("filed").and_then(|d| d.as_str()),
+                                value.get("fp").and_then(|fp| fp.as_str()),
+                                value.get("end").and_then(|e| e.as_str())
+                            ) {
+                                // Extract metadata
+                                let metadata = FilingMetadata {
+                                    accession_number: accn.to_string(),
+                                    form_type: form.to_string(),
+                                    filing_date: filed.to_string(),
+                                    fiscal_period: fp.to_string(),
+                                    report_date: end.to_string(),
+                                };
+                                metadata_vec.push(metadata);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Remove duplicates based on accession number (same as before)
+metadata_vec.sort_by(|a, b| a.accession_number.cmp(&b.accession_number));
+metadata_vec.dedup_by(|a, b| a.accession_number == b.accession_number);
+```
+
+**Benefits**:
+- ✅ Captures ALL filing metadata from JSON (no missed dates)
+- ✅ Single pass through JSON (DRY - no duplication)
+- ✅ No additional API calls
+- ✅ Matching will succeed because we have all filing dates
+
+**Acceptance Criteria**:
+- Must extract metadata from ALL us-gaap fields, not just 7
+- Must deduplicate by accession_number
+- Must return Vec<FilingMetadata> with comprehensive coverage
+
+#### Fix 2: Remove Dangerous Fallback Logic (Safety)
+
+**Files**:
+- `src-tauri/src/tools/data_freshness_checker.rs` (lines 693-698, 765-769, 833-836)
+
+**Current Behavior**:
+```rust
+let meta = filing_metadata_vec
+    .as_ref()
+    .and_then(|vec| vec.iter().find(|m| m.filing_date == filed_date))
+    .or(filing_metadata_vec.as_ref().and_then(|vec| vec.first())); // ❌ DANGEROUS!
+```
+
+**Required Change**:
+```rust
+let meta = filing_metadata_vec
+    .as_ref()
+    .and_then(|vec| vec.iter().find(|m| m.filing_date == filed_date));
+    // REMOVE: .or(filing_metadata_vec.as_ref().and_then(|vec| vec.first()));
+
+// Only proceed if we have matching metadata
+if let Some(metadata) = meta {
+    edgar_client.store_balance_sheet_data(&balance_sheet_data, Some(metadata)).await?;
+    records_stored += 1;
+} else {
+    // 🔴 RED WARNING for debugging
+    println!("🔴 WARNING: No matching metadata for {} filed_date={}", symbol, filed_date);
+    println!("   Available metadata filing_dates: {:?}",
+        filing_metadata_vec.as_ref().map(|v| v.iter().map(|m| &m.filing_date).collect::<Vec<_>>()));
+    continue; // Skip this filing
+}
+```
+
+**Apply to all 3 extraction functions**:
+1. `extract_and_store_balance_sheet_data` (line 693-698)
+2. `extract_and_store_income_statement_data` (line 765-769)
+3. `extract_and_store_cash_flow_data` (line 833-836)
+
+**Benefits**:
+- ✅ Never uses wrong metadata
+- ✅ Clear warnings when matching fails (helps debugging)
+- ✅ Safe failure mode (skip rather than corrupt)
+
+**Acceptance Criteria**:
+- Must NOT have fallback to `.first()` in any extraction function
+- Must print red warning with available filing_dates when match fails
+- Must skip filing and continue processing (don't crash)
+
+#### Fix 3: Early Filtering for --only-ticker (Performance)
+
+**Affected Files**:
+- `src-tauri/src/tools/data_freshness_checker.rs` (check_financial_filing_freshness, get_sp500_stocks_with_ciks)
+- `src-tauri/src/tools/data_refresh_orchestrator.rs` (refresh_financials_unified)
+
+**Current Behavior**:
+```
+User: cargo run --bin refresh_data financials --only-ticker WMT
+System:
+  1. check_financial_filing_freshness() gets all 497 stocks
+  2. Downloads JSON for all 497 stocks
+  3. Compares all 497 stocks
+  4. Then filters to WMT in orchestrator
+  5. Total time: ~5 minutes for 496 unnecessary stocks
+```
+
+**Required Architecture Change**:
+
+**Step 1: Add filtering parameter to get_sp500_stocks_with_ciks**
+```rust
+// BEFORE:
+pub async fn get_sp500_stocks_with_ciks(&self) -> Result<Vec<(i64, String, String)>>
+
+// AFTER:
+pub async fn get_sp500_stocks_with_ciks(&self, only_cik: Option<&String>) -> Result<Vec<(i64, String, String)>> {
+    let query = if let Some(cik) = only_cik {
+        // Filter query
+        r#"
+            SELECT s.id, s.cik, s.symbol
+            FROM stocks s
+            WHERE s.is_sp500 = 1
+                AND s.cik = ?
+                AND s.cik IS NOT NULL
+                AND s.cik != ''
+                AND s.cik != 'Unknown'
+            ORDER BY s.symbol
+        "#
+    } else {
+        // All stocks query (existing)
+        r#"
+            SELECT s.id, s.cik, s.symbol
+            FROM stocks s
+            WHERE s.is_sp500 = 1
+                AND s.cik IS NOT NULL
+                AND s.cik != ''
+                AND s.cik != 'Unknown'
+            ORDER BY s.symbol
+        "#
+    };
+
+    let mut query_builder = sqlx::query(query);
+    if let Some(cik) = only_cik {
+        query_builder = query_builder.bind(cik);
+    }
+
+    let rows = query_builder.fetch_all(&self.pool).await?;
+    // ... rest of function
+}
+```
+
+**Step 2: Thread only_cik through the call chain**
+```rust
+// refresh_data.rs already resolves ticker → CIK ✅
+// Pass to orchestrator ✅
+
+// data_refresh_orchestrator.rs:
+async fn refresh_financials_unified(&self, _session_id: &str, only_cik: Option<&String>) -> Result<i64> {
+    // Pass only_cik to status_reader
+    let total_records_stored = self.status_reader
+        .run_unified_financials_for_stocks_filtered(only_cik)  // NEW signature
+        .await?;
+}
+
+// data_freshness_checker.rs:
+pub async fn run_unified_financials_for_stocks_filtered(
+    &self,
+    only_cik: Option<&String>
+) -> Result<i64> {
+    // Get filtered stocks
+    let stocks = self.get_sp500_stocks_with_ciks(only_cik).await?;
+
+    if let Some(cik) = only_cik {
+        println!("🎯 Processing single stock: CIK {}", cik);
+    } else {
+        println!("📊 Processing {} S&P 500 stocks", stocks.len());
+    }
+
+    // Process with unified pipeline
+    let (client, limiter) = self.create_rate_limited_client().await?;
+    let (_sec_dates, total_records) = self
+        .get_sec_all_filing_dates_and_extract_data(&client, &limiter, &stocks)
+        .await?;
+
+    Ok(total_records)
+}
+```
+
+**Step 3: Remove redundant filtering in orchestrator**
+```rust
+// DELETE this entire branch (lines 437-475 in data_refresh_orchestrator.rs):
+if let Some(cik) = only_cik {
+    println!("🎯 Processing only CIK: {}", cik);
+    let stock_query = r#"......"#;  // ❌ DELETE - redundant!
+    // ... ❌ DELETE all this code
+}
+```
+
+**Benefits**:
+- ✅ Processes only requested stock (1 instead of 497)
+- ✅ Faster testing (seconds vs minutes)
+- ✅ Less API load on SEC servers
+- ✅ Cleaner architecture (filter once, early)
+
+**Acceptance Criteria**:
+- When `--only-ticker WMT` is used, must process exactly 1 stock
+- Must print: "🎯 Processing single stock: CIK 0000104169"
+- Must NOT print: "📊 Processing 497 S&P 500 stocks"
+- Execution time for single stock: < 10 seconds
+
+#### Fix 4: Red Warnings for Metadata Matching Failures
+
+**Implementation** (already specified in Fix 2):
+```rust
+if let Some(metadata) = meta {
+    // Store data
+} else {
+    println!("🔴 WARNING: No matching metadata for {} filed_date={}", symbol, filed_date);
+    println!("   Available metadata filing_dates: {:?}",
+        filing_metadata_vec.as_ref().map(|v| v.iter().map(|m| &m.filing_date).collect::<Vec<_>>()));
+    println!("   This filing will be SKIPPED. Check if extract_filing_metadata is comprehensive.");
+}
+```
+
+**Format Requirements**:
+- Must use 🔴 emoji for visibility
+- Must show symbol and failed filed_date
+- Must list all available filing_dates from metadata
+- Must explain consequence (filing skipped)
+
+#### Fix 5: Correct Final Status Reporting
+
+**File**: `src-tauri/src/tools/data_freshness_checker.rs` (lines 162-184)
+
+**Current Behavior**:
+```rust
+Ok(SystemFreshnessReport {
+    overall_status: FreshnessStatus::Current, // ❌ HARDCODED!
+    financial_data: DataFreshnessStatus {
+        status: if stale_count == 0 { ... } else { ... },
+        message: format!("Extracted {} records...", total_records_stored),
+    }
+})
+```
+
+**Required Change**:
+```rust
+// Determine actual status based on results
+let financial_status = if total_records_stored == 0 && stale_count > 0 {
+    FreshnessStatus::Error  // Failed to store anything despite stale data
+} else if stale_count == 0 {
+    FreshnessStatus::Current  // All data is current
+} else {
+    FreshnessStatus::Stale  // Some data still stale
+};
+
+let overall_status = if total_records_stored == 0 && stale_count > 0 {
+    FreshnessStatus::Error  // System failure
+} else if stale_count == 0 {
+    FreshnessStatus::Current  // Success
+} else {
+    FreshnessStatus::Stale  // Partial success
+};
+
+Ok(SystemFreshnessReport {
+    overall_status,  // ✅ Based on actual results
+    financial_data: DataFreshnessStatus {
+        status: financial_status,  // ✅ Based on actual results
+        message: if total_records_stored == 0 && stale_count > 0 {
+            format!("🔴 FAILED: {} stocks remain stale, 0 records stored (check warnings above)", stale_count)
+        } else if total_records_stored > 0 && stale_count > 0 {
+            format!("⚠️ PARTIAL: Extracted {} records, but {} stocks still stale", total_records_stored, stale_count)
+        } else {
+            format!("✅ SUCCESS: Extracted {} records from {} stocks, all current", total_records_stored, processed_count)
+        },
+        // ... rest of fields
+    },
+    // ... rest of report
+})
+```
+
+**Benefits**:
+- ✅ Accurate status (no false success reports)
+- ✅ Clear messages (user knows what happened)
+- ✅ Actionable feedback (errors are visible)
+
+**Acceptance Criteria**:
+- `overall_status` must be Error if total_records_stored == 0 && stale_count > 0
+- `overall_status` must be Current only if stale_count == 0
+- Message must clearly indicate success/partial/failure with emoji
+- Must NOT claim success when 0 records were stored
+
+### Implementation Order
+
+**Phase 1: Critical Fixes (30-45 minutes)**
+1. Fix 1: Make extract_filing_metadata comprehensive
+2. Fix 2: Remove fallback logic + add red warnings
+3. Fix 5: Fix final status reporting
+
+**Phase 2: Optimization (20 minutes)**
+4. Fix 3: Early filtering for --only-ticker
+
+**Phase 3: Testing (15-30 minutes)**
+5. Test with `--only-ticker WMT`
+6. Verify records stored in database
+7. Verify status reporting accuracy
+
+**Total Estimated Time**: 1.5-2 hours
+
+### Testing Strategy
+
+**Test 1: Single Stock (WMT)**
+```bash
+cargo run --bin refresh_data financials --only-ticker WMT
+```
+
+**Expected Output**:
+```
+🎯 --only-ticker=WMT resolved to CIK 0000104169
+🎯 Processing single stock: CIK 0000104169
+📊 Extracting X missing financial records for WMT (CIK: 0000104169)
+📅 Missing dates: YYYY-MM-DD, YYYY-MM-DD
+    📊 Processing balance sheet data for WMT...
+    💾 Storing balance sheet for WMT filed_date=YYYY-MM-DD report_date=YYYY-MM-DD
+    ✅ Created sec_filing record ID=XXX for filed_date=YYYY-MM-DD
+✅ Stored N financial records for WMT
+✅ SUCCESS: Extracted N records from 1 stocks, all current
+```
+
+**Expected Database Changes**:
+```sql
+-- Check sec_filings
+SELECT COUNT(*) FROM sec_filings WHERE stock_id = (SELECT id FROM stocks WHERE symbol = 'WMT');
+-- Should increase
+
+-- Check balance_sheets
+SELECT COUNT(*) FROM balance_sheets WHERE stock_id = (SELECT id FROM stocks WHERE symbol = 'WMT');
+-- Should increase
+
+-- Check data linkage
+SELECT bs.report_date, sf.filed_date, sf.accession_number
+FROM balance_sheets bs
+JOIN sec_filings sf ON bs.sec_filing_id = sf.id
+WHERE bs.stock_id = (SELECT id FROM stocks WHERE symbol = 'WMT')
+ORDER BY sf.filed_date DESC LIMIT 5;
+-- Should show proper linkage
+```
+
+**Test 2: Error Handling**
+```bash
+cargo run --bin refresh_data financials --only-ticker FAKE
+```
+
+**Expected Output**:
+```
+❌ Could not resolve ticker 'FAKE' to a CIK. Proceeding without filter.
+```
+
+**Test 3: Metadata Matching Warnings**
+
+If Fix 1 is not yet applied, should see:
+```
+🔴 WARNING: No matching metadata for AAPL filed_date=2024-09-30
+   Available metadata filing_dates: ["2024-02-15", "2024-05-15", "2024-08-15"]
+   This filing will be SKIPPED. Check if extract_filing_metadata is comprehensive.
+```
+
+### Success Criteria
+
+**Must Have**:
+- ✅ Single ticker processing (--only-ticker WMT processes exactly 1 stock)
+- ✅ Records actually stored (verify in database)
+- ✅ Accurate status reporting (no false success)
+- ✅ No database constraint violations
+- ✅ DRY principle maintained (no duplicate API calls)
+
+**Should Have**:
+- ✅ Clear red warnings for failures
+- ✅ Comprehensive metadata extraction (all us-gaap fields)
+- ✅ Fast execution for single stock (< 10 seconds)
+
+**Won't Have** (Future Enhancements):
+- ❌ User confirmation prompts (auto-execute for now)
+- ❌ Progress bars (simple println for now)
+- ❌ Retry logic for failed filings
+
+### Rollback Plan
+
+All changes are localized to:
+- `sec_edgar_client.rs` (extract_filing_metadata function)
+- `data_freshness_checker.rs` (extraction helpers, status reporting)
+
+Easy to revert by:
+1. Git reset to previous commit
+2. Or comment out new code sections
+3. Database unchanged (INSERT OR REPLACE handles duplicates)
+
+### Post-Implementation Validation
+
+After all fixes are applied, run:
+```bash
+# Test single stock
+cargo run --bin refresh_data financials --only-ticker WMT
+
+# Check database
+sqlite3 db/stocks.db "
+  SELECT
+    s.symbol,
+    COUNT(DISTINCT sf.id) as filing_count,
+    COUNT(DISTINCT bs.id) as balance_sheet_count,
+    COUNT(DISTINCT is.id) as income_stmt_count,
+    COUNT(DISTINCT cf.id) as cashflow_count,
+    MAX(sf.filed_date) as latest_filing
+  FROM stocks s
+  LEFT JOIN sec_filings sf ON s.id = sf.stock_id
+  LEFT JOIN balance_sheets bs ON bs.sec_filing_id = sf.id
+  LEFT JOIN income_statements is ON is.sec_filing_id = sf.id
+  LEFT JOIN cash_flow_statements cf ON cf.sec_filing_id = sf.id
+  WHERE s.symbol = 'WMT'
+  GROUP BY s.symbol;
+"
+```
+
+**Expected**: All counts should increase, latest_filing should be recent.
+
+---
+
+## 🔒 DATA INTEGRITY ENFORCEMENT (2025-10-06)
+
+### Problem Statement
+
+After cleanup, we discovered that the system was creating `sec_filings` records but failing to store associated financial data, leading to orphaned records. Testing revealed:
+
+**AAPL Test Results**:
+- ✅ Created 5 sec_filing records successfully (IDs 26010-26014)
+- ❌ Failed on 6th record due to duplicate `accession_number`
+- ❌ Left 5 orphaned sec_filings in database (no financial data linked)
+- **Result**: Data corruption - sec_filings exist without complete financial statements
+
+### Critical Requirement
+
+**INVARIANT**: If a `sec_filings` record exists, it MUST have ALL THREE associated financial statements:
+- `balance_sheets` record with `sec_filing_id`
+- `income_statements` record with `sec_filing_id`
+- `cash_flow_statements` record with `sec_filing_id`
+
+**Enforcement**: This invariant must be enforced at the application level through:
+1. Transaction-based storage (all-or-nothing)
+2. Cleanup on failure (remove sec_filing if any statement fails)
+
+### Root Cause
+
+**Current Flow** (BROKEN):
+```
+1. Create sec_filing record → Success (ID=26010)
+2. Store balance_sheet → Success
+3. Store income_statement → Success
+4. Store cash_flow → Success
+5. Create sec_filing record → Success (ID=26011)
+6. Store balance_sheet → Success
+7. Store income_statement → Success
+8. Store cash_flow → Success
+... (repeats for records 26012-26014)
+9. Create sec_filing record → FAIL (duplicate accession_number)
+10. Worker function returns error
+11. Previous 5 sec_filings remain orphaned ❌
+```
+
+**Issues**:
+- No transaction wrapping storage operations
+- Partial success leaves orphaned sec_filings
+- No cleanup on failure
+- No rollback mechanism
+
+### Solution Design
+
+#### **Approach 1: Transaction-Based Storage (ACID Guarantee)**
+
+Wrap all storage operations for a single filing in a database transaction:
+
+```rust
+// Pseudocode
+async fn store_filing_with_transaction(
+    pool: &SqlitePool,
+    filing_metadata: FilingMetadata,
+    balance_data: BalanceSheetData,
+    income_data: IncomeStatementData,
+    cashflow_data: CashFlowData
+) -> Result<i64> {
+    // Start transaction
+    let mut tx = pool.begin().await?;
+
+    // 1. Create sec_filing (or get existing)
+    let sec_filing_id = create_or_get_sec_filing(&mut tx, &filing_metadata).await?;
+
+    // 2. Store balance sheet
+    store_balance_sheet(&mut tx, sec_filing_id, &balance_data).await?;
+
+    // 3. Store income statement
+    store_income_statement(&mut tx, sec_filing_id, &income_data).await?;
+
+    // 4. Store cash flow
+    store_cash_flow(&mut tx, sec_filing_id, &cashflow_data).await?;
+
+    // 5. Commit transaction (all-or-nothing)
+    tx.commit().await?;
+
+    Ok(1) // Success
+}
+```
+
+**Benefits**:
+- ✅ ACID guarantees (Atomicity, Consistency, Isolation, Durability)
+- ✅ Automatic rollback on any failure
+- ✅ No orphaned records possible
+- ✅ Clean error handling
+
+**Tradeoffs**:
+- Requires refactoring storage functions to accept transaction
+- Slightly more complex code
+
+#### **Approach 2: Cleanup on Failure (Defensive Programming)**
+
+Add explicit cleanup logic when storage fails:
+
+```rust
+// Pseudocode
+async fn store_filing_with_cleanup(
+    pool: &SqlitePool,
+    filing_metadata: FilingMetadata,
+    balance_data: BalanceSheetData,
+    income_data: IncomeStatementData,
+    cashflow_data: CashFlowData
+) -> Result<i64> {
+    // 1. Create sec_filing
+    let sec_filing_id = create_or_get_sec_filing(pool, &filing_metadata).await?;
+
+    // 2-4. Try to store all financial data
+    let result = async {
+        store_balance_sheet(pool, sec_filing_id, &balance_data).await?;
+        store_income_statement(pool, sec_filing_id, &income_data).await?;
+        store_cash_flow(pool, sec_filing_id, &cashflow_data).await?;
+        Ok(())
+    }.await;
+
+    // 5. If any step failed, cleanup sec_filing
+    if let Err(e) = result {
+        println!("🔴 ERROR: Failed to store financial data for filing_id={}, cleaning up sec_filing", sec_filing_id);
+        delete_sec_filing(pool, sec_filing_id).await?;
+        return Err(e);
+    }
+
+    Ok(1) // Success
+}
+```
+
+**Benefits**:
+- ✅ Explicit cleanup logic (easy to understand)
+- ✅ Can log detailed error information
+- ✅ No orphaned records
+
+**Tradeoffs**:
+- Race conditions possible (another process might read orphaned record before cleanup)
+- More error handling code
+
+#### **Recommended Solution: BOTH**
+
+Implement **Approach 1** (transactions) as primary mechanism, with **Approach 2** (cleanup) as defense-in-depth:
+
+```rust
+async fn store_filing_atomic(
+    pool: &SqlitePool,
+    filing_metadata: FilingMetadata,
+    balance_data: BalanceSheetData,
+    income_data: IncomeStatementData,
+    cashflow_data: CashFlowData
+) -> Result<i64> {
+    // Start transaction
+    let mut tx = pool.begin().await?;
+
+    // Try to store everything
+    let result = async {
+        let sec_filing_id = create_or_get_sec_filing(&mut tx, &filing_metadata).await?;
+        store_balance_sheet(&mut tx, sec_filing_id, &balance_data).await?;
+        store_income_statement(&mut tx, sec_filing_id, &income_data).await?;
+        store_cash_flow(&mut tx, sec_filing_id, &cashflow_data).await?;
+        Ok(sec_filing_id)
+    }.await;
+
+    match result {
+        Ok(sec_filing_id) => {
+            // All succeeded - commit
+            tx.commit().await?;
+            Ok(1)
+        }
+        Err(e) => {
+            // Any failure - rollback (automatic on tx drop)
+            println!("🔴 ERROR: Failed to store filing, rolling back transaction: {}", e);
+            // Transaction automatically rolled back when tx is dropped
+            Err(e)
+        }
+    }
+}
+```
+
+### Implementation Plan
+
+**Phase 1: Refactor Storage Functions (1-2 hours)**
+1. Update `store_balance_sheet_data`, `store_income_statement_data`, `store_cash_flow_data` to accept `&mut Transaction` instead of `&SqlitePool`
+2. Update `create_or_get_sec_filing` to accept `&mut Transaction`
+3. Keep backward compatibility by creating wrapper functions if needed
+
+**Phase 2: Implement Transaction-Based Storage (30 mins)**
+1. Create new function `store_filing_with_transaction` in data_freshness_checker.rs
+2. Wrap all storage operations in transaction
+3. Add error logging with filing details
+
+**Phase 3: Update Extraction Logic (30 mins)**
+1. Modify `extract_and_store_balance_sheet_data` to use transactional storage
+2. Modify `extract_and_store_income_statement_data` to use transactional storage
+3. Modify `extract_and_store_cash_flow_data` to use transactional storage
+
+**Phase 4: Add Defensive Cleanup (30 mins)**
+1. Add verification after transaction commit
+2. Add cleanup function to delete orphaned sec_filings (defensive)
+3. Run cleanup on startup to catch any existing orphans
+
+**Phase 5: Testing (30 mins)**
+1. Test with AAPL (has duplicate issues)
+2. Verify no orphaned sec_filings created
+3. Verify rollback works on failure
+4. Check database integrity after failures
+
+### Testing Strategy
+
+**Test Case 1: Success Path**
+```bash
+cargo run --bin refresh_data financials --only-ticker WMT
+```
+Expected:
+- All 3 statements stored for each filing
+- Transaction commits successfully
+- No orphaned records
+
+**Test Case 2: Failure Path (Duplicate)**
+```bash
+cargo run --bin refresh_data financials --only-ticker AAPL
+```
+Expected:
+- Transaction rolls back on duplicate accession_number
+- No orphaned sec_filings created
+- Clear error message explaining failure
+
+**Test Case 3: Database Integrity Check**
+```sql
+-- Should return 0 (no orphaned filings)
+SELECT COUNT(*) FROM sec_filings sf
+WHERE NOT EXISTS (SELECT 1 FROM balance_sheets bs WHERE bs.sec_filing_id = sf.id)
+   OR NOT EXISTS (SELECT 1 FROM income_statements inc WHERE inc.sec_filing_id = sf.id)
+   OR NOT EXISTS (SELECT 1 FROM cash_flow_statements cf WHERE cf.sec_filing_id = sf.id);
+```
+
+### Acceptance Criteria
+
+**Must Have**:
+- ✅ All storage operations wrapped in transactions
+- ✅ Automatic rollback on any failure
+- ✅ Zero orphaned sec_filings after any operation
+- ✅ Clear error messages identifying which filing failed
+- ✅ Tests pass with both success and failure scenarios
+
+**Should Have**:
+- ✅ Defensive cleanup function (belt-and-suspenders)
+- ✅ Startup integrity check
+- ✅ Detailed logging of transaction boundaries
+
+**Won't Have** (Future Enhancements):
+- ❌ Retry logic for transient failures (handle at higher level)
+- ❌ Partial commit (if 2/3 succeed, still rollback all - maintain invariant)
+
+### Database Constraints
+
+Our existing constraints help enforce integrity:
+```sql
+-- sec_filings constraints
+UNIQUE(stock_id, accession_number)
+UNIQUE(stock_id, form_type, report_date, fiscal_year)
+
+-- Foreign keys
+balance_sheets.sec_filing_id → sec_filings.id
+income_statements.sec_filing_id → sec_filings.id
+cash_flow_statements.sec_filing_id → sec_filings.id
+```
+
+**Note**: SQLite doesn't enforce foreign key cascades by default, so application-level enforcement is critical.
+
+### Rollback Plan
+
+Changes are localized to storage functions. Easy to revert by:
+1. Git reset to previous commit
+2. Or comment out transaction wrapper (fall back to old behavior)
+3. Run cleanup script to fix any orphaned records
+

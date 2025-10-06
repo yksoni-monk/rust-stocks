@@ -960,14 +960,53 @@ impl SecEdgarClient {
         }
     }
 
+    /// Store complete filing data atomically (all 3 statements + sec_filing)
+    /// This ensures ACID guarantees: either all data is stored or nothing is stored
+    pub async fn store_filing_atomic(
+        &self,
+        stock_id: i64,
+        symbol: &str,
+        metadata: &FilingMetadata,
+        fiscal_year: i32,
+        report_date: &str,
+        balance_data: &BalanceSheetData,
+        income_data: &IncomeStatementData,
+        cashflow_data: &CashFlowData
+    ) -> Result<i64> {
+        // Start transaction
+        let mut tx = self.pool.begin().await?;
+
+        // 1. Create or get sec_filing (transaction variant)
+        let sec_filing_id = self.create_or_get_sec_filing_tx(&mut tx, stock_id, metadata, fiscal_year, report_date).await?;
+
+        // 2. Store balance sheet (transaction variant)
+        self.store_balance_sheet_data_tx(&mut tx, balance_data, sec_filing_id).await
+            .map_err(|e| anyhow!("Failed to store balance sheet for {} ({}): {}", symbol, metadata.filing_date, e))?;
+
+        // 3. Store income statement (transaction variant)
+        self.store_income_statement_data_tx(&mut tx, income_data, sec_filing_id).await
+            .map_err(|e| anyhow!("Failed to store income statement for {} ({}): {}", symbol, metadata.filing_date, e))?;
+
+        // 4. Store cash flow (transaction variant)
+        self.store_cash_flow_data_tx(&mut tx, cashflow_data, sec_filing_id).await
+            .map_err(|e| anyhow!("Failed to store cash flow for {} ({}): {}", symbol, metadata.filing_date, e))?;
+
+        // 5. Commit transaction (ACID guarantee: all-or-nothing)
+        tx.commit().await
+            .map_err(|e| anyhow!("Failed to commit transaction for {} ({}): {}", symbol, metadata.filing_date, e))?;
+
+        println!("    ✅ [ATOMIC] Stored complete filing for {} on {} (sec_filing_id={})", symbol, report_date, sec_filing_id);
+        Ok(sec_filing_id)
+    }
+
     /// Create or get existing sec_filing record
     async fn create_or_get_sec_filing(&self, stock_id: i64, metadata: &FilingMetadata, fiscal_year: i32, report_date: &str) -> Result<i64> {
         // First try to find existing record
         let existing_query = r#"
-            SELECT id FROM sec_filings 
+            SELECT id FROM sec_filings
             WHERE stock_id = ? AND accession_number = ? AND form_type = ? AND filed_date = ?
         "#;
-        
+
         if let Some(existing_id) = sqlx::query_scalar::<_, i64>(existing_query)
             .bind(stock_id)
             .bind(&metadata.accession_number)
@@ -985,10 +1024,10 @@ impl SecEdgarClient {
             INSERT INTO sec_filings (stock_id, accession_number, form_type, filed_date, fiscal_period, fiscal_year, report_date)
             VALUES (?, ?, ?, ?, ?, ?, ?)
         "#;
-        
-        println!("    📋 Creating new sec_filing record: stock_id={}, filed_date={}, report_date={}, fiscal_year={}", 
+
+        println!("    📋 Creating new sec_filing record: stock_id={}, filed_date={}, report_date={}, fiscal_year={}",
                  stock_id, metadata.filing_date, report_date, fiscal_year);
-        
+
         let result = sqlx::query(insert_query)
             .bind(stock_id)
             .bind(&metadata.accession_number)
@@ -999,9 +1038,54 @@ impl SecEdgarClient {
             .bind(report_date)
             .execute(&self.pool)
             .await?;
-            
+
         let new_id = result.last_insert_rowid();
         println!("    ✅ Created sec_filing record ID={} for filed_date={}", new_id, metadata.filing_date);
+        Ok(new_id)
+    }
+
+    /// Create or get existing sec_filing record (transaction variant)
+    async fn create_or_get_sec_filing_tx(&self, tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, stock_id: i64, metadata: &FilingMetadata, fiscal_year: i32, report_date: &str) -> Result<i64> {
+        // First try to find existing record
+        let existing_query = r#"
+            SELECT id FROM sec_filings
+            WHERE stock_id = ? AND accession_number = ? AND form_type = ? AND filed_date = ?
+        "#;
+
+        if let Some(existing_id) = sqlx::query_scalar::<_, i64>(existing_query)
+            .bind(stock_id)
+            .bind(&metadata.accession_number)
+            .bind(&metadata.form_type)
+            .bind(&metadata.filing_date)
+            .fetch_optional(&mut **tx)
+            .await?
+        {
+            println!("    📋 [TX] Found existing sec_filing record ID={} for filed_date={}", existing_id, metadata.filing_date);
+            return Ok(existing_id);
+        }
+
+        // Create new record with all required columns
+        let insert_query = r#"
+            INSERT INTO sec_filings (stock_id, accession_number, form_type, filed_date, fiscal_period, fiscal_year, report_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        "#;
+
+        println!("    📋 [TX] Creating new sec_filing record: stock_id={}, filed_date={}, report_date={}, fiscal_year={}",
+                 stock_id, metadata.filing_date, report_date, fiscal_year);
+
+        let result = sqlx::query(insert_query)
+            .bind(stock_id)
+            .bind(&metadata.accession_number)
+            .bind(&metadata.form_type)
+            .bind(&metadata.filing_date)
+            .bind(&metadata.fiscal_period)
+            .bind(fiscal_year)
+            .bind(report_date)
+            .execute(&mut **tx)
+            .await?;
+
+        let new_id = result.last_insert_rowid();
+        println!("    ✅ [TX] Created sec_filing record ID={} for filed_date={}", new_id, metadata.filing_date);
         Ok(new_id)
     }
 
@@ -1047,6 +1131,41 @@ impl SecEdgarClient {
         Ok(())
     }
 
+    /// Store balance sheet data in the database with filing metadata (transaction variant)
+    async fn store_balance_sheet_data_tx(&self, tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, data: &BalanceSheetData, sec_filing_id: i64) -> Result<()> {
+        let query = r#"
+            INSERT OR REPLACE INTO balance_sheets (
+                stock_id, period_type, report_date, fiscal_year,
+                total_assets, total_liabilities, total_equity,
+                cash_and_equivalents, short_term_debt, long_term_debt, total_debt,
+                current_assets, current_liabilities,
+                share_repurchases, sec_filing_id
+            ) VALUES (
+                ?1, 'Annual', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14
+            )
+        "#;
+
+        sqlx::query(query)
+            .bind(data.stock_id)
+            .bind(data.report_date)
+            .bind(data.fiscal_year)
+            .bind(data.total_assets)
+            .bind(data.total_liabilities)
+            .bind(data.total_equity)
+            .bind(data.cash_and_equivalents)
+            .bind(data.short_term_debt)
+            .bind(data.long_term_debt)
+            .bind(data.total_debt)
+            .bind(data.current_assets)
+            .bind(data.current_liabilities)
+            .bind(data.share_repurchases)
+            .bind(sec_filing_id)
+            .execute(&mut **tx)
+            .await?;
+
+        Ok(())
+    }
+
     /// Store cash flow data in the database with filing metadata
     pub async fn store_cash_flow_data(&self, data: &CashFlowData, filing_metadata: Option<&FilingMetadata>) -> Result<()> {
         // First, create or get the sec_filing record if metadata is provided
@@ -1085,6 +1204,37 @@ impl SecEdgarClient {
         Ok(())
     }
 
+    /// Store cash flow data in the database with filing metadata (transaction variant)
+    async fn store_cash_flow_data_tx(&self, tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, data: &CashFlowData, sec_filing_id: i64) -> Result<()> {
+        let query = r#"
+            INSERT OR REPLACE INTO cash_flow_statements (
+                stock_id, period_type, report_date, fiscal_year,
+                depreciation_expense, amortization_expense, dividends_paid,
+                share_repurchases, operating_cash_flow, investing_cash_flow, financing_cash_flow,
+                sec_filing_id
+            ) VALUES (
+                ?1, 'Annual', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11
+            )
+        "#;
+
+        sqlx::query(query)
+            .bind(data.stock_id)
+            .bind(data.report_date)
+            .bind(data.fiscal_year)
+            .bind(data.depreciation_expense)
+            .bind(data.amortization_expense)
+            .bind(data.dividends_paid)
+            .bind(data.share_repurchases)
+            .bind(data.operating_cash_flow)
+            .bind(data.investing_cash_flow)
+            .bind(data.financing_cash_flow)
+            .bind(sec_filing_id)
+            .execute(&mut **tx)
+            .await?;
+
+        Ok(())
+    }
+
     /// Store income statement data in the database with filing metadata
     pub async fn store_income_statement_data(&self, data: &IncomeStatementData, filing_metadata: Option<&FilingMetadata>) -> Result<()> {
         // First, create or get the sec_filing record if metadata is provided
@@ -1118,6 +1268,37 @@ impl SecEdgarClient {
             .bind(data.shares_diluted)
             .bind(sec_filing_id)
             .execute(&self.pool)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Store income statement data in the database with filing metadata (transaction variant)
+    async fn store_income_statement_data_tx(&self, tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, data: &IncomeStatementData, sec_filing_id: i64) -> Result<()> {
+        let query = r#"
+            INSERT OR REPLACE INTO income_statements (
+                stock_id, period_type, report_date, fiscal_year,
+                revenue, gross_profit, operating_income, net_income,
+                shares_basic, shares_diluted, currency,
+                sec_filing_id
+            ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'USD', ?11
+            )
+        "#;
+
+        sqlx::query(query)
+            .bind(data.stock_id)
+            .bind(&data.period_type)
+            .bind(data.report_date)
+            .bind(data.fiscal_year)
+            .bind(data.revenue)
+            .bind(data.gross_profit)
+            .bind(data.operating_income)
+            .bind(data.net_income)
+            .bind(data.shares_basic)
+            .bind(data.shares_diluted)
+            .bind(sec_filing_id)
+            .execute(&mut **tx)
             .await?;
 
         Ok(())

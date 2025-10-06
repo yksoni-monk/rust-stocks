@@ -485,20 +485,12 @@ impl DataStatusReader {
             
             // Use existing sec_edgar_client logic
             let mut edgar_client = SecEdgarClient::new(pool.clone());
-            
-            // Extract and store balance sheet data for missing dates
-            let balance_result = Self::extract_and_store_balance_sheet_data(&mut edgar_client, &json, stock_id, symbol, &missing_dates).await?;
-            records_stored += balance_result;
-            
-            // Extract and store income statement data for missing dates  
-            let income_result = Self::extract_and_store_income_statement_data(&mut edgar_client, &json, stock_id, symbol, &missing_dates).await?;
-            records_stored += income_result;
-            
-            // Extract and store cash flow data for missing dates
-            let cashflow_result = Self::extract_and_store_cash_flow_data(&mut edgar_client, &json, stock_id, symbol, &missing_dates).await?;
-            records_stored += cashflow_result;
-            
-            println!("✅ Stored {} financial records for {}", records_stored, symbol);
+
+            // Extract and store ALL statements atomically (ACID guarantee)
+            let atomic_result = Self::extract_and_store_all_statements_atomic(&mut edgar_client, &json, stock_id, symbol, &missing_dates).await?;
+            records_stored += atomic_result;
+
+            println!("✅ Stored {} complete filings for {} (atomic)", records_stored, symbol);
         } else {
             println!("✅ {} already has all financial data (current)", symbol);
         }
@@ -657,6 +649,183 @@ impl DataStatusReader {
         }
         
         Ok(results)
+    }
+
+    /// Extract and store ALL financial statements atomically
+    /// This function ensures that for each filing date, ALL THREE statements are stored together
+    /// in a single transaction, preventing orphaned sec_filing records
+    async fn extract_and_store_all_statements_atomic(
+        edgar_client: &mut SecEdgarClient,
+        json: &serde_json::Value,
+        stock_id: i64,
+        symbol: &str,
+        missing_dates: &[String]
+    ) -> Result<i64> {
+        println!("    🔒 [ATOMIC] Processing all statements for {}...", symbol);
+
+        // Extract filing metadata
+        let filing_metadata_vec = edgar_client.extract_filing_metadata(json, symbol).ok();
+
+        // Parse all three statement types
+        let balance_historical = edgar_client.parse_company_facts_json(json, symbol)?;
+        let income_historical = edgar_client.parse_income_statement_json(json, symbol)?;
+        let cashflow_historical = edgar_client.parse_cash_flow_json(json, symbol)?;
+
+        println!("    📊 Extracted: {} balance, {} income, {} cashflow data points",
+                 balance_historical.len(), income_historical.len(), cashflow_historical.len());
+
+        // Group ALL data by filed_date
+        let mut data_by_filed: HashMap<String, (String, HashMap<String, f64>, HashMap<String, f64>, HashMap<String, f64>)> = HashMap::new();
+
+        // Group balance sheet data
+        for (field_name, value, report_date, filed_date) in balance_historical {
+            if missing_dates.contains(&filed_date) {
+                let entry = data_by_filed.entry(filed_date.clone())
+                    .or_insert_with(|| (report_date.clone(), HashMap::new(), HashMap::new(), HashMap::new()));
+                if entry.0.is_empty() && !report_date.is_empty() { entry.0 = report_date.clone(); }
+                entry.1.insert(field_name, value);
+            }
+        }
+
+        // Group income statement data
+        for (field_name, value, report_date, filed_date) in income_historical {
+            if missing_dates.contains(&filed_date) {
+                let entry = data_by_filed.entry(filed_date.clone())
+                    .or_insert_with(|| (report_date.clone(), HashMap::new(), HashMap::new(), HashMap::new()));
+                if entry.0.is_empty() && !report_date.is_empty() { entry.0 = report_date.clone(); }
+                entry.2.insert(field_name, value);
+            }
+        }
+
+        // Group cash flow data
+        for (field_name, value, report_date, filed_date) in cashflow_historical {
+            if missing_dates.contains(&filed_date) {
+                let entry = data_by_filed.entry(filed_date.clone())
+                    .or_insert_with(|| (report_date.clone(), HashMap::new(), HashMap::new(), HashMap::new()));
+                if entry.0.is_empty() && !report_date.is_empty() { entry.0 = report_date.clone(); }
+                entry.3.insert(field_name, value);
+            }
+        }
+
+        // Store each filing atomically (all 3 statements together)
+        let mut filings_stored = 0;
+
+        for (filed_date, (report_date, balance_data, income_data, cashflow_data)) in data_by_filed {
+            // Find matching metadata
+            let metadata_opt = filing_metadata_vec
+                .as_ref()
+                .and_then(|vec| vec.iter().find(|m| m.filing_date == filed_date));
+
+            if metadata_opt.is_none() {
+                println!("🔴 WARNING: No matching metadata for {} filed_date={}", symbol, filed_date);
+                println!("   Available metadata filing_dates: {:?}",
+                    filing_metadata_vec.as_ref().map(|v| v.iter().map(|m| &m.filing_date).collect::<Vec<_>>()));
+                println!("   This filing will be SKIPPED.");
+                continue;
+            }
+
+            let metadata = metadata_opt.unwrap();
+
+            // Check if we have data for ALL THREE statements
+            if balance_data.is_empty() || income_data.is_empty() || cashflow_data.is_empty() {
+                println!("⚠️ WARNING: Incomplete data for {} filed_date={} (balance: {}, income: {}, cashflow: {})",
+                         symbol, filed_date, balance_data.len(), income_data.len(), cashflow_data.len());
+                println!("   Skipping this filing to avoid orphaned sec_filing record");
+                continue;
+            }
+
+            let fiscal_year = report_date.split('-').next().unwrap().parse::<i32>().unwrap_or(0);
+
+            println!("    💾 [ATOMIC] Storing complete filing for {} filed_date={} report_date={}", symbol, filed_date, report_date);
+
+            // Build BalanceSheetData
+            let short_term_debt = balance_data.get("ShortTermDebt").copied()
+                .or_else(|| balance_data.get("DebtCurrent").copied());
+            let long_term_debt = balance_data.get("LongTermDebt").copied()
+                .or_else(|| balance_data.get("LongTermDebtAndCapitalLeaseObligations").copied());
+            let total_debt = match (short_term_debt, long_term_debt) {
+                (Some(st), Some(lt)) => Some(st + lt),
+                (Some(st), None) => Some(st),
+                (None, Some(lt)) => Some(lt),
+                (None, None) => None,
+            };
+
+            let balance_sheet_data = BalanceSheetData {
+                stock_id,
+                symbol: symbol.to_string(),
+                report_date: chrono::NaiveDate::parse_from_str(&report_date, "%Y-%m-%d")?,
+                fiscal_year,
+                total_assets: balance_data.get("Assets").copied(),
+                total_liabilities: balance_data.get("Liabilities").copied(),
+                total_equity: balance_data.get("StockholdersEquity").copied(),
+                cash_and_equivalents: balance_data.get("CashAndCashEquivalentsAtCarryingValue").copied(),
+                short_term_debt,
+                long_term_debt,
+                total_debt,
+                current_assets: balance_data.get("AssetsCurrent").copied(),
+                current_liabilities: balance_data.get("LiabilitiesCurrent").copied(),
+                share_repurchases: balance_data.get("ShareRepurchases").copied(),
+            };
+
+            // Build IncomeStatementData
+            let income_statement_data = IncomeStatementData {
+                stock_id,
+                symbol: symbol.to_string(),
+                period_type: "Annual".to_string(),
+                report_date: chrono::NaiveDate::parse_from_str(&report_date, "%Y-%m-%d")?,
+                fiscal_year,
+                revenue: income_data.get("Revenues").copied()
+                    .or_else(|| income_data.get("RevenueFromContractWithCustomerExcludingAssessedTax").copied()),
+                gross_profit: income_data.get("GrossProfit").copied(),
+                operating_income: income_data.get("OperatingIncomeLoss").copied(),
+                net_income: income_data.get("NetIncomeLoss").copied(),
+                cost_of_revenue: income_data.get("CostOfGoodsAndServicesSold").copied(),
+                interest_expense: income_data.get("InterestExpense").copied(),
+                tax_expense: income_data.get("IncomeTaxExpenseBenefit").copied(),
+                shares_basic: income_data.get("WeightedAverageNumberOfSharesOutstandingBasic").copied(),
+                shares_diluted: income_data.get("WeightedAverageNumberOfSharesOutstandingDiluted").copied(),
+            };
+
+            // Build CashFlowData
+            let cash_flow_data = CashFlowData {
+                stock_id,
+                symbol: symbol.to_string(),
+                report_date: chrono::NaiveDate::parse_from_str(&report_date, "%Y-%m-%d")?,
+                fiscal_year,
+                operating_cash_flow: cashflow_data.get("NetCashProvidedByUsedInOperatingActivities").copied(),
+                depreciation_expense: cashflow_data.get("DepreciationDepletionAndAmortization").copied()
+                    .or_else(|| cashflow_data.get("DepreciationExpense").copied()),
+                amortization_expense: cashflow_data.get("AmortizationExpense").copied(),
+                investing_cash_flow: cashflow_data.get("NetCashProvidedByUsedInInvestingActivities").copied(),
+                financing_cash_flow: cashflow_data.get("NetCashProvidedByUsedInFinancingActivities").copied(),
+                dividends_paid: cashflow_data.get("PaymentsOfDividends").copied(),
+                share_repurchases: cashflow_data.get("PaymentsForRepurchaseOfCommonStock").copied(),
+            };
+
+            // Store ALL THREE statements atomically
+            match edgar_client.store_filing_atomic(
+                stock_id,
+                symbol,
+                metadata,
+                fiscal_year,
+                &report_date,
+                &balance_sheet_data,
+                &income_statement_data,
+                &cash_flow_data
+            ).await {
+                Ok(_) => {
+                    filings_stored += 1;
+                    println!("    ✅ [ATOMIC] Successfully stored complete filing for {} ({})", symbol, filed_date);
+                }
+                Err(e) => {
+                    println!("    ❌ [ATOMIC] Failed to store filing for {} ({}): {}", symbol, filed_date, e);
+                    println!("       Transaction rolled back - no orphaned records created");
+                }
+            }
+        }
+
+        println!("    🎯 [ATOMIC] Stored {} complete filings for {}", filings_stored, symbol);
+        Ok(filings_stored)
     }
 
     /// Extract and store balance sheet data for missing dates

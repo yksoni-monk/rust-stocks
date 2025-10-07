@@ -868,6 +868,7 @@ impl DataStatusReader {
                 current_assets: balance_data.get("AssetsCurrent").copied(),
                 current_liabilities: balance_data.get("LiabilitiesCurrent").copied(),
                 share_repurchases: balance_data.get("ShareRepurchases").copied(),
+                shares_outstanding: balance_data.get("SharesOutstanding").copied(),
             };
 
             // Build IncomeStatementData
@@ -1007,6 +1008,7 @@ impl DataStatusReader {
                 current_assets: balance_data.get("AssetsCurrent").copied(),
                 current_liabilities: balance_data.get("LiabilitiesCurrent").copied(),
                 share_repurchases: balance_data.get("ShareRepurchases").copied(),
+                shares_outstanding: balance_data.get("SharesOutstanding").copied(),
             };
             
             // Pick matching metadata for this filed_date
@@ -1216,6 +1218,39 @@ impl DataStatusReader {
         None
     }
 
+    /// Extract shares_outstanding from dei taxonomy for a specific fiscal year
+    fn extract_shares_outstanding_for_fiscal_year(
+        company_facts: &serde_json::Value,
+        fiscal_year: i32,
+        symbol: &str
+    ) -> Option<f64> {
+        // Extract from dei taxonomy
+        if let Some(dei_facts) = company_facts.get("facts").and_then(|f| f.get("dei")) {
+            if let Some(shares_field) = dei_facts.get("EntityCommonStockSharesOutstanding") {
+                if let Some(units) = shares_field.get("units") {
+                    if let Some(shares_data) = units.get("shares") {
+                        if let Some(values) = shares_data.as_array() {
+                            // Find the FY entry for this fiscal year
+                            for value in values {
+                                if let (Some(fy), Some(fp), Some(val)) = (
+                                    value.get("fy").and_then(|v| v.as_i64()),
+                                    value.get("fp").and_then(|v| v.as_str()),
+                                    value.get("val").and_then(|v| v.as_f64())
+                                ) {
+                                    if fy == fiscal_year as i64 && fp == "FY" && val > 0.0 {
+                                        return Some(val);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
     /// Extract balance sheet data for a specific 10-K filing (by accession number)
     fn extract_balance_sheet_for_filing(
         company_facts: &serde_json::Value,
@@ -1229,6 +1264,9 @@ impl DataStatusReader {
             .get("facts")
             .and_then(|f| f.get("us-gaap"))
             .ok_or_else(|| anyhow!("Missing us-gaap facts"))?;
+
+        // Extract shares_outstanding from dei taxonomy
+        let shares_outstanding = Self::extract_shares_outstanding_for_fiscal_year(company_facts, fiscal_year, symbol);
 
         Ok(BalanceSheetData {
             stock_id,
@@ -1249,6 +1287,7 @@ impl DataStatusReader {
             current_liabilities: Self::find_value_for_accession(facts, "LiabilitiesCurrent", accession_number),
             share_repurchases: Self::find_value_for_accession(facts, "StockRepurchasedDuringPeriodValue", accession_number)
                 .or_else(|| Self::find_value_for_accession(facts, "TreasuryStockValueAcquiredCostMethod", accession_number)),
+            shares_outstanding,
         })
     }
 

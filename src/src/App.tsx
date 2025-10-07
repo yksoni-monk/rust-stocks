@@ -2,11 +2,9 @@ import { createSignal, createEffect, onMount, For, Show } from 'solid-js';
 import { stockStore } from './stores/stockStore';
 import { recommendationsStore } from './stores/recommendationsStore';
 import { uiStore } from './stores/uiStore';
-import { dataRefreshStore } from './stores/dataRefreshStore';
 import HeroSection from './components/HeroSection';
 import StockBrowser from './components/StockBrowser';
 import ResultsPanel from './components/ResultsPanel';
-import SimpleDataManagement from './components/SimpleDataManagement';
 
 function App() {
   console.log('🚀 SolidJS App starting...');
@@ -20,14 +18,6 @@ function App() {
     console.log('✅ Initial data loaded');
   });
 
-  // Initialize data refresh status when data management tab is opened
-  createEffect(() => {
-    if (uiStore.activeTab() === 'data-management') {
-      console.log('🔄 Data Management tab opened, loading freshness status...');
-      dataRefreshStore.checkDataFreshness();
-    }
-  });
-
 
   return (
     <div class="min-h-screen bg-gray-50">
@@ -38,7 +28,7 @@ function App() {
             📊 Stock Analysis Dashboard
           </h1>
 
-          {/* Navigation Tabs */}
+          {/* Navigation Tabs - Removed Data Management */}
           <div class="mt-4 border-b border-gray-200">
             <nav class="-mb-px flex space-x-8">
               <button
@@ -50,23 +40,6 @@ function App() {
                 }`}
               >
                 🔍 Stock Screening
-              </button>
-              <button
-                onClick={() => uiStore.openDataManagement()}
-                class={`py-2 px-1 border-b-2 font-medium text-sm ${
-                  uiStore.activeTab() === 'data-management'
-                    ? 'border-blue-500 text-blue-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                }`}
-              >
-                🔄 Data Management
-                {/* Status indicator */}
-                <Show when={dataRefreshStore.freshnessStatus()}>
-                  <span class={`ml-2 w-2 h-2 rounded-full inline-block ${
-                    dataRefreshStore.freshnessStatus()?.overall_status === 'fresh' ? 'bg-green-500' :
-                    dataRefreshStore.freshnessStatus()?.overall_status === 'stale' ? 'bg-yellow-500' : 'bg-red-500'
-                  }`}></span>
-                </Show>
               </button>
             </nav>
           </div>
@@ -89,11 +62,6 @@ function App() {
 
           {/* Stock Browser - Collapsible secondary tool */}
           <StockBrowser />
-        </Show>
-
-        {/* Data Management Tab Content */}
-        <Show when={uiStore.activeTab() === 'data-management'}>
-          <SimpleDataManagement />
         </Show>
       </div>
     </div>

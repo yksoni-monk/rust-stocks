@@ -46,6 +46,10 @@ struct Cli {
     /// Only process specific ticker (maps to its CIK)
     #[arg(long)]
     only_ticker: Option<String>,
+
+    /// Remove all data for the specified ticker (requires --only-ticker)
+    #[arg(long)]
+    remove_data: bool,
 }
 
 
@@ -91,6 +95,15 @@ async fn main() -> Result<()> {
     println!("🔄 Stock Data Refresh");
     println!("📅 {}", Local::now().format("%Y-%m-%d %H:%M:%S"));
     println!("══════════════════════════════════════");
+
+    // Handle --remove-data flag
+    if cli.remove_data {
+        if cli.only_ticker.is_none() {
+            eprintln!("❌ ERROR: --remove-data requires --only-ticker");
+            std::process::exit(1);
+        }
+        return remove_ticker_data(&pool, cli.only_ticker.as_ref().unwrap()).await;
+    }
 
     // Default behavior: show status if no mode specified
     if cli.mode.is_none() && !cli.status && !cli.preview {
@@ -418,4 +431,58 @@ fn get_available_steps(mode: &RefreshMode) -> Vec<(String, i32)> {
     }
 
     steps
+}
+
+/// Remove all data for a specific ticker
+async fn remove_ticker_data(pool: &sqlx::SqlitePool, ticker: &str) -> Result<()> {
+    println!("\n🗑️  Removing all data for ticker: {}", ticker.to_uppercase());
+    println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+    // Get stock_id for the ticker
+    let stock_id: Option<(i64,)> = sqlx::query_as(
+        "SELECT id FROM stocks WHERE UPPER(symbol) = UPPER(?)"
+    )
+    .bind(ticker)
+    .fetch_optional(pool)
+    .await?;
+
+    let stock_id = match stock_id {
+        Some((id,)) => id,
+        None => {
+            eprintln!("❌ ERROR: Ticker '{}' not found in database", ticker);
+            std::process::exit(1);
+        }
+    };
+
+    println!("📌 Found ticker {} with stock_id={}", ticker.to_uppercase(), stock_id);
+    println!("\n🔄 Deleting data from all tables...");
+
+    // Delete from all related tables
+    let tables = vec![
+        ("balance_sheets", "balance sheet records"),
+        ("income_statements", "income statement records"),
+        ("cash_flow_statements", "cash flow statement records"),
+        ("sec_filings", "SEC filing records"),
+        ("daily_prices", "daily price records"),
+    ];
+
+    for (table, description) in tables {
+        let result = sqlx::query(&format!("DELETE FROM {} WHERE stock_id = ?", table))
+            .bind(stock_id)
+            .execute(pool)
+            .await?;
+
+        let rows_deleted = result.rows_affected();
+        if rows_deleted > 0 {
+            println!("  ✅ Deleted {} {}", rows_deleted, description);
+        } else {
+            println!("  ℹ️  No {} found", description);
+        }
+    }
+
+    println!("\n✅ Successfully removed all data for ticker: {}", ticker.to_uppercase());
+    println!("💡 You can now re-import fresh data using:");
+    println!("   cargo run --bin refresh_data financials --only-ticker {}", ticker.to_uppercase());
+
+    Ok(())
 }

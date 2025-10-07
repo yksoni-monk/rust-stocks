@@ -74,6 +74,7 @@ pub struct BalanceSheetData {
     pub current_assets: Option<f64>,
     pub current_liabilities: Option<f64>,
     pub share_repurchases: Option<f64>,
+    pub shares_outstanding: Option<f64>,
 }
 
 /// Income statement data extracted from SEC filing
@@ -629,6 +630,7 @@ impl SecEdgarClient {
                     current_assets: balance_data.get("AssetsCurrent").copied(),
                     current_liabilities: balance_data.get("LiabilitiesCurrent").copied(),
                     share_repurchases: balance_data.get("ShareRepurchases").copied(),
+                    shares_outstanding: balance_data.get("SharesOutstanding").copied(),
                 }, matching_metadata).await;
 
                 // Store cash flow data for the same report date
@@ -679,6 +681,7 @@ impl SecEdgarClient {
                 current_assets: None,
                 current_liabilities: None,
                 share_repurchases: None,
+                shares_outstanding: None,
             }))
         } else {
             Ok(None)
@@ -710,11 +713,12 @@ impl SecEdgarClient {
             ("PaymentsForRepurchaseOfCommonStock", "ShareRepurchases"),
         ];
 
-        // Navigate to the facts section
+        // Navigate to the facts section for us-gaap taxonomy
         if let Some(facts) = json.get("facts").and_then(|f| f.get("us-gaap")) {
             for (field_name, our_field) in &field_mappings {
                 if let Some(field_data) = facts.get(field_name) {
                     if let Some(units) = field_data.get("units") {
+                        // Use USD units for monetary values
                         if let Some(usd_data) = units.get("USD") {
                             if let Some(values) = usd_data.as_array() {
                                 // Extract ALL historical values since 2016
@@ -734,6 +738,44 @@ impl SecEdgarClient {
                                                         our_field.to_string(),
                                                         val,
                                                         end_date.to_string(),
+                                                        filed_date.to_string()
+                                                    ));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Extract shares_outstanding from dei (Document and Entity Information) taxonomy
+        // This is critical for O'Shaughnessy screening market cap calculation
+        if let Some(facts) = json.get("facts").and_then(|f| f.get("dei")) {
+            if let Some(shares_field) = facts.get("EntityCommonStockSharesOutstanding") {
+                if let Some(units) = shares_field.get("units") {
+                    if let Some(shares_data) = units.get("shares") {
+                        if let Some(values) = shares_data.as_array() {
+                            // Extract shares outstanding values since 2016
+                            for value in values {
+                                if let (Some(val), Some(filed_date)) = (
+                                    value.get("val").and_then(|v| v.as_f64()),
+                                    value.get("filed").and_then(|f| f.as_str())
+                                ) {
+                                    // Use filed date as end date for shares outstanding
+                                    // Filter for fiscal year (FY) data only
+                                    if let Some(fp) = value.get("fp").and_then(|f| f.as_str()) {
+                                        if fp == "FY" {
+                                            if let Ok(filed_parsed) = chrono::NaiveDate::parse_from_str(filed_date, "%Y-%m-%d") {
+                                                let today = chrono::Utc::now().date_naive();
+                                                if filed_parsed.year() >= 2016 && val > 0.0 && filed_parsed <= today {
+                                                    historical_data.push((
+                                                        "SharesOutstanding".to_string(),
+                                                        val,
+                                                        filed_date.to_string(),
                                                         filed_date.to_string()
                                                     ));
                                                 }
@@ -1285,9 +1327,9 @@ impl SecEdgarClient {
                 total_assets, total_liabilities, total_equity,
                 cash_and_equivalents, short_term_debt, long_term_debt, total_debt,
                 current_assets, current_liabilities,
-                share_repurchases, sec_filing_id
+                share_repurchases, shares_outstanding, sec_filing_id
             ) VALUES (
-                ?1, 'Annual', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14
+                ?1, 'Annual', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15
             )
         "#;
 
@@ -1305,6 +1347,7 @@ impl SecEdgarClient {
             .bind(data.current_assets)
             .bind(data.current_liabilities)
             .bind(data.share_repurchases)
+            .bind(data.shares_outstanding)
             .bind(sec_filing_id)
             .execute(&mut **tx)
             .await?;

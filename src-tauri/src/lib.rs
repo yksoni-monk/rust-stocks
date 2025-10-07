@@ -100,16 +100,6 @@ pub fn run() {
             initialization::get_initialization_status,
             initialization::check_database_schema,
             initialization::initialize_sp500_stocks,
-            
-
-            // Data refresh commands
-            data_refresh::get_data_freshness_status,
-            data_refresh::check_screening_readiness,
-            data_refresh::start_data_refresh,
-            data_refresh::get_refresh_progress,
-            data_refresh::get_last_refresh_result,
-            data_refresh::cancel_refresh_operation,
-            data_refresh::get_refresh_duration_estimates,
 
             // Piotroski F-Score screening commands
             piotroski_screening::get_piotroski_screening_results,

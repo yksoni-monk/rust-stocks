@@ -109,7 +109,7 @@ pub async fn get_piotroski_screening_results_internal(
                 WHEN f_score_complete >= ? AND data_completeness_score >= ? THEN 1 
                 ELSE 0 
             END as passes_screening
-        FROM piotroski_screening_results_new
+        FROM piotroski_screening_results
         WHERE 1=1"
     );
 

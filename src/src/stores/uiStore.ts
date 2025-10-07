@@ -3,7 +3,7 @@ import { createSignal } from 'solid-js';
 // UI store for managing application UI state
 export function createUiStore() {
   // Navigation state
-  const [activeTab, setActiveTab] = createSignal<'screening' | 'data-management'>('screening');
+  const [activeTab, setActiveTab] = createSignal<'screening'>('screening');
 
   // Panel visibility
   const [showRecommendations, setShowRecommendations] = createSignal(false);
@@ -39,13 +39,6 @@ export function createUiStore() {
     setShowDataManagement(false);
   };
 
-  // Show data management panel
-  const openDataManagement = () => {
-    setShowDataManagement(true);
-    setShowRecommendations(false);
-    setShowDataFetching(false);
-    setActiveTab('data-management');
-  };
 
   // Navigate to screening tab
   const openScreening = () => {
@@ -124,7 +117,6 @@ export function createUiStore() {
 
     // Navigation actions
     openScreening,
-    openDataManagement,
 
     // Panel actions
     openRecommendations,

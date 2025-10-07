@@ -266,27 +266,119 @@ The system uses real-time EDGAR API integration with automated data processing:
 
 ### Data Refresh Commands
 
-#### Data Refresh (From src-tauri directory)
+#### Unified Data Refresh System
+The system provides intelligent data refresh with automatic freshness detection:
+
 ```bash
-cd src-tauri
+# Check data status (default - no refresh)
+cargo run --bin refresh_data
 
-# Refresh all data (market, financials, ratios)
-cargo run --bin refresh_data -- all
+# Show detailed status with verbose output
+cargo run --bin refresh_data -- --status --verbose
 
-# Refresh specific data types
-cargo run --bin refresh_data -- market
-cargo run --bin refresh_data -- financials
-cargo run --bin refresh_data -- ratios
-
-# Show help and all available options
-cargo run --bin refresh_data -- --help
+# Preview what would be refreshed (dry-run mode)
+cargo run --bin refresh_data -- --preview market
+cargo run --bin refresh_data -- --preview financials
 ```
 
+#### Refresh Modes
+
+**Market Data Refresh** (Schwab API - Daily Prices):
+```bash
+# Refresh daily stock prices from Schwab API
+cargo run --bin refresh_data market
+
+# Expected: 2-5 minutes for 497 S&P 500 stocks
+# Updates: daily_prices table with latest market data
+```
+
+**Financial Data Refresh** (SEC EDGAR API - Financial Statements):
+```bash
+# Refresh financial statements from SEC EDGAR API
+cargo run --bin refresh_data financials
+
+# Expected: 15-30 minutes for full S&P 500 (497 stocks with CIKs)
+# Updates: balance_sheets, income_statements, cash_flow_statements
+# Features:
+#   - Atomic transactions (all-or-nothing storage)
+#   - No orphaned sec_filing records
+#   - Automatic duplicate handling
+#   - 10 concurrent workers with rate limiting (10 req/sec)
+```
+
+**Single Stock Testing** (Fast debugging):
+```bash
+# Test with single stock (faster for debugging)
+cargo run --bin refresh_data financials --only-ticker AAPL
+cargo run --bin refresh_data market --only-ticker WMT
+
+# Expected: <1 second per stock
+# Skips freshness checks for faster execution
+```
+
+#### Command Options
+
+**Status & Preview**:
+- `--status` or `-s`: Show current data freshness status
+- `--preview` or `-p`: Show what would be refreshed (dry-run)
+- `--verbose` or `-v`: Show detailed progress information
+
+**Filtering**:
+- `--only-ticker SYMBOL`: Process only specific stock ticker
+- `--only-cik CIK`: Process only specific SEC CIK number
+
+**Examples**:
+```bash
+# Check if data needs refresh
+cargo run --bin refresh_data --status
+
+# See what would be refreshed for market data
+cargo run --bin refresh_data --preview market
+
+# Refresh financials with detailed output
+cargo run --bin refresh_data financials --verbose
+
+# Test EDGAR API with single stock
+cargo run --bin refresh_data financials --only-ticker MSFT
+```
+
+#### Data Freshness Detection
+
+The system automatically detects stale data:
+
+**Market Data**:
+- ✅ Current: Updated within 7 days
+- ⚠️ Stale: Older than 7 days
+- ❌ Missing: No data in database
+
+**Financial Data**:
+- ✅ Current: All SEC filing dates present
+- ⚠️ Stale: Missing filing dates from SEC
+- ❌ Missing: No financial data
+
+**Screening Readiness**:
+- Shows which screening algorithms are ready to run
+- Blocks if required data is stale or missing
+- Provides commands to refresh specific data types
+
 ### Expected Performance & Data
-- **Processing Time**: 5-15 minutes for full S&P 500 refresh
-- **Financial Data**: ~503 stocks with comprehensive financial statements
-- **Database Size**: 2.5GB with complete historical data
-- **Stock Coverage**: S&P 500 companies with 5+ years of data
+
+**Full S&P 500 Refresh**:
+- **Market Data**: 2-5 minutes (497 stocks, Schwab API)
+- **Financial Data**: 15-30 minutes (497 stocks, EDGAR API)
+- **Concurrency**: 10 parallel workers with rate limiting
+- **Rate Limits**: 10 requests/second (SEC EDGAR requirement)
+
+**Single Stock Testing**:
+- **Market Data**: <1 second per stock
+- **Financial Data**: <1 second per stock
+- **Ideal for**: Debugging, testing, development
+
+**Database Impact**:
+- **Financial Data**: ~503 stocks with 5+ years historical data
+- **Database Size**: 2.5GB with complete financial statements
+- **Stock Coverage**: S&P 500 companies (497 with CIK identifiers)
+- **Data Integrity**: ACID-compliant atomic storage (no orphaned records)
 
 ## 🎨 Application Features
 

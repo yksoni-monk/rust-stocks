@@ -1,5 +1,5 @@
-use anyhow::Result;
-use chrono::Utc;
+use anyhow::{Result, anyhow};
+use chrono::{Utc, NaiveDate, Datelike};
 use governor::{Quota, RateLimiter};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -408,94 +408,206 @@ impl DataStatusReader {
         Ok((results_map, total_records_count))
     }
 
-    /// Get ALL SEC filing dates for a single CIK AND extract missing financial data - WITH RATE LIMITING
+    /// Get ALL SEC filing dates for a single CIK AND extract missing financial data - HYBRID API APPROACH
+    /// Uses Submissions API for 10-K metadata + Company Facts API for financial data
     async fn get_all_sec_filings_for_cik_and_extract_data(
-        client: &Client, 
+        client: &Client,
         limiter: &Arc<RateLimiter<governor::state::direct::NotKeyed, governor::state::InMemoryState, governor::clock::DefaultClock>>,
         cik: &str,
         stock_id: i64,
         symbol: &str,
         pool: &SqlitePool
     ) -> Result<(Vec<String>, i64)> {
-        // Apply rate limiting (10 requests per second)
+
+        // STEP 1: Fetch Submissions API for 10-K metadata (rate limited)
         limiter.until_ready().await;
-        
-        let url = format!("https://data.sec.gov/api/xbrl/companyfacts/CIK{}.json", cik);
-        
-        let response = client
-            .get(&url)
+
+        let cik_padded = format!("{:0>10}", cik);
+        let submissions_url = format!("https://data.sec.gov/submissions/CIK{}.json", cik_padded);
+
+        let submissions_response = client
+            .get(&submissions_url)
             .header("User-Agent", "rust-stocks-tauri/1.0")
             .timeout(Duration::from_secs(30))
             .send()
             .await?;
-            
-        if !response.status().is_success() {
-            return Err(anyhow::anyhow!("HTTP error: {}", response.status()));
+
+        if !submissions_response.status().is_success() {
+            return Err(anyhow!("Submissions API error {}: {}", submissions_response.status(), submissions_url));
         }
-        
-        let json: serde_json::Value = response.json().await?;
-        
-        // Extract ALL filing dates from the JSON
-        let mut filing_dates = Vec::new();
-        let start_date = chrono::NaiveDate::from_ymd_opt(2016, 1, 1).unwrap();
-        let today = chrono::Utc::now().date_naive();
-        
-        if let Some(facts) = json.get("facts").and_then(|f| f.get("us-gaap")) {
-            if let Some(facts_obj) = facts.as_object() {
-                for (_field_name, field_data) in facts_obj {
-                    if let Some(units) = field_data.get("units") {
-                        if let Some(usd_data) = units.get("USD") {
-                            if let Some(values) = usd_data.as_array() {
-                                for value in values {
-                                    if let Some(filed_date) = value.get("filed").and_then(|f| f.as_str()) {
-                                        if let Ok(parsed_date) = chrono::NaiveDate::parse_from_str(filed_date, "%Y-%m-%d") {
-                                            if parsed_date >= start_date && parsed_date <= today {
-                                                filing_dates.push(filed_date.to_string());
-                                            }
-                                        }
-                                    }
-                                }
+
+        let submissions_json: serde_json::Value = submissions_response.json().await?;
+
+        // Extract 10-K metadata from Submissions API
+        let mut metadata_vec = Vec::new();
+        if let Some(recent) = submissions_json.get("filings").and_then(|f| f.get("recent")) {
+            if let (Some(accession_numbers), Some(forms), Some(filing_dates), Some(report_dates)) = (
+                recent.get("accessionNumber").and_then(|a| a.as_array()),
+                recent.get("form").and_then(|f| f.as_array()),
+                recent.get("filingDate").and_then(|d| d.as_array()),
+                recent.get("reportDate").and_then(|r| r.as_array())
+            ) {
+                for i in 0..accession_numbers.len() {
+                    // Only process 10-K filings (annual reports)
+                    if let Some(form) = forms[i].as_str() {
+                        if form == "10-K" {
+                            if let (Some(accn), Some(filed), Some(report)) = (
+                                accession_numbers[i].as_str(),
+                                filing_dates[i].as_str(),
+                                report_dates[i].as_str()
+                            ) {
+                                metadata_vec.push((
+                                    accn.to_string(),
+                                    filed.to_string(),
+                                    report.to_string()
+                                ));
                             }
                         }
                     }
                 }
             }
         }
-        
-        // Remove duplicates and sort
-        filing_dates.sort();
-        filing_dates.dedup();
-        
-        // NEW: Extract and store missing financial data
-        let mut records_stored = 0;
-        
-        // Get our existing filing dates for this CIK
-        let our_dates = Self::get_our_filing_dates_for_cik(pool, cik).await?;
-        let our_dates_set: std::collections::HashSet<String> = our_dates.into_iter().collect();
-        
-        // Find missing dates
-        let missing_dates: Vec<String> = filing_dates.iter()
-            .filter(|date| !our_dates_set.contains(*date))
-            .cloned()
-            .collect();
-        
-        if !missing_dates.is_empty() {
-            println!("📊 Extracting {} missing financial records for {} (CIK: {})", missing_dates.len(), symbol, cik);
-            println!("📅 Missing dates: {}", missing_dates.join(", "));
-            
-            // Use existing sec_edgar_client logic
-            let mut edgar_client = SecEdgarClient::new(pool.clone());
 
-            // Extract and store ALL statements atomically (ACID guarantee)
-            let atomic_result = Self::extract_and_store_all_statements_atomic(&mut edgar_client, &json, stock_id, symbol, &missing_dates).await?;
-            records_stored += atomic_result;
+        println!("  📋 Found {} 10-K filings from Submissions API", metadata_vec.len());
 
-            println!("✅ Stored {} complete filings for {} (atomic)", records_stored, symbol);
-        } else {
-            println!("✅ {} already has all financial data (current)", symbol);
+        // Collect all filing dates for return value
+        let filing_dates: Vec<String> = metadata_vec.iter().map(|(_, filed, _)| filed.clone()).collect();
+
+        // STEP 2: Fetch Company Facts API for financial data (rate limited)
+        limiter.until_ready().await;
+
+        let facts_url = format!("https://data.sec.gov/api/xbrl/companyfacts/CIK{}.json", cik_padded);
+
+        let facts_response = client
+            .get(&facts_url)
+            .header("User-Agent", "rust-stocks-tauri/1.0")
+            .timeout(Duration::from_secs(30))
+            .send()
+            .await?;
+
+        if !facts_response.status().is_success() {
+            return Err(anyhow!("Company Facts API error {}: {}", facts_response.status(), facts_url));
         }
-        
+
+        let company_facts: serde_json::Value = facts_response.json().await?;
+
+        // STEP 3: Extract and store data for each 10-K filing
+        let mut records_stored = 0;
+
+        // Get our existing filings to avoid duplicates
+        let existing_accessions = Self::get_existing_accession_numbers(pool, stock_id).await?;
+        let existing_set: std::collections::HashSet<String> = existing_accessions.into_iter().collect();
+
+        for (accession_number, filing_date, report_date) in metadata_vec {
+            // Skip if we already have this filing
+            if existing_set.contains(&accession_number) {
+                continue;
+            }
+
+            // Parse fiscal year from report date
+            let fiscal_year = match NaiveDate::parse_from_str(&report_date, "%Y-%m-%d") {
+                Ok(date) => date.year(),
+                Err(_) => {
+                    println!("    ⚠️ Skipping filing {}: invalid report_date {}", accession_number, report_date);
+                    continue;
+                }
+            };
+
+            // Extract data for this specific accession number
+            let balance_data = match Self::extract_balance_sheet_for_filing(
+                &company_facts,
+                &accession_number,
+                stock_id,
+                symbol,
+                &report_date,
+                fiscal_year
+            ) {
+                Ok(data) => data,
+                Err(e) => {
+                    println!("    ⚠️  Skipping filing {}: {}", accession_number, e);
+                    continue;
+                }
+            };
+
+            let income_data = match Self::extract_income_statement_for_filing(
+                &company_facts,
+                &accession_number,
+                stock_id,
+                symbol,
+                &report_date,
+                fiscal_year
+            ) {
+                Ok(data) => data,
+                Err(e) => {
+                    println!("    ⚠️  Skipping filing {}: {}", accession_number, e);
+                    continue;
+                }
+            };
+
+            let cashflow_data = match Self::extract_cash_flow_for_filing(
+                &company_facts,
+                &accession_number,
+                stock_id,
+                symbol,
+                &report_date,
+                fiscal_year
+            ) {
+                Ok(data) => data,
+                Err(e) => {
+                    println!("    ⚠️  Skipping filing {}: {}", accession_number, e);
+                    continue;
+                }
+            };
+
+            // Create filing metadata
+            let metadata = crate::tools::sec_edgar_client::FilingMetadata {
+                accession_number: accession_number.clone(),
+                form_type: "10-K".to_string(),
+                filing_date: filing_date.clone(),
+                fiscal_period: "FY".to_string(),
+                report_date: report_date.clone(),
+            };
+
+            // Store atomically (all 3 statements or nothing)
+            let edgar_client = SecEdgarClient::new(pool.clone());
+            match edgar_client.store_filing_atomic(
+                stock_id,
+                symbol,
+                &metadata,
+                fiscal_year,
+                &report_date,
+                &balance_data,
+                &income_data,
+                &cashflow_data
+            ).await {
+                Ok(_) => {
+                    records_stored += 1;
+                    println!("    ✅ Stored 10-K filing: {} ({})", metadata.report_date, metadata.accession_number);
+                }
+                Err(e) => {
+                    println!("    ⚠️  Failed to store {}: {}", metadata.accession_number, e);
+                    // Continue with next filing (likely duplicate)
+                }
+            }
+        }
+
+        if records_stored > 0 {
+            println!("✅ Stored {} complete 10-K filings for {}", records_stored, symbol);
+        } else {
+            println!("✅ {} already has all 10-K financial data (current)", symbol);
+        }
+
         Ok((filing_dates, records_stored))
+    }
+
+    /// Helper: Get existing accession numbers for a stock to avoid duplicates
+    async fn get_existing_accession_numbers(pool: &SqlitePool, stock_id: i64) -> Result<Vec<String>> {
+        let rows = sqlx::query("SELECT accession_number FROM sec_filings WHERE stock_id = ?")
+            .bind(stock_id)
+            .fetch_all(pool)
+            .await?;
+
+        Ok(rows.iter().map(|r| r.get("accession_number")).collect())
     }
 
     /// Compare ALL filing dates using simple logic - checks ALL S&P 500 stocks
@@ -543,7 +655,8 @@ impl DataStatusReader {
                 if our_filing_dates.is_empty() {
                     println!("⚠️ {} ({}): No data in database, SEC has {} filings (stale)", symbol, cik, sec_filing_dates.len());
                 } else {
-                    let missing_count = sec_filing_dates.len() - our_filing_dates.len();
+                    // Use saturating_sub to prevent underflow (we only store 10-K now, not all filings)
+                    let missing_count = sec_filing_dates.len().saturating_sub(our_filing_dates.len());
                     println!("⚠️ {} ({}): Missing {} filing dates (stale)", symbol, cik, missing_count);
                 }
             } else {
@@ -659,27 +772,73 @@ impl DataStatusReader {
         json: &serde_json::Value,
         stock_id: i64,
         symbol: &str,
-        missing_dates: &[String]
+        requested_missing_dates: &[String]
     ) -> Result<i64> {
-        println!("    🔒 [ATOMIC] Processing all statements for {}...", symbol);
+        println!("    🔒 [ATOMIC] Processing {} for {} missing dates...", symbol, requested_missing_dates.len());
 
-        // Extract filing metadata
-        let filing_metadata_vec = edgar_client.extract_filing_metadata(json, symbol).ok();
-
-        // Parse all three statement types
+        // Parse all three statement types FIRST to see what data actually exists
         let balance_historical = edgar_client.parse_company_facts_json(json, symbol)?;
         let income_historical = edgar_client.parse_income_statement_json(json, symbol)?;
         let cashflow_historical = edgar_client.parse_cash_flow_json(json, symbol)?;
 
-        println!("    📊 Extracted: {} balance, {} income, {} cashflow data points",
-                 balance_historical.len(), income_historical.len(), cashflow_historical.len());
+        // Collect all unique filed_dates from ACTUAL data
+        let mut actual_filed_dates = std::collections::HashSet::new();
+        for (_field, _value, _report, filed) in &balance_historical {
+            actual_filed_dates.insert(filed.clone());
+        }
+        for (_field, _value, _report, filed) in &income_historical {
+            actual_filed_dates.insert(filed.clone());
+        }
+        for (_field, _value, _report, filed) in &cashflow_historical {
+            actual_filed_dates.insert(filed.clone());
+        }
 
-        // Group ALL data by filed_date
+        // Filter requested missing_dates to only those that ACTUALLY exist in the data
+        let processable_dates: Vec<String> = requested_missing_dates.iter()
+            .filter(|date| actual_filed_dates.contains(*date))
+            .cloned()
+            .collect();
+
+        let skipped_count = requested_missing_dates.len() - processable_dates.len();
+        if skipped_count > 0 {
+            println!("    ⚠️  Skipping {} corrected/deleted filings not in JSON data", skipped_count);
+        }
+
+        if processable_dates.is_empty() {
+            println!("    ✓  No new filings to process (all up-to-date or corrected)");
+            return Ok(0);
+        }
+
+        println!("    ✓  Processing {} filings with actual data", processable_dates.len());
+
+        // Extract filing metadata from JSON (now comprehensive - includes 8-K filings)
+        let filing_metadata_vec = edgar_client.extract_filing_metadata(json, symbol).ok();
+
+        if let Some(ref metadata_vec) = filing_metadata_vec {
+            println!("    📋 Found metadata for {} filing dates", metadata_vec.len());
+
+            // Check if we're missing metadata for any processable dates
+            let metadata_dates: std::collections::HashSet<String> = metadata_vec.iter()
+                .map(|m| m.filing_date.clone())
+                .collect();
+
+            let missing_metadata: Vec<&String> = processable_dates.iter()
+                .filter(|date| !metadata_dates.contains(*date))
+                .collect();
+
+            if !missing_metadata.is_empty() {
+                println!("    ⚠️  Warning: {} dates have data but no metadata: {:?}",
+                         missing_metadata.len(), missing_metadata);
+                println!("       These filings will be skipped (possible data quality issue)");
+            }
+        }
+
+        // Group ALL data by filed_date (only for processable dates)
         let mut data_by_filed: HashMap<String, (String, HashMap<String, f64>, HashMap<String, f64>, HashMap<String, f64>)> = HashMap::new();
 
         // Group balance sheet data
         for (field_name, value, report_date, filed_date) in balance_historical {
-            if missing_dates.contains(&filed_date) {
+            if processable_dates.contains(&filed_date) {
                 let entry = data_by_filed.entry(filed_date.clone())
                     .or_insert_with(|| (report_date.clone(), HashMap::new(), HashMap::new(), HashMap::new()));
                 if entry.0.is_empty() && !report_date.is_empty() { entry.0 = report_date.clone(); }
@@ -689,7 +848,7 @@ impl DataStatusReader {
 
         // Group income statement data
         for (field_name, value, report_date, filed_date) in income_historical {
-            if missing_dates.contains(&filed_date) {
+            if processable_dates.contains(&filed_date) {
                 let entry = data_by_filed.entry(filed_date.clone())
                     .or_insert_with(|| (report_date.clone(), HashMap::new(), HashMap::new(), HashMap::new()));
                 if entry.0.is_empty() && !report_date.is_empty() { entry.0 = report_date.clone(); }
@@ -699,7 +858,7 @@ impl DataStatusReader {
 
         // Group cash flow data
         for (field_name, value, report_date, filed_date) in cashflow_historical {
-            if missing_dates.contains(&filed_date) {
+            if processable_dates.contains(&filed_date) {
                 let entry = data_by_filed.entry(filed_date.clone())
                     .or_insert_with(|| (report_date.clone(), HashMap::new(), HashMap::new(), HashMap::new()));
                 if entry.0.is_empty() && !report_date.is_empty() { entry.0 = report_date.clone(); }
@@ -709,34 +868,46 @@ impl DataStatusReader {
 
         // Store each filing atomically (all 3 statements together)
         let mut filings_stored = 0;
+        let mut filings_skipped_no_metadata = 0;
+        let mut filings_skipped_incomplete = 0;
 
         for (filed_date, (report_date, balance_data, income_data, cashflow_data)) in data_by_filed {
+
             // Find matching metadata
             let metadata_opt = filing_metadata_vec
                 .as_ref()
                 .and_then(|vec| vec.iter().find(|m| m.filing_date == filed_date));
 
             if metadata_opt.is_none() {
-                println!("🔴 WARNING: No matching metadata for {} filed_date={}", symbol, filed_date);
-                println!("   Available metadata filing_dates: {:?}",
-                    filing_metadata_vec.as_ref().map(|v| v.iter().map(|m| &m.filing_date).collect::<Vec<_>>()));
-                println!("   This filing will be SKIPPED.");
+                println!("    ⚠️  Skipping {}: no metadata match", filed_date);
+                filings_skipped_no_metadata += 1;
                 continue;
             }
 
             let metadata = metadata_opt.unwrap();
 
-            // Check if we have data for ALL THREE statements
-            if balance_data.is_empty() || income_data.is_empty() || cashflow_data.is_empty() {
-                println!("⚠️ WARNING: Incomplete data for {} filed_date={} (balance: {}, income: {}, cashflow: {})",
-                         symbol, filed_date, balance_data.len(), income_data.len(), cashflow_data.len());
-                println!("   Skipping this filing to avoid orphaned sec_filing record");
+            // RELAXED VALIDATION: Require at least ONE statement type with meaningful data
+            // Check for key financial fields in each statement type
+            let has_balance = balance_data.contains_key("Assets") ||
+                             balance_data.contains_key("Liabilities") ||
+                             balance_data.contains_key("StockholdersEquity");
+
+            let has_income = income_data.contains_key("Revenues") ||
+                            income_data.contains_key("RevenueFromContractWithCustomerExcludingAssessedTax") ||
+                            income_data.contains_key("NetIncomeLoss");
+
+            let has_cashflow = cashflow_data.contains_key("NetCashProvidedByUsedInOperatingActivities") ||
+                              cashflow_data.contains_key("NetCashProvidedByUsedInInvestingActivities");
+
+            let statements_available = [has_balance, has_income, has_cashflow].iter().filter(|&&x| x).count();
+
+            if statements_available == 0 {
+                println!("    ⚠️  Skipping {}: no meaningful data", filed_date);
+                filings_skipped_incomplete += 1;
                 continue;
             }
 
             let fiscal_year = report_date.split('-').next().unwrap().parse::<i32>().unwrap_or(0);
-
-            println!("    💾 [ATOMIC] Storing complete filing for {} filed_date={} report_date={}", symbol, filed_date, report_date);
 
             // Build BalanceSheetData
             let short_term_debt = balance_data.get("ShortTermDebt").copied()
@@ -815,16 +986,23 @@ impl DataStatusReader {
             ).await {
                 Ok(_) => {
                     filings_stored += 1;
-                    println!("    ✅ [ATOMIC] Successfully stored complete filing for {} ({})", symbol, filed_date);
+                    println!("    ✅  Stored filing {} (report: {})", filed_date, report_date);
                 }
                 Err(e) => {
-                    println!("    ❌ [ATOMIC] Failed to store filing for {} ({}): {}", symbol, filed_date, e);
-                    println!("       Transaction rolled back - no orphaned records created");
+                    println!("    ❌  Failed {}: {} (rolled back)", filed_date, e);
                 }
             }
         }
 
-        println!("    🎯 [ATOMIC] Stored {} complete filings for {}", filings_stored, symbol);
+        if filings_stored > 0 {
+            println!("    🎯  {} stored {} filings successfully", symbol, filings_stored);
+        }
+        if filings_skipped_no_metadata > 0 || filings_skipped_incomplete > 0 {
+            println!("    ⚠️   Skipped {} filings (metadata:{}, incomplete:{})",
+                     filings_skipped_no_metadata + filings_skipped_incomplete,
+                     filings_skipped_no_metadata, filings_skipped_incomplete);
+        }
+
         Ok(filings_stored)
     }
 
@@ -1082,6 +1260,132 @@ impl DataStatusReader {
     async fn get_error_count() -> Result<i64> {
         // Return count of errors encountered
         Ok(0) // Placeholder - could be implemented with a global error counter
+    }
+
+    /// Helper: Find a single value for a specific accession number in Company Facts JSON
+    fn find_value_for_accession(
+        facts: &serde_json::Value,
+        concept: &str,
+        accession_number: &str
+    ) -> Option<f64> {
+        let concept_data = facts
+            .get(concept)?
+            .get("units")?
+            .get("USD")?
+            .as_array()?;
+
+        // Search for the value matching this accession number
+        for val in concept_data {
+            if val.get("accn").and_then(|a| a.as_str()) == Some(accession_number) {
+                return val.get("val").and_then(|v| v.as_f64());
+            }
+        }
+
+        None
+    }
+
+    /// Extract balance sheet data for a specific 10-K filing (by accession number)
+    fn extract_balance_sheet_for_filing(
+        company_facts: &serde_json::Value,
+        accession_number: &str,
+        stock_id: i64,
+        symbol: &str,
+        report_date: &str,
+        fiscal_year: i32
+    ) -> Result<BalanceSheetData> {
+        let facts = company_facts
+            .get("facts")
+            .and_then(|f| f.get("us-gaap"))
+            .ok_or_else(|| anyhow!("Missing us-gaap facts"))?;
+
+        Ok(BalanceSheetData {
+            stock_id,
+            symbol: symbol.to_string(),
+            report_date: NaiveDate::parse_from_str(report_date, "%Y-%m-%d")?,
+            fiscal_year,
+            total_assets: Self::find_value_for_accession(facts, "Assets", accession_number),
+            total_liabilities: Self::find_value_for_accession(facts, "Liabilities", accession_number),
+            total_equity: Self::find_value_for_accession(facts, "StockholdersEquity", accession_number),
+            cash_and_equivalents: Self::find_value_for_accession(facts, "CashAndCashEquivalentsAtCarryingValue", accession_number),
+            short_term_debt: Self::find_value_for_accession(facts, "ShortTermDebt", accession_number)
+                .or_else(|| Self::find_value_for_accession(facts, "DebtCurrent", accession_number)),
+            long_term_debt: Self::find_value_for_accession(facts, "LongTermDebt", accession_number)
+                .or_else(|| Self::find_value_for_accession(facts, "LongTermDebtNoncurrent", accession_number)),
+            total_debt: Self::find_value_for_accession(facts, "DebtLongtermAndShorttermCombinedAmount", accession_number)
+                .or_else(|| Self::find_value_for_accession(facts, "LongTermDebt", accession_number)),
+            current_assets: Self::find_value_for_accession(facts, "AssetsCurrent", accession_number),
+            current_liabilities: Self::find_value_for_accession(facts, "LiabilitiesCurrent", accession_number),
+            share_repurchases: Self::find_value_for_accession(facts, "StockRepurchasedDuringPeriodValue", accession_number)
+                .or_else(|| Self::find_value_for_accession(facts, "TreasuryStockValueAcquiredCostMethod", accession_number)),
+        })
+    }
+
+    /// Extract income statement data for a specific 10-K filing (by accession number)
+    fn extract_income_statement_for_filing(
+        company_facts: &serde_json::Value,
+        accession_number: &str,
+        stock_id: i64,
+        symbol: &str,
+        report_date: &str,
+        fiscal_year: i32
+    ) -> Result<IncomeStatementData> {
+        let facts = company_facts
+            .get("facts")
+            .and_then(|f| f.get("us-gaap"))
+            .ok_or_else(|| anyhow!("Missing us-gaap facts"))?;
+
+        Ok(IncomeStatementData {
+            stock_id,
+            symbol: symbol.to_string(),
+            report_date: NaiveDate::parse_from_str(report_date, "%Y-%m-%d")?,
+            fiscal_year,
+            period_type: "FY".to_string(),  // 10-K = annual
+            revenue: Self::find_value_for_accession(facts, "Revenues", accession_number)
+                .or_else(|| Self::find_value_for_accession(facts, "RevenueFromContractWithCustomerExcludingAssessedTax", accession_number))
+                .or_else(|| Self::find_value_for_accession(facts, "SalesRevenueNet", accession_number)),
+            net_income: Self::find_value_for_accession(facts, "NetIncomeLoss", accession_number)
+                .or_else(|| Self::find_value_for_accession(facts, "ProfitLoss", accession_number)),
+            operating_income: Self::find_value_for_accession(facts, "OperatingIncomeLoss", accession_number),
+            gross_profit: Self::find_value_for_accession(facts, "GrossProfit", accession_number),
+            cost_of_revenue: Self::find_value_for_accession(facts, "CostOfRevenue", accession_number)
+                .or_else(|| Self::find_value_for_accession(facts, "CostOfGoodsAndServicesSold", accession_number)),
+            interest_expense: Self::find_value_for_accession(facts, "InterestExpense", accession_number),
+            tax_expense: Self::find_value_for_accession(facts, "IncomeTaxExpenseBenefit", accession_number),
+            shares_basic: Self::find_value_for_accession(facts, "WeightedAverageNumberOfSharesOutstandingBasic", accession_number),
+            shares_diluted: Self::find_value_for_accession(facts, "WeightedAverageNumberOfDilutedSharesOutstanding", accession_number),
+        })
+    }
+
+    /// Extract cash flow data for a specific 10-K filing (by accession number)
+    fn extract_cash_flow_for_filing(
+        company_facts: &serde_json::Value,
+        accession_number: &str,
+        stock_id: i64,
+        symbol: &str,
+        report_date: &str,
+        fiscal_year: i32
+    ) -> Result<CashFlowData> {
+        let facts = company_facts
+            .get("facts")
+            .and_then(|f| f.get("us-gaap"))
+            .ok_or_else(|| anyhow!("Missing us-gaap facts"))?;
+
+        Ok(CashFlowData {
+            stock_id,
+            symbol: symbol.to_string(),
+            report_date: NaiveDate::parse_from_str(report_date, "%Y-%m-%d")?,
+            fiscal_year,
+            depreciation_expense: Self::find_value_for_accession(facts, "DepreciationDepletionAndAmortization", accession_number)
+                .or_else(|| Self::find_value_for_accession(facts, "Depreciation", accession_number)),
+            amortization_expense: Self::find_value_for_accession(facts, "AmortizationOfIntangibleAssets", accession_number),
+            dividends_paid: Self::find_value_for_accession(facts, "PaymentsOfDividends", accession_number)
+                .or_else(|| Self::find_value_for_accession(facts, "DividendsPaid", accession_number)),
+            share_repurchases: Self::find_value_for_accession(facts, "PaymentsForRepurchaseOfCommonStock", accession_number)
+                .or_else(|| Self::find_value_for_accession(facts, "StockRepurchasedDuringPeriodValue", accession_number)),
+            operating_cash_flow: Self::find_value_for_accession(facts, "NetCashProvidedByUsedInOperatingActivities", accession_number),
+            investing_cash_flow: Self::find_value_for_accession(facts, "NetCashProvidedByUsedInInvestingActivities", accession_number),
+            financing_cash_flow: Self::find_value_for_accession(facts, "NetCashProvidedByUsedInFinancingActivities", accession_number),
+        })
     }
 
 }

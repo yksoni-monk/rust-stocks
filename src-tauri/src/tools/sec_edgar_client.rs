@@ -130,6 +130,48 @@ pub struct FilingMetadata {
     pub report_date: String,
 }
 
+/// SEC Submissions API response structure
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubmissionsResponse {
+    pub cik: String,
+    pub name: String,
+    #[serde(default)]
+    pub tickers: Vec<String>,
+    pub filings: Filings,
+}
+
+/// Filings container from Submissions API
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Filings {
+    pub recent: RecentFilings,
+    #[serde(default)]
+    pub files: Vec<AdditionalFilings>,
+}
+
+/// Recent filings from Submissions API (columnar format)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentFilings {
+    pub accession_number: Vec<String>,
+    pub filing_date: Vec<String>,
+    pub report_date: Vec<String>,
+    pub form: Vec<String>,
+    #[serde(default)]
+    pub primary_document: Vec<String>,
+    #[serde(default)]
+    pub is_xbrl: Vec<i32>,
+}
+
+/// Additional filing files for companies with >1000 filings
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdditionalFilings {
+    pub name: String,
+    pub filing_count: i32,
+    pub filing_from: String,
+    pub filing_to: String,
+}
+
 impl SecEdgarClient {
     /// Create a new SEC EDGAR client
     pub fn new(pool: SqlitePool) -> Self {
@@ -286,18 +328,25 @@ impl SecEdgarClient {
                         if let Some(usd_data) = units.get("USD") {
                             if let Some(values) = usd_data.as_array() {
                                 for value in values {
-                                    if let (Some(accn), Some(form), Some(filed), Some(fp), Some(end)) = (
+                                    // Only require: accn, form, filed, end
+                                    // Make fp optional (null for 8-K filings)
+                                    if let (Some(accn), Some(form), Some(filed), Some(end)) = (
                                         value.get("accn").and_then(|a| a.as_str()),
                                         value.get("form").and_then(|f| f.as_str()),
                                         value.get("filed").and_then(|d| d.as_str()),
-                                        value.get("fp").and_then(|fp| fp.as_str()),
                                         value.get("end").and_then(|e| e.as_str())
                                     ) {
+                                        // Extract fiscal period with default for 8-K filings
+                                        let fp = value.get("fp")
+                                            .and_then(|f| f.as_str())
+                                            .unwrap_or("UNK")  // Unknown for 8-K and amendments
+                                            .to_string();
+
                                         let metadata = FilingMetadata {
                                             accession_number: accn.to_string(),
                                             form_type: form.to_string(),
                                             filing_date: filed.to_string(),
-                                            fiscal_period: fp.to_string(),
+                                            fiscal_period: fp,
                                             report_date: end.to_string(),
                                         };
                                         metadata_vec.push(metadata);
@@ -315,6 +364,58 @@ impl SecEdgarClient {
         metadata_vec.dedup_by(|a, b| a.accession_number == b.accession_number);
 
         Ok(metadata_vec)
+    }
+
+    /// Fetch company submissions from SEC Submissions API
+    /// Returns complete filing history with metadata
+    pub async fn fetch_company_submissions(&mut self, cik: &str) -> Result<SubmissionsResponse> {
+        // Pad CIK to 10 digits with leading zeros
+        let cik_padded = format!("{:0>10}", cik);
+        let url = format!("https://data.sec.gov/submissions/CIK{}.json", cik_padded);
+
+        // Rate limiting (10 req/sec)
+        self.rate_limiter.wait_if_needed().await;
+
+        let response = self.http_client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| anyhow!("Failed to fetch submissions for CIK {}: {}", cik, e))?;
+
+        if !response.status().is_success() {
+            return Err(anyhow!("SEC Submissions API returned status {}: {}",
+                response.status(), url));
+        }
+
+        let submissions: SubmissionsResponse = response.json().await
+            .map_err(|e| anyhow!("Failed to parse submissions JSON for CIK {}: {}", cik, e))?;
+
+        Ok(submissions)
+    }
+
+    /// Extract 10-K filing metadata from Submissions API response
+    /// Only returns annual 10-K filings, not 10-Q or 8-K
+    pub fn extract_10k_metadata(&self, submissions: &SubmissionsResponse) -> Vec<FilingMetadata> {
+        let recent = &submissions.filings.recent;
+        let mut metadata = Vec::new();
+
+        // Iterate through all filings in columnar format
+        for i in 0..recent.accession_number.len() {
+            // Only process 10-K filings (annual reports)
+            if recent.form[i] != "10-K" {
+                continue;
+            }
+
+            metadata.push(FilingMetadata {
+                accession_number: recent.accession_number[i].clone(),
+                form_type: "10-K".to_string(),  // Always 10-K
+                filing_date: recent.filing_date[i].clone(),
+                fiscal_period: "FY".to_string(),  // 10-K = annual = FY by definition
+                report_date: recent.report_date[i].clone(),
+            });
+        }
+
+        metadata
     }
 
     /// Get all CIK mappings for S&P 500 companies

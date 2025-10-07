@@ -2928,3 +2928,419 @@ Changes are localized to storage functions. Easy to revert by:
 2. Or comment out transaction wrapper (fall back to old behavior)
 3. Run cleanup script to fix any orphaned records
 
+---
+
+## 🔄 HYBRID API DESIGN: Submissions API + Company Facts API
+
+**Date**: 2025-10-06
+**Status**: Proposed
+**Objective**: Achieve 100% metadata coverage for 10-K annual filings by using both SEC APIs
+
+### Background
+
+**Current Problem**:
+- Company Facts API only includes metadata for ~75 out of 100+ filings per company
+- This causes ~85% of stocks (420/497) to be marked as "stale" even though data exists
+- Missing metadata means we can't extract available financial data
+
+**Root Cause**:
+- Company Facts API's XBRL data doesn't consistently include metadata across all us-gaap fields
+- Some filings only appear in certain fields, making metadata extraction incomplete
+
+**User Requirement**:
+- Need to download financial data for ALL 497 S&P 500 stocks
+- Only interested in 10-K annual reports (not 10-Q quarterly or 8-K current events)
+- Must reliably match metadata with financial data
+
+### Solution: Hybrid API Approach
+
+Use **both SEC APIs** together for complete coverage:
+
+1. **SEC Submissions API** → Complete filing metadata (100% coverage)
+   - URL: `https://data.sec.gov/submissions/CIK##########.json`
+   - Provides: accession numbers, form types, filing dates, report dates
+   - Contains: 1000 most recent filings per company
+   - Filter: `form == "10-K"` to get only annual reports
+
+2. **SEC Company Facts API** → Financial statement data (current)
+   - URL: `https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json`
+   - Provides: XBRL financial data (assets, revenue, etc.)
+   - Match by: accession number from Submissions API
+
+3. **Match Strategy**:
+   - Get 10-K metadata from Submissions API
+   - For each 10-K accession number, extract financial data from Company Facts API
+   - Store complete filing with all 3 statements atomically
+
+### API Comparison
+
+| Feature | Submissions API | Company Facts API | Hybrid Approach |
+|---------|----------------|-------------------|-----------------|
+| **Metadata Coverage** | ✅ 100% (all filings) | ❌ ~75% (partial) | ✅ 100% |
+| **Accession Number** | ✅ Yes | ✅ Yes | ✅ Match key |
+| **Form Type** | ✅ Yes (10-K, 10-Q, 8-K) | ❌ No | ✅ Filter 10-K |
+| **Filing Date** | ✅ Yes | ✅ Yes (partial) | ✅ Yes |
+| **Report Date** | ✅ Yes | ✅ Yes (partial) | ✅ Yes |
+| **Fiscal Period** | ❌ No (don't need!) | ✅ Yes (partial) | ℹ️ Optional |
+| **Fiscal Year** | ❌ No (don't need!) | ✅ Yes (partial) | ℹ️ Optional |
+| **Financial Data** | ❌ No | ✅ Yes | ✅ Yes |
+
+**Key Insight**: We don't need fiscal_period or fiscal_year! Form type "10-K" = annual by definition.
+
+### Verification Test (WMB)
+
+**Submissions API** (10-K filings for WMB):
+```
+1. accession: 0000107263-25-000031, reportDate: 2024-12-31
+2. accession: 0000107263-24-000019, reportDate: 2023-12-31
+3. accession: 0000107263-23-000007, reportDate: 2022-12-31
+4. accession: 0000107263-22-000007, reportDate: 2021-12-31
+5. accession: 0000107263-21-000006, reportDate: 2020-12-31
+```
+
+**Company Facts API** verification:
+```
+✅ 0000107263-25-000031 - FOUND
+✅ 0000107263-24-000019 - FOUND
+✅ 0000107263-23-000007 - FOUND
+✅ 0000107263-22-000007 - FOUND
+✅ 0000107263-21-000006 - FOUND
+```
+
+**Result**: ✅ All 10-K accession numbers from Submissions API exist in Company Facts API
+
+### Implementation Plan
+
+#### Phase 1: Add Submissions API Client (2-3 hours)
+
+**File**: `src-tauri/src/tools/sec_edgar_client.rs`
+
+**New Function 1**: Fetch Submissions API
+```rust
+pub async fn fetch_company_submissions(
+    &self,
+    cik: &str
+) -> Result<SubmissionsResponse, EdgarError> {
+    let url = format!("https://data.sec.gov/submissions/CIK{:010}.json", cik);
+    let response = self.client
+        .get(&url)
+        .header("User-Agent", &self.user_agent)
+        .send()
+        .await?;
+
+    // Rate limiting (10 req/sec)
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let submissions: SubmissionsResponse = response.json().await?;
+    Ok(submissions)
+}
+```
+
+**New Function 2**: Extract 10-K Metadata
+```rust
+pub fn extract_10k_metadata(
+    submissions: &SubmissionsResponse
+) -> Vec<FilingMetadata> {
+    let recent = &submissions.filings.recent;
+    let mut metadata = Vec::new();
+
+    for i in 0..recent.accession_number.len() {
+        // Only process 10-K filings (annual reports)
+        if recent.form[i] != "10-K" {
+            continue;
+        }
+
+        metadata.push(FilingMetadata {
+            accession_number: recent.accession_number[i].clone(),
+            form_type: "10-K".to_string(),  // Always 10-K
+            filing_date: recent.filing_date[i].clone(),
+            fiscal_period: "FY".to_string(),  // 10-K = annual = FY
+            report_date: recent.report_date[i].clone(),
+        });
+    }
+
+    metadata
+}
+```
+
+**New Struct**: Submissions API Response
+```rust
+#[derive(Debug, Deserialize)]
+pub struct SubmissionsResponse {
+    pub cik: String,
+    pub name: String,
+    pub tickers: Vec<String>,
+    pub filings: Filings,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Filings {
+    pub recent: RecentFilings,
+    pub files: Vec<AdditionalFilings>,  // For companies with >1000 filings
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentFilings {
+    pub accession_number: Vec<String>,
+    pub filing_date: Vec<String>,
+    pub report_date: Vec<String>,
+    pub form: Vec<String>,
+    pub primary_document: Vec<String>,
+    pub is_xbrl: Vec<i32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdditionalFilings {
+    pub name: String,       // e.g., "CIK0000107263-submissions-001.json"
+    pub filing_count: i32,  // Number of filings in this file
+    pub filing_from: String,
+    pub filing_to: String,
+}
+```
+
+#### Phase 2: Update Data Freshness Checker (1-2 hours)
+
+**File**: `src-tauri/src/tools/data_freshness_checker.rs`
+
+**Replace** `extract_filing_metadata()` logic:
+
+```rust
+// OLD: Extract metadata from Company Facts XBRL data (incomplete)
+let filing_metadata_vec = sec_edgar_client
+    .extract_filing_metadata(&company_facts_json)
+    .ok();
+
+// NEW: Fetch metadata from Submissions API (complete)
+let submissions = sec_edgar_client
+    .fetch_company_submissions(&cik_padded)
+    .await?;
+
+let filing_metadata_vec = sec_edgar_client
+    .extract_10k_metadata(&submissions);
+```
+
+**Update** `extract_and_store_financials()`:
+
+```rust
+pub async fn extract_and_store_financials(
+    &self,
+    stock: &Stock,
+    pool: &SqlitePool,
+) -> Result<i32, Box<dyn std::error::Error + Send + Sync>> {
+
+    // Step 1: Fetch Submissions API for 10-K metadata
+    let submissions = self.sec_edgar_client
+        .fetch_company_submissions(&cik_padded)
+        .await?;
+
+    let metadata_vec = self.sec_edgar_client
+        .extract_10k_metadata(&submissions);
+
+    println!("  📋 Found {} 10-K filings from Submissions API", metadata_vec.len());
+
+    // Step 2: Fetch Company Facts API for financial data
+    let company_facts = self.sec_edgar_client
+        .fetch_company_facts(&cik_padded)
+        .await?;
+
+    // Step 3: For each 10-K filing, extract and store financial data
+    let mut stored_count = 0;
+
+    for metadata in metadata_vec {
+        // Extract data for this specific accession number
+        let balance_data = extract_balance_sheet_for_filing(
+            &company_facts,
+            &metadata.accession_number
+        )?;
+
+        let income_data = extract_income_statement_for_filing(
+            &company_facts,
+            &metadata.accession_number
+        )?;
+
+        let cashflow_data = extract_cash_flow_for_filing(
+            &company_facts,
+            &metadata.accession_number
+        )?;
+
+        // Atomic storage (all 3 statements or nothing)
+        match store_filing_with_transaction(
+            pool,
+            stock.id,
+            metadata,
+            balance_data,
+            income_data,
+            cashflow_data
+        ).await {
+            Ok(_) => {
+                stored_count += 1;
+                println!("    ✅ Stored 10-K filing: {}", metadata.report_date);
+            }
+            Err(e) => {
+                println!("    ⚠️  Skipped filing {}: {}", metadata.report_date, e);
+                // Continue with next filing (likely duplicate)
+            }
+        }
+    }
+
+    Ok(stored_count)
+}
+```
+
+**New Helper Functions**:
+
+```rust
+fn extract_balance_sheet_for_filing(
+    company_facts: &serde_json::Value,
+    accession_number: &str
+) -> Result<BalanceSheetData> {
+    let facts = company_facts.get("facts")
+        .and_then(|f| f.get("us-gaap"))
+        .ok_or("Missing us-gaap facts")?;
+
+    // Extract only data matching this accession number
+    let assets = find_value_for_accession(facts, "Assets", accession_number)?;
+    let liabilities = find_value_for_accession(facts, "Liabilities", accession_number)?;
+    // ... etc
+
+    Ok(BalanceSheetData { assets, liabilities, ... })
+}
+
+fn find_value_for_accession(
+    facts: &serde_json::Value,
+    concept: &str,
+    accession_number: &str
+) -> Result<Option<f64>> {
+    let concept_data = facts.get(concept)
+        .and_then(|c| c.get("units"))
+        .and_then(|u| u.get("USD"))
+        .and_then(|v| v.as_array())
+        .ok_or("Concept not found")?;
+
+    // Find the value matching this accession number
+    for val in concept_data {
+        if val.get("accn").and_then(|a| a.as_str()) == Some(accession_number) {
+            return Ok(val.get("val").and_then(|v| v.as_f64()));
+        }
+    }
+
+    Ok(None)  // Not found in this filing
+}
+```
+
+#### Phase 3: Update Database Schema (Optional)
+
+**Current**: `fiscal_period` column exists but not strictly needed
+**Decision**: Keep for now (useful for debugging), populate with "FY" for 10-K
+
+**Alternative**: Remove fiscal_period column via migration if truly unused
+
+#### Phase 4: Testing & Validation (1 hour)
+
+**Test 1**: Single Stock (WMB)
+```bash
+cargo run --bin refresh_data financials --only-ticker WMB
+```
+Expected: 5+ 10-K filings extracted and stored
+
+**Test 2**: Full S&P 500 Refresh
+```bash
+cargo run --bin refresh_data financials
+```
+Expected:
+- 497 stocks processed
+- ~2500+ total 10-K filings (5 years × 497 stocks)
+- 0 stocks marked as "stale" after completion
+
+**Test 3**: Verify Data Quality
+```sql
+-- All sec_filings should have all 3 statements
+SELECT COUNT(*) as orphaned_filings
+FROM sec_filings sf
+WHERE NOT EXISTS (SELECT 1 FROM balance_sheets bs WHERE bs.sec_filing_id = sf.id)
+   OR NOT EXISTS (SELECT 1 FROM income_statements inc WHERE inc.sec_filing_id = sf.id)
+   OR NOT EXISTS (SELECT 1 FROM cash_flow_statements cf WHERE cf.sec_filing_id = sf.id);
+
+-- Should return 0
+```
+
+**Test 4**: Verify Only 10-K Filings
+```sql
+SELECT DISTINCT form_type FROM sec_filings;
+-- Should only show: 10-K
+```
+
+### Performance Considerations
+
+**API Calls**:
+- Submissions API: 1 call per company = 497 calls
+- Company Facts API: 1 call per company = 497 calls (existing)
+- Total: 994 API calls (vs 497 currently)
+
+**Rate Limiting**:
+- SEC requires 10 requests/sec max
+- With 100ms delay: 10 req/sec compliance
+- Expected time: 994 calls ÷ 10 req/sec = ~100 seconds = ~2 minutes
+
+**Benefits**:
+- ✅ 100% metadata coverage (vs ~75% currently)
+- ✅ All 497 stocks will have complete data
+- ✅ No more "stale" stocks with missing metadata
+- ✅ Reliable 10-K filtering (no 10-Q or 8-K contamination)
+
+### Migration Strategy
+
+**Step 1**: Implement new code alongside existing code
+**Step 2**: Test with `--only-ticker` flag on multiple stocks
+**Step 3**: Run full refresh on all 497 stocks
+**Step 4**: Verify data quality and completeness
+**Step 5**: Remove old `extract_filing_metadata()` function (Company Facts based)
+
+**Rollback Plan**:
+- Keep old code commented out initially
+- Can revert by uncommenting old logic if issues arise
+
+### Acceptance Criteria
+
+**Must Have**:
+- ✅ All 497 S&P 500 stocks have financial data
+- ✅ Only 10-K annual filings stored (no 10-Q or 8-K)
+- ✅ Zero orphaned sec_filings records
+- ✅ Accession numbers match between Submissions and Company Facts APIs
+- ✅ All filings have report_date, filing_date, accession_number
+
+**Should Have**:
+- ✅ 5+ years of historical 10-K filings per stock
+- ✅ Clear progress feedback during refresh
+- ✅ Error handling for API failures
+
+**Won't Have** (Out of Scope):
+- ❌ Quarterly data (10-Q) - not needed for annual screening
+- ❌ Current events (8-K) - not needed for financial analysis
+- ❌ Historical filings >10 years old (beyond Submissions API recent 1000)
+
+### Open Questions
+
+1. **Q**: Do we need to fetch additional filing files for companies with >1000 filings?
+   **A**: No. Recent 1000 filings covers 10+ years of 10-K filings (only ~1 per year).
+
+2. **Q**: Should we store fiscal_year separately?
+   **A**: Can derive from report_date (year component), so optional.
+
+3. **Q**: What if accession number in Submissions API doesn't exist in Company Facts API?
+   **A**: Skip that filing with warning. This should be rare for XBRL 10-K filings.
+
+4. **Q**: Do we handle amendments (10-K/A)?
+   **A**: Yes, Submissions API includes them. We can filter or store as separate filings.
+
+### Next Steps
+
+1. ✅ Verify hybrid approach works for WMB (completed above)
+2. ⏳ Update implementation checklist in TRANSACTION_IMPLEMENTATION_CHECKLIST.md
+3. ⏳ Implement Submissions API client
+4. ⏳ Update data_freshness_checker.rs with hybrid extraction
+5. ⏳ Test with single stock
+6. ⏳ Run full refresh on 497 stocks
+

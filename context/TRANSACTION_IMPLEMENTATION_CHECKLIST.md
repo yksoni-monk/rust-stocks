@@ -1,6 +1,21 @@
 # Transaction-Based Storage Implementation Checklist
 
-## Overview
+## 🔄 MAJOR UPDATE: Hybrid API Approach (2025-10-06)
+
+**New Strategy**: Use Submissions API + Company Facts API for 100% metadata coverage
+
+See full design in: `UNIFIED_DATA_REFRESH_SYSTEM_DESIGN.md` (Section: "HYBRID API DESIGN")
+
+### Key Changes to Implementation Plan:
+1. **Add Submissions API client** - Fetch 10-K metadata with 100% coverage
+2. **Filter to 10-K only** - No 10-Q or 8-K data (annual reports only)
+3. **Match by accession number** - Link Submissions metadata with Company Facts data
+4. **Extract per-filing data** - New helper functions to extract data for specific accession numbers
+5. **Keep transaction-based storage** - All 3 statements stored atomically (unchanged)
+
+---
+
+## Overview (Original)
 Implement ACID-compliant transaction-based storage for financial data to enforce the invariant: **Every sec_filing MUST have all 3 associated financial statements**.
 
 ## Current State Analysis
@@ -597,6 +612,271 @@ If issues are found:
 5. Git stash pop to continue
 
 ## Questions to Resolve Before Implementation
+
+---
+
+## 📋 HYBRID API IMPLEMENTATION CHECKLIST (2025-10-06)
+
+### Phase 1: Add Submissions API Structs and Client (2-3 hours)
+
+**File**: `src-tauri/src/tools/sec_edgar_client.rs`
+
+- [ ] **Add Submissions API response structs** (lines ~50-100)
+  ```rust
+  #[derive(Debug, Deserialize)]
+  pub struct SubmissionsResponse { ... }
+
+  #[derive(Debug, Deserialize)]
+  pub struct Filings { ... }
+
+  #[derive(Debug, Deserialize)]
+  #[serde(rename_all = "camelCase")]
+  pub struct RecentFilings { ... }
+  ```
+
+- [ ] **Add `fetch_company_submissions()` method** (lines ~200-220)
+  - URL format: `https://data.sec.gov/submissions/CIK{:010}.json`
+  - Include User-Agent header
+  - Add 100ms delay for rate limiting (10 req/sec)
+  - Return `Result<SubmissionsResponse, EdgarError>`
+
+- [ ] **Add `extract_10k_metadata()` method** (lines ~300-330)
+  - Iterate through `recent.accession_number`
+  - Filter where `recent.form[i] == "10-K"`
+  - Create FilingMetadata with:
+    - accession_number from Submissions API
+    - form_type = "10-K"
+    - filing_date from Submissions API
+    - fiscal_period = "FY" (hardcoded for 10-K)
+    - report_date from Submissions API
+  - Return `Vec<FilingMetadata>`
+
+- [ ] **Test Submissions API client**
+  ```bash
+  cargo test test_fetch_submissions -- --nocapture
+  ```
+
+### Phase 2: Add Per-Filing Data Extraction (1-2 hours)
+
+**File**: `src-tauri/src/tools/data_freshness_checker.rs`
+
+- [ ] **Add helper function `find_value_for_accession()`** (lines ~1200-1230)
+  - Input: facts JSON, concept name, accession number
+  - Logic: Search concept.units.USD array for matching accn
+  - Output: Option<f64> value
+
+- [ ] **Add `extract_balance_sheet_for_filing()`** (lines ~1230-1280)
+  - Input: company_facts JSON, accession_number
+  - Use find_value_for_accession() for each field:
+    - Assets
+    - Liabilities
+    - StockholdersEquity
+    - CurrentAssets
+    - CurrentLiabilities
+    - ... etc (all balance sheet fields)
+  - Return BalanceSheetData struct
+
+- [ ] **Add `extract_income_statement_for_filing()`** (lines ~1280-1330)
+  - Similar to balance sheet
+  - Fields: Revenues, CostOfRevenue, GrossProfit, OperatingIncome, NetIncome, etc.
+
+- [ ] **Add `extract_cash_flow_for_filing()`** (lines ~1330-1380)
+  - Similar to balance sheet
+  - Fields: OperatingCashFlow, InvestingCashFlow, FinancingCashFlow, etc.
+
+- [ ] **Test per-filing extraction**
+  ```bash
+  cargo test test_extract_for_filing -- --nocapture
+  ```
+
+### Phase 3: Update Main Extraction Logic (1-2 hours)
+
+**File**: `src-tauri/src/tools/data_freshness_checker.rs`
+
+- [ ] **Update `extract_and_store_financials()` method** (lines ~600-750)
+
+  **Step 1**: Fetch Submissions API (replace old metadata extraction)
+  ```rust
+  // OLD (lines ~650):
+  // let filing_metadata_vec = self.sec_edgar_client
+  //     .extract_filing_metadata(&company_facts_json).ok();
+
+  // NEW:
+  let submissions = self.sec_edgar_client
+      .fetch_company_submissions(&cik_padded)
+      .await?;
+
+  let metadata_vec = self.sec_edgar_client
+      .extract_10k_metadata(&submissions);
+
+  println!("  📋 Found {} 10-K filings", metadata_vec.len());
+  ```
+
+  **Step 2**: Fetch Company Facts API (existing, keep as-is)
+  ```rust
+  let company_facts = self.sec_edgar_client
+      .fetch_company_facts(&cik_padded)
+      .await?;
+  ```
+
+  **Step 3**: Process each 10-K filing
+  ```rust
+  for metadata in metadata_vec {
+      // Extract data for THIS specific accession number
+      let balance_data = extract_balance_sheet_for_filing(
+          &company_facts,
+          &metadata.accession_number
+      )?;
+
+      let income_data = extract_income_statement_for_filing(
+          &company_facts,
+          &metadata.accession_number
+      )?;
+
+      let cashflow_data = extract_cash_flow_for_filing(
+          &company_facts,
+          &metadata.accession_number
+      )?;
+
+      // Atomic storage (existing transaction logic)
+      match store_filing_with_transaction(...).await {
+          Ok(_) => stored_count += 1,
+          Err(e) => println!("⚠️ Skipped {}: {}", metadata.report_date, e),
+      }
+  }
+  ```
+
+- [ ] **Remove old extraction logic** (comment out for now, delete later)
+  - Old `extract_and_store_balance_sheet_data()` calls
+  - Old grouped data by filing date logic
+  - Old metadata matching logic
+
+- [ ] **Update error handling**
+  - Handle case where accession number in Submissions not in Company Facts
+  - Skip filing with warning (don't fail entire stock)
+
+### Phase 4: Testing & Validation (1-2 hours)
+
+- [ ] **Test 1: Single stock with known 10-K filings (WMB)**
+  ```bash
+  # Delete existing WMB data
+  sqlite3 db/stocks.db "DELETE FROM sec_filings WHERE stock_id = (SELECT id FROM stocks WHERE symbol = 'WMB');"
+
+  # Run refresh
+  cargo run --bin refresh_data financials --only-ticker WMB
+
+  # Expected: 5+ 10-K filings stored
+  sqlite3 db/stocks.db "SELECT COUNT(*) FROM sec_filings WHERE stock_id = (SELECT id FROM stocks WHERE symbol = 'WMB');"
+  ```
+
+- [ ] **Test 2: Verify only 10-K filings**
+  ```sql
+  SELECT DISTINCT form_type FROM sec_filings;
+  -- Should only show: 10-K
+  ```
+
+- [ ] **Test 3: Verify no orphaned filings**
+  ```sql
+  SELECT COUNT(*) as orphaned
+  FROM sec_filings sf
+  WHERE NOT EXISTS (SELECT 1 FROM balance_sheets bs WHERE bs.sec_filing_id = sf.id)
+     OR NOT EXISTS (SELECT 1 FROM income_statements inc WHERE inc.sec_filing_id = sf.id)
+     OR NOT EXISTS (SELECT 1 FROM cash_flow_statements cf WHERE cf.sec_filing_id = sf.id);
+  -- Should return: 0
+  ```
+
+- [ ] **Test 4: Multiple stocks**
+  ```bash
+  cargo run --bin refresh_data financials --only-ticker AAPL
+  cargo run --bin refresh_data financials --only-ticker MSFT
+  cargo run --bin refresh_data financials --only-ticker GOOGL
+  ```
+
+- [ ] **Test 5: Check API call timing (rate limiting)**
+  ```bash
+  # Should take ~2 seconds per stock (200ms for 2 API calls + 100ms safety)
+  time cargo run --bin refresh_data financials --only-ticker WMT
+  ```
+
+### Phase 5: Full S&P 500 Refresh (2-3 hours runtime)
+
+- [ ] **Backup database before full refresh**
+  ```bash
+  ./backup_database.sh
+  ```
+
+- [ ] **Run full refresh**
+  ```bash
+  cargo run --bin refresh_data financials
+
+  # Expected:
+  # - 497 stocks processed
+  # - ~2500+ 10-K filings stored (5 years × 497)
+  # - 0 stocks marked as "stale"
+  # - Runtime: ~20-30 minutes (994 API calls ÷ 10 req/sec)
+  ```
+
+- [ ] **Verify completeness**
+  ```sql
+  -- All stocks should have financial data
+  SELECT COUNT(*) FROM stocks WHERE id NOT IN (
+      SELECT DISTINCT stock_id FROM sec_filings
+  );
+  -- Should return: 0 (or very few for stocks without CIK)
+  ```
+
+- [ ] **Verify data quality**
+  ```sql
+  -- Average filings per stock
+  SELECT AVG(cnt) as avg_filings FROM (
+      SELECT stock_id, COUNT(*) as cnt
+      FROM sec_filings
+      GROUP BY stock_id
+  );
+  -- Should be: 5+ (5 years of 10-K filings)
+  ```
+
+### Phase 6: Cleanup Old Code (30 mins)
+
+- [ ] **Remove old metadata extraction from Company Facts**
+  - Delete `extract_filing_metadata()` method (if unused elsewhere)
+  - Remove old extraction logic from data_freshness_checker.rs
+
+- [ ] **Update documentation**
+  - Update README.md with new expected behavior
+  - Update ARCHITECTURE.md with API usage
+
+- [ ] **Git commit with clear message**
+  ```bash
+  git add src-tauri/src/tools/sec_edgar_client.rs
+  git add src-tauri/src/tools/data_freshness_checker.rs
+  git add context/UNIFIED_DATA_REFRESH_SYSTEM_DESIGN.md
+  git add context/TRANSACTION_IMPLEMENTATION_CHECKLIST.md
+  git commit -m "Implement hybrid Submissions API + Company Facts API for 100% 10-K coverage"
+  ```
+
+### Success Criteria (Updated)
+
+- [ ] All 497 S&P 500 stocks have financial data
+- [ ] Only 10-K filings stored (no 10-Q or 8-K)
+- [ ] 5+ years of historical 10-K filings per stock
+- [ ] Zero orphaned sec_filings records
+- [ ] All filings have complete metadata (accession, form, dates)
+- [ ] Atomic transaction storage works (all 3 statements or nothing)
+- [ ] Clear progress feedback during refresh
+- [ ] No "stale" stocks after full refresh
+
+### Time Estimate
+
+- Phase 1 (Submissions API client): 2-3 hours
+- Phase 2 (Per-filing extraction): 1-2 hours
+- Phase 3 (Main extraction logic): 1-2 hours
+- Phase 4 (Testing): 1-2 hours
+- Phase 5 (Full refresh): 2-3 hours (mostly runtime)
+- Phase 6 (Cleanup): 30 mins
+
+**Total Development Time**: 6-10 hours
+**Total Runtime**: 2-3 hours for full S&P 500 refresh
 
 1. ✅ Should we fail the entire stock if one filing fails? **Yes - but continue with other stocks**
 2. ✅ Should we log every transaction boundary? **Yes - helpful for debugging**

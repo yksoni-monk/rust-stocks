@@ -1077,6 +1077,51 @@ impl SecEdgarClient {
         // Start transaction
         let mut tx = self.pool.begin().await?;
 
+        // UPSERT LOGIC: If storing 10-K/A, delete any existing 10-K for same (stock_id, report_date, fiscal_year)
+        if metadata.form_type == "10-K/A" {
+            let existing_10k_query = r#"
+                SELECT id, accession_number FROM sec_filings
+                WHERE stock_id = ? AND report_date = ? AND fiscal_year = ? AND form_type = '10-K'
+            "#;
+
+            if let Some(row) = sqlx::query(existing_10k_query)
+                .bind(stock_id)
+                .bind(report_date)
+                .bind(fiscal_year)
+                .fetch_optional(&mut *tx)
+                .await?
+            {
+                let old_filing_id: i64 = row.get("id");
+                let old_accession: String = row.get("accession_number");
+
+                println!("    🔄 [UPSERT] Replacing 10-K (accession: {}) with 10-K/A (accession: {})", old_accession, metadata.accession_number);
+
+                // Delete old financial data (cascading delete via foreign keys)
+                sqlx::query("DELETE FROM balance_sheets WHERE sec_filing_id = ?")
+                    .bind(old_filing_id)
+                    .execute(&mut *tx)
+                    .await?;
+
+                sqlx::query("DELETE FROM income_statements WHERE sec_filing_id = ?")
+                    .bind(old_filing_id)
+                    .execute(&mut *tx)
+                    .await?;
+
+                sqlx::query("DELETE FROM cash_flow_statements WHERE sec_filing_id = ?")
+                    .bind(old_filing_id)
+                    .execute(&mut *tx)
+                    .await?;
+
+                // Delete old sec_filing record
+                sqlx::query("DELETE FROM sec_filings WHERE id = ?")
+                    .bind(old_filing_id)
+                    .execute(&mut *tx)
+                    .await?;
+
+                println!("    ✅ [UPSERT] Deleted old 10-K filing (id={})", old_filing_id);
+            }
+        }
+
         // 1. Create or get sec_filing (transaction variant)
         let sec_filing_id = self.create_or_get_sec_filing_tx(&mut tx, stock_id, metadata, fiscal_year, report_date).await?;
 

@@ -252,10 +252,11 @@ This creates a new migration file with a timestamp prefix.
 The system uses real-time EDGAR API integration with automated data processing:
 
 1. **S&P 500 Symbol Management**: Automatic symbol updates from GitHub repository
-2. **EDGAR Financial Data Extraction**: Real-time API calls to SEC Company Facts API
-3. **Financial Ratio Calculations**: Piotroski F-Score and O'Shaughnessy Value calculations
-4. **Data Quality Assessment**: Completeness scoring and validation
-5. **Performance Optimization**: Database indexing for fast screening queries
+2. **EDGAR Financial Data Extraction**: Hybrid approach using Submissions + Company Facts APIs
+3. **10-K/A Amendment Handling**: Automatic detection and replacement with corrected data
+4. **Financial Ratio Calculations**: Piotroski F-Score and O'Shaughnessy Value calculations
+5. **Data Quality Assessment**: Completeness scoring and validation
+6. **Performance Optimization**: Database indexing for fast screening queries
 
 ### Data Sources & Quality
 - **SEC EDGAR API**: Official financial data from SEC filings
@@ -300,9 +301,11 @@ cargo run --bin refresh_data financials
 # Expected: 15-30 minutes for full S&P 500 (497 stocks with CIKs)
 # Updates: balance_sheets, income_statements, cash_flow_statements
 # Features:
+#   - Hybrid API approach (Submissions API for metadata + Company Facts API for data)
+#   - 10-K/A amendment support with automatic upsert (replaces original with corrected data)
 #   - Atomic transactions (all-or-nothing storage)
 #   - No orphaned sec_filing records
-#   - Automatic duplicate handling
+#   - Automatic duplicate handling and deduplication
 #   - 10 concurrent workers with rate limiting (10 req/sec)
 ```
 
@@ -379,6 +382,7 @@ The system automatically detects stale data:
 - **Database Size**: 2.5GB with complete financial statements
 - **Stock Coverage**: S&P 500 companies (497 with CIK identifiers)
 - **Data Integrity**: ACID-compliant atomic storage (no orphaned records)
+- **Amendment Handling**: 10-K/A filings automatically replace original 10-K data
 
 ## 🎨 Application Features
 
@@ -455,7 +459,10 @@ cargo run --bin db_admin -- verify
 - **Future Integration**: Charles Schwab API (for real-time quotes and options)
 
 ### Key Components
-- **EDGAR API Client**: Real-time financial data extraction
+- **EDGAR API Client**: Hybrid API approach (Submissions + Company Facts)
+  - Submissions API: 10-K filing metadata with form types and accession numbers
+  - Company Facts API: Financial statement data extraction
+  - 10-K/A amendment detection and automatic upsert
 - **Database Manager**: Enterprise-grade backup and migration system
 - **Screening Engine**: Piotroski F-Score and O'Shaughnessy Value algorithms
 - **Data Quality System**: Completeness scoring and validation

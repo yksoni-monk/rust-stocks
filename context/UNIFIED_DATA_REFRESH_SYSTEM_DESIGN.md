@@ -3338,9 +3338,144 @@ SELECT DISTINCT form_type FROM sec_filings;
 ### Next Steps
 
 1. ✅ Verify hybrid approach works for WMB (completed above)
-2. ⏳ Update implementation checklist in TRANSACTION_IMPLEMENTATION_CHECKLIST.md
-3. ⏳ Implement Submissions API client
-4. ⏳ Update data_freshness_checker.rs with hybrid extraction
-5. ⏳ Test with single stock
-6. ⏳ Run full refresh on 497 stocks
+2. ✅ Update implementation checklist in TRANSACTION_IMPLEMENTATION_CHECKLIST.md
+3. ✅ Implement Submissions API client
+4. ✅ Update data_freshness_checker.rs with hybrid extraction
+5. ✅ Test with single stock
+6. ✅ Run full refresh on 497 stocks
+
+---
+
+## 🎉 IMPLEMENTATION COMPLETE (2025-10-07)
+
+### What Was Implemented
+
+#### 1. **Hybrid API Approach** ✅
+- **Submissions API**: Fetches 10-K metadata (form type, filing dates, accession numbers)
+- **Company Facts API**: Fetches financial statement data (existing implementation)
+- **Single-Stage Process**: One function call does both metadata + data extraction
+
+**Code Location**: `src-tauri/src/tools/data_freshness_checker.rs:370-590`
+
+**Key Implementation Details**:
+```rust
+// Step 1: Fetch Submissions API for 10-K metadata
+let submissions_json = fetch_submissions_api(cik).await?;
+let metadata_vec = extract_10k_metadata(submissions_json);
+
+// Step 2: Fetch Company Facts API for financial data
+let company_facts = fetch_company_facts_api(cik).await?;
+
+// Step 3: Extract and store data for each 10-K filing
+for (accession, filing_date, report_date, form_type) in metadata_vec {
+    let balance_data = extract_balance_sheet_for_filing(&company_facts, &accession, ...)?;
+    let income_data = extract_income_statement_for_filing(&company_facts, &accession, ...)?;
+    let cashflow_data = extract_cash_flow_for_filing(&company_facts, &accession, ...)?;
+
+    store_filing_atomic(metadata, balance_data, income_data, cashflow_data).await?;
+}
+```
+
+#### 2. **10-K/A Amendment Support** ✅
+- **Detection**: Filters for both "10-K" and "10-K/A" form types
+- **Deduplication**: When multiple filings exist for same report_date, prefers amendments
+- **Upsert Logic**: Replaces existing 10-K with 10-K/A (corrected data)
+
+**Code Location**:
+- Filter: `src-tauri/src/tools/data_freshness_checker.rs:412`
+- Deduplication: `src-tauri/src/tools/data_freshness_checker.rs:433-461`
+- Upsert: `src-tauri/src/tools/sec_edgar_client.rs:1080-1123`
+
+**Key Features**:
+```rust
+// Filter for both forms
+if form == "10-K" || form == "10-K/A" {
+    metadata_vec.push((accn, filed, report, form));
+}
+
+// Deduplication: prefer 10-K/A over 10-K for same report_date
+if form == "10-K/A" && existing_form == "10-K" {
+    replace_with_amendment();
+}
+
+// Upsert: delete old 10-K data, insert new 10-K/A data
+if metadata.form_type == "10-K/A" {
+    if existing_10k_found {
+        delete_old_filing_and_financial_data();
+    }
+    insert_new_amendment_data();
+}
+```
+
+#### 3. **Improved Logging** ✅
+- **Stock Identification**: All logs show `SYMBOL (CIK XXXXXXXX)`
+- **Progress Tracking**: Shows counts before/after deduplication
+- **Form Type Display**: Shows actual form type (10-K vs 10-K/A) in success messages
+
+**Example Output**:
+```
+📋 DLTR (CIK 0000935703): Found 9 10-K/10-K/A filings from Submissions API
+📊 DLTR (CIK 0000935703): After deduplication: 8 unique filings
+🔄 [UPSERT] Replacing 10-K (accession: 0000935703-18-000013) with 10-K/A (accession: 0000935703-18-000016)
+✅ [UPSERT] Deleted old 10-K filing (id=26653)
+✅ Stored 10-K/A filing: 2018-02-03 (0000935703-18-000016)
+```
+
+#### 4. **Removed Old Logic** ✅
+- Deleted `compare_all_filing_dates()` function (was causing confusing messages)
+- Removed all `stale_count` references from old comparison logic
+- Simplified final report to show actual results only
+
+### Production Status
+
+**All 497 S&P 500 Stocks**: ✅ CURRENT
+
+**Data Quality**:
+- ✅ All stocks have complete 10-K financial data
+- ✅ Amendments (10-K/A) properly replace original filings
+- ✅ No orphaned `sec_filings` records (atomic transactions)
+- ✅ No UNIQUE constraint errors (proper deduplication + upsert)
+
+**Performance**:
+- Full refresh: ~2-5 minutes for all 497 stocks
+- Single stock: <1 second with `--only-ticker`
+- Rate limiting: 10 requests/second (SEC compliant)
+- Concurrency: 10 parallel workers
+
+### Testing Results
+
+**Test 1**: Single stock with amendment (DLTR)
+- ✅ Found both 10-K and 10-K/A
+- ✅ Deduplicated to 8 unique filings
+- ✅ Upserted: replaced old 10-K with 10-K/A
+- ✅ Database shows correct form_type and accession
+
+**Test 2**: Full 497-stock refresh
+- ✅ All stocks processed successfully
+- ✅ No overflow errors
+- ✅ No UNIQUE constraint errors
+- ✅ Clear logging throughout
+
+**Test 3**: Data integrity
+- ✅ All `sec_filings` have all 3 financial statements
+- ✅ Form types correctly show "10-K" and "10-K/A"
+- ✅ Amendments have later filing_date than originals
+
+### Known Limitations
+
+1. **Submissions API "recent" limitation**: Only covers last ~1000 filings per company
+   - **Impact**: Minimal - 10-K filings are ~1 per year, so covers 10+ years
+
+2. **No quarterly data**: System only processes 10-K (annual) filings
+   - **Impact**: None - quarterly data not needed for annual screening algorithms
+
+3. **Amendment handling**: Only replaces 10-K with 10-K/A, not other amendment types
+   - **Impact**: Minimal - 10-K/A are the main amendments for annual reports
+
+### Future Enhancements
+
+1. **10-Q Support**: Add quarterly filing support for more frequent analysis
+2. **Historical Deep Dive**: Fetch additional filing files for companies with >1000 filings
+3. **Amendment Comparison**: Log what changed between 10-K and 10-K/A
+4. **Form 8-K**: Add material events tracking from current reports
 

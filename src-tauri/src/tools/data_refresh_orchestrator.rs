@@ -24,6 +24,8 @@ pub enum RefreshMode {
     Market,
     /// All EDGAR financial data: income, balance, cash flow (~90min)
     Financials,
+    /// Both market and financial data (~105min)
+    All,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,28 +136,54 @@ impl DataRefreshManager {
         let refresh_plan = if request.only_cik.is_some() {
             // Skip freshness check when filtering - just create plan based on request mode
             println!("🎯 Skipping freshness check (filtered by ticker)");
-            vec![RefreshStep {
-                name: match request.mode {
-                    RefreshMode::Financials => "Refresh financial statements".to_string(),
-                    RefreshMode::Market => "Refresh market data".to_string(),
-                },
-                data_source: match request.mode {
-                    RefreshMode::Financials => "financial_statements".to_string(),
-                    RefreshMode::Market => "daily_prices".to_string(),
-                },
-                estimated_duration_minutes: 1,
-                command: String::new(),
-                dependencies: Vec::new(),
-                priority: 1,
-            }]
+            match request.mode {
+                RefreshMode::Financials => vec![RefreshStep {
+                    name: "Refresh financial statements".to_string(),
+                    data_source: "financial_statements".to_string(),
+                    estimated_duration_minutes: 1,
+                    command: String::new(),
+                    dependencies: Vec::new(),
+                    priority: 1,
+                }],
+                RefreshMode::Market => vec![RefreshStep {
+                    name: "Refresh market data".to_string(),
+                    data_source: "daily_prices".to_string(),
+                    estimated_duration_minutes: 1,
+                    command: String::new(),
+                    dependencies: Vec::new(),
+                    priority: 1,
+                }],
+                RefreshMode::All => vec![
+                    RefreshStep {
+                        name: "Refresh market data".to_string(),
+                        data_source: "daily_prices".to_string(),
+                        estimated_duration_minutes: 1,
+                        command: String::new(),
+                        dependencies: Vec::new(),
+                        priority: 1,
+                    },
+                    RefreshStep {
+                        name: "Refresh financial statements".to_string(),
+                        data_source: "financial_statements".to_string(),
+                        estimated_duration_minutes: 1,
+                        command: String::new(),
+                        dependencies: Vec::new(),
+                        priority: 2,
+                    },
+                ],
+            }
         } else {
-            println!("🔍 Checking current data freshness...");
-            let freshness_report = self.status_reader.check_system_freshness().await?;
-            self.update_progress(&session_id, 1, "Checking data freshness", 100.0).await?;
+            // Skip freshness check entirely - just execute the requested mode
+            // The freshness checker actually downloads data, which we don't want for mode filtering
+            println!("🔍 Preparing refresh for {:?} mode...", request.mode);
+            self.update_progress(&session_id, 1, "Preparing refresh", 100.0).await?;
 
-            // Determine what needs to be refreshed
-            let plan = self.create_refresh_plan(&request, &freshness_report).await?;
-            println!("📋 Refresh plan: {} steps identified", plan.len());
+            // Get the steps for the requested mode without checking freshness
+            let plan = self.refresh_steps.get(&request.mode)
+                .ok_or_else(|| anyhow!("Unknown refresh mode: {:?}", request.mode))?
+                .clone();
+
+            println!("📋 Refresh plan: {} steps for {:?} mode", plan.len(), request.mode);
 
             if plan.is_empty() {
                 println!("✅ All data is current, no refresh needed");
@@ -626,7 +654,25 @@ impl DataRefreshManager {
             },
         ]);
 
-
+        // All mode: Both market and financial data
+        steps.insert(RefreshMode::All, vec![
+            RefreshStep {
+                name: "Update market data".to_string(),
+                data_source: "daily_prices".to_string(),
+                estimated_duration_minutes: 15,
+                command: "internal".to_string(),
+                dependencies: vec![],
+                priority: 1,
+            },
+            RefreshStep {
+                name: "Extract EDGAR financial data (all statements)".to_string(),
+                data_source: "financial_statements".to_string(),
+                estimated_duration_minutes: 90,
+                command: "internal".to_string(),
+                dependencies: vec![],
+                priority: 2,
+            },
+        ]);
 
         steps
     }
@@ -652,6 +698,7 @@ impl DataRefreshManager {
             .bind(match request.mode {
                 RefreshMode::Market => "market",
                 RefreshMode::Financials => "financials",
+                RefreshMode::All => "all",
             })
             .bind(steps.len() as i32 + 2) // +2 for start/finish
             .bind("Initializing")

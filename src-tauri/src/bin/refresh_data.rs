@@ -119,11 +119,8 @@ async fn main() -> Result<()> {
     }
 
     // Execute the refresh
-    if let Some(ref mode) = cli.mode {
-        execute_data_refresh(&pool, &cli, mode.clone()).await
-    } else {
-        show_data_status(&pool, &cli).await
-    }
+    let mode = cli.mode.clone().unwrap_or(RefreshMode::All);
+    execute_data_refresh(&pool, &cli, mode).await
 }
 
 /// Show current data freshness status
@@ -298,49 +295,8 @@ async fn show_refresh_plan(pool: &sqlx::SqlitePool, cli: &Cli) -> Result<()> {
 
 /// Execute the data refresh
 async fn execute_data_refresh(pool: &sqlx::SqlitePool, cli: &Cli, mode: RefreshMode) -> Result<()> {
-    // Skip freshness check if filtering by ticker (faster testing)
-    if cli.only_ticker.is_none() && cli.only_cik.is_none() {
-        println!("🔍 Checking data freshness before refresh...\n");
-
-        // First, check what needs refreshing
-        let freshness_checker = DataStatusReader::new(pool.clone());
-        let report = freshness_checker.check_system_freshness().await?;
-
-        // Determine what data sources need refreshing
-        let mut stale_sources = Vec::new();
-        let mut total_stale_count = 0;
-
-        match mode {
-            RefreshMode::Financials => {
-                if report.financial_data.status.needs_refresh() {
-                    stale_sources.push("financial statements");
-                    total_stale_count += report.financial_data.records_count;
-                }
-            }
-            RefreshMode::Market => {
-                if report.market_data.status.needs_refresh() {
-                    stale_sources.push("market data");
-                    total_stale_count += report.market_data.records_count;
-                }
-            }
-        }
-
-        // If no stale data, inform user and exit
-        if stale_sources.is_empty() {
-            println!("✅ All {:?} data is current. No refresh needed.", mode);
-            println!("💡 You can run screening algorithms with confidence.");
-            return Ok(());
-        }
-
-        // Show what will be refreshed
-        println!("📊 REFRESH PLAN:");
-        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        println!("🎯 Mode: {:?}", mode);
-        println!("📋 Data sources to refresh: {}", stale_sources.join(", "));
-        println!("📊 Total records: {}", total_stale_count);
-        println!("⏱️  Estimated duration: 2-5 minutes");
-        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    }
+    // Skip ALL freshness checking - let the orchestrator handle it based on mode
+    // The orchestrator will only check and refresh what's needed for the specified mode
 
     // Auto-execute single-stage architecture (no confirmation)
     println!("\n🚀 Starting data refresh in {:?} mode...\n", mode);

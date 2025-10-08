@@ -22,7 +22,7 @@ pub struct OShaughnessyValueResult {
     pub shareholder_yield: Option<f64>,
 
     // Ranking and scoring
-    pub data_completeness_score: i32,
+    pub data_completeness_score: f64,
     pub composite_score: f64,
     pub composite_percentile: f64,
     pub overall_rank: i64,

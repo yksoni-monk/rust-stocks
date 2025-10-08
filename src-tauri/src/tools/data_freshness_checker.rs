@@ -670,7 +670,8 @@ impl DataStatusReader {
         })
     }
 
-    /// Get our filing dates for a single CIK
+    /// Get our filing dates for a single CIK (used in tests)
+    #[cfg(test)]
     async fn get_our_filing_dates_for_cik(pool: &SqlitePool, cik: &str) -> Result<Vec<String>> {
         let query = r#"
             SELECT sf.filed_date
@@ -696,9 +697,10 @@ impl DataStatusReader {
         Ok(results)
     }
 
-    /// Extract and store ALL financial statements atomically
+    /// Extract and store ALL financial statements atomically (used in tests)
     /// This function ensures that for each filing date, ALL THREE statements are stored together
     /// in a single transaction, preventing orphaned sec_filing records
+    #[cfg(test)]
     async fn extract_and_store_all_statements_atomic(
         edgar_client: &mut SecEdgarClient,
         json: &serde_json::Value,
@@ -939,7 +941,8 @@ impl DataStatusReader {
         Ok(filings_stored)
     }
 
-    /// Extract and store balance sheet data for missing dates
+    /// Extract and store balance sheet data for missing dates (used in tests)
+    #[cfg(test)]
     async fn extract_and_store_balance_sheet_data(
         edgar_client: &mut SecEdgarClient,
         json: &serde_json::Value,
@@ -1030,7 +1033,8 @@ impl DataStatusReader {
         Ok(records_stored)
     }
 
-    /// Extract and store income statement data for missing dates
+    /// Extract and store income statement data for missing dates (used in tests)
+    #[cfg(test)]
     async fn extract_and_store_income_statement_data(
         edgar_client: &mut SecEdgarClient,
         json: &serde_json::Value,
@@ -1107,7 +1111,8 @@ impl DataStatusReader {
         Ok(records_stored)
     }
 
-    /// Extract and store cash flow data for missing dates
+    /// Extract and store cash flow data for missing dates (used in tests)
+    #[cfg(test)]
     async fn extract_and_store_cash_flow_data(
         edgar_client: &mut SecEdgarClient,
         json: &serde_json::Value,
@@ -1190,7 +1195,8 @@ impl DataStatusReader {
         Ok(())
     }
 
-    /// Get error count for final summary
+    /// Get error count for final summary (used in tests)
+    #[cfg(test)]
     async fn get_error_count() -> Result<i64> {
         // Return count of errors encountered
         Ok(0) // Placeholder - could be implemented with a global error counter

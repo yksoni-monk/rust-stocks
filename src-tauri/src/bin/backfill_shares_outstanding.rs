@@ -35,7 +35,6 @@ async fn main() -> Result<()> {
         .build()?;
 
     let mut success_count = 0;
-    let mut skip_count = 0;
     let mut error_count = 0;
 
     for (i, (stock_id, symbol, cik)) in stocks.iter().enumerate() {
@@ -175,7 +174,6 @@ async fn main() -> Result<()> {
     println!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!("🎉 Backfill complete!");
     println!("   ✅ Success: {} stocks", success_count);
-    println!("   ⏭️  Skipped: {} stocks (already had data)", skip_count);
     println!("   ❌ Errors: {} stocks", error_count);
 
     Ok(())

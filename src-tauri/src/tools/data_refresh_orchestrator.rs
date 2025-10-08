@@ -331,44 +331,6 @@ impl DataRefreshManager {
         })
     }
 
-    /// Create a refresh plan based on mode and current freshness
-    async fn create_refresh_plan(&self, request: &RefreshRequest, freshness_report: &SystemFreshnessReport) -> Result<Vec<RefreshStep>> {
-        let available_steps = self.refresh_steps.get(&request.mode)
-            .ok_or_else(|| anyhow!("Unknown refresh mode: {:?}", request.mode))?;
-
-        let mut plan = Vec::new();
-
-        // If force_sources is specified, only refresh those
-        if !request.force_sources.is_empty() {
-            for force_source in &request.force_sources {
-                if let Some(step) = available_steps.iter().find(|s| s.data_source == *force_source) {
-                    plan.push(step.clone());
-                }
-            }
-        } else {
-            // Otherwise, determine what needs refresh based on staleness
-            for step in available_steps {
-                // Check if the data source needs refresh based on the semantic fields
-                let needs_refresh = match step.data_source.as_str() {
-                    "daily_prices" => freshness_report.market_data.status.needs_refresh(),
-                    "financial_statements" => freshness_report.financial_data.status.needs_refresh(),
-                    "cash_flow_statements" => freshness_report.financial_data.status.needs_refresh(),
-                    "ps_evs_ratios" => freshness_report.calculated_ratios.status.needs_refresh(),
-                    _ => true, // Unknown data source, refresh it
-                };
-                
-                if needs_refresh {
-                    plan.push(step.clone());
-                }
-            }
-        }
-
-        // Sort by priority and dependencies
-        plan.sort_by_key(|step| step.priority);
-
-        Ok(plan)
-    }
-
     /// Execute a single refresh step
     async fn execute_refresh_step(&self, step: &RefreshStep, session_id: &str, only_cik: Option<&String>) -> Result<i64> {
         let start_time = Utc::now();

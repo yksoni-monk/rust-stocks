@@ -23,6 +23,10 @@ path = "src/main.rs"
 
 
 [[bin]]
+name = "migrate"
+path = "src/bin/migrate.rs"
+
+[[bin]]
 name = "db_admin"
 path = "src/bin/db_admin.rs"
 

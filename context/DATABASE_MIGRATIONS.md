@@ -3,6 +3,28 @@
 ## Overview
 This document defines our database migration strategy, naming conventions, and safety procedures for the rust-stocks project.
 
+## ⚠️ CRITICAL: Always Use the Migration Script
+
+**NEVER manually run `sqlx` or `sqlite3` commands for migrations!**
+
+Always use the migration script:
+```bash
+# Set up environment first
+export PROJECT_ROOT=/path/to/rust-stocks
+cd $PROJECT_ROOT/src-tauri
+
+# Use the migration tool (it will load $PROJECT_ROOT/.env automatically)
+cargo run --bin migrate -- <command>
+```
+
+The migration script ensures:
+- ✅ Loads .env from PROJECT_ROOT automatically
+- ✅ Correct working directory (RUST_ROOT from .env)
+- ✅ Proper configuration (DATABASE_URL, MIGRATION_PATH from .env)
+- ✅ Always creates reversible migrations (.up.sql and .down.sql)
+- ✅ Uses sqlx (never sqlite3)
+- ✅ Prevents common migration errors
+
 ## Migration Naming Convention
 
 ### Standard Format
@@ -70,19 +92,26 @@ src-tauri/db/
 ### 3. Migration Workflow
 
 ```bash
-# 1. Create migration file with proper naming
-touch src-tauri/db/migrations/$(date +%Y%m%d)01_description.sql
+# 1. Set up environment
+export PROJECT_ROOT=/path/to/rust-stocks
+cd $PROJECT_ROOT/src-tauri
 
-# 2. Write migration SQL
-# - Include DROP IF EXISTS for views/tables being recreated
-# - Use transactions where possible
-# - Add descriptive comments
+# 2. Create reversible migration
+cargo run --bin migrate -- create fix_piotroski_use_annual_data
 
-# 3. Test migration (uses safety system)
-cargo run --bin db_admin migrate
+# 3. Edit BOTH migration files:
+#    - db/migrations/TIMESTAMP_fix_piotroski_use_annual_data.up.sql
+#    - db/migrations/TIMESTAMP_fix_piotroski_use_annual_data.down.sql
 
-# 4. Verify results
-sqlite3 src-tauri/db/stocks.db "SELECT COUNT(*) FROM stocks;"
+# 4. Apply migration
+cargo run --bin migrate -- run
+
+# 5. Verify results
+cargo run --bin migrate -- status
+
+# 6. Test revert/re-apply to ensure reversibility
+cargo run --bin migrate -- revert
+cargo run --bin migrate -- run
 ```
 
 ## Migration Best Practices
@@ -410,7 +439,37 @@ If the migration tracking system becomes completely inconsistent:
 - **Clear Error Messages**: Improved troubleshooting information
 - **Auto-cleanup Reporting**: Shows how much disk space was freed
 
+## Migration Script Environment Setup
+
+The migration script requires proper environment variables:
+
+```bash
+# In your .env file (src-tauri/.env):
+RUST_ROOT=/Users/yksoni/code/misc/rust-stocks/src-tauri
+DATABASE_URL=sqlite:db/stocks.db
+MIGRATION_PATH=db/migrations
+```
+
+**Before running migrations:**
+```bash
+# Export PROJECT_ROOT and cd to RUST_ROOT
+export PROJECT_ROOT=/path/to/rust-stocks
+cd $PROJECT_ROOT/src-tauri
+
+# Now run migrations (script will load .env from PROJECT_ROOT)
+cargo run --bin migrate -- <command>
+```
+
+The script will fail with clear error messages if:
+- PROJECT_ROOT is not set
+- PROJECT_ROOT/.env file is missing
+- RUST_ROOT is not set in .env
+- You're not in the RUST_ROOT directory
+- DATABASE_URL is not set in .env
+- MIGRATION_PATH is not set in .env
+- Migration directory doesn't exist
+
 ---
 
-**Last Updated**: 2025-09-23
-**Next Review**: 2025-10-23
+**Last Updated**: 2025-10-08
+**Next Review**: 2025-11-08

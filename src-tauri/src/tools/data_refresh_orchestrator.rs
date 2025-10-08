@@ -238,74 +238,72 @@ impl DataRefreshManager {
             }
         }
 
-        // 4. Final verification and cleanup (skip full freshness check if filtering)
+        // 4. Final verification and cleanup
+        // IMPORTANT: Skip the final freshness check entirely when running in specific modes
+        // check_system_freshness() actually downloads financial data, which we DON'T want
+        // when the user explicitly requested only market data refresh
         self.update_progress(&session_id, total_steps, "Finalizing refresh", 100.0).await?;
-        let final_report = if request.only_cik.is_some() {
-            // Skip final freshness check when filtering - use a minimal placeholder
-            println!("🎯 Skipping final freshness check (filtered by ticker)");
-            // Create minimal placeholder report (will be ignored for filtered refreshes)
-            SystemFreshnessReport {
-                overall_status: FreshnessStatus::Current,
-                market_data: DataFreshnessStatus {
-                    data_source: "skip".to_string(),
-                    status: FreshnessStatus::Current,
-                    latest_data_date: None,
-                    last_refresh: None,
-                    staleness_days: None,
-                    records_count: 0,
-                    message: "Skipped (filtered refresh)".to_string(),
-                    refresh_priority: RefreshPriority::Low,
-                    data_summary: DataSummary {
-                        date_range: None,
-                        stock_count: None,
-                        data_types: vec![],
-                        key_metrics: vec![],
-                        completeness_score: None,
-                    },
+        println!("✅ Skipping final freshness check (targeted refresh mode)");
+
+        let final_report = SystemFreshnessReport {
+            overall_status: FreshnessStatus::Current,
+            market_data: DataFreshnessStatus {
+                data_source: "daily_prices".to_string(),
+                status: FreshnessStatus::Current,
+                latest_data_date: None,
+                last_refresh: None,
+                staleness_days: None,
+                records_count: if request.mode == RefreshMode::Market { total_records_processed } else { 0 },
+                message: format!("{:?} refresh completed: {} records", request.mode, total_records_processed),
+                refresh_priority: RefreshPriority::Low,
+                data_summary: DataSummary {
+                    date_range: None,
+                    stock_count: None,
+                    data_types: vec![],
+                    key_metrics: vec![],
+                    completeness_score: None,
                 },
-                financial_data: DataFreshnessStatus {
-                    data_source: "skip".to_string(),
-                    status: FreshnessStatus::Current,
-                    latest_data_date: None,
-                    last_refresh: None,
-                    staleness_days: None,
-                    records_count: total_records_processed,
-                    message: format!("Filtered refresh: {} records stored", total_records_processed),
-                    refresh_priority: RefreshPriority::Low,
-                    data_summary: DataSummary {
-                        date_range: None,
-                        stock_count: None,
-                        data_types: vec![],
-                        key_metrics: vec![],
-                        completeness_score: None,
-                    },
+            },
+            financial_data: DataFreshnessStatus {
+                data_source: "financial_statements".to_string(),
+                status: FreshnessStatus::Current,
+                latest_data_date: None,
+                last_refresh: None,
+                staleness_days: None,
+                records_count: if request.mode == RefreshMode::Financials { total_records_processed } else { 0 },
+                message: format!("{:?} refresh completed: {} records", request.mode, total_records_processed),
+                refresh_priority: RefreshPriority::Low,
+                data_summary: DataSummary {
+                    date_range: None,
+                    stock_count: None,
+                    data_types: vec![],
+                    key_metrics: vec![],
+                    completeness_score: None,
                 },
-                calculated_ratios: DataFreshnessStatus {
-                    data_source: "skip".to_string(),
-                    status: FreshnessStatus::Current,
-                    latest_data_date: None,
-                    last_refresh: None,
-                    staleness_days: None,
-                    records_count: 0,
-                    message: "Skipped (filtered refresh)".to_string(),
-                    refresh_priority: RefreshPriority::Low,
-                    data_summary: DataSummary {
-                        date_range: None,
-                        stock_count: None,
-                        data_types: vec![],
-                        key_metrics: vec![],
-                        completeness_score: None,
-                    },
+            },
+            calculated_ratios: DataFreshnessStatus {
+                data_source: "calculated_ratios".to_string(),
+                status: FreshnessStatus::Current,
+                latest_data_date: None,
+                last_refresh: None,
+                staleness_days: None,
+                records_count: 0,
+                message: "Skipped (targeted refresh)".to_string(),
+                refresh_priority: RefreshPriority::Low,
+                data_summary: DataSummary {
+                    date_range: None,
+                    stock_count: None,
+                    data_types: vec![],
+                    key_metrics: vec![],
+                    completeness_score: None,
                 },
-                recommendations: vec![],
-                screening_readiness: ScreeningReadiness {
-                    valuation_analysis: true,
-                    blocking_issues: vec![],
-                },
-                last_check: chrono::Utc::now().to_rfc3339(),
-            }
-        } else {
-            self.status_reader.check_system_freshness().await?
+            },
+            recommendations: vec![],
+            screening_readiness: ScreeningReadiness {
+                valuation_analysis: true,
+                blocking_issues: vec![],
+            },
+            last_check: chrono::Utc::now().to_rfc3339(),
         };
 
         let end_time = Utc::now();

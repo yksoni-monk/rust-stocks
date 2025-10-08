@@ -77,10 +77,35 @@ This system provides comprehensive stock market data analysis capabilities, feat
 
 ## 🛠️ Setup & Installation
 
+### 📋 Database Setup (First Time Setup)
+
+**If you're setting up a fresh database from scratch**, follow the complete guide:
+
+👉 **[DATABASE_SETUP.md](./DATABASE_SETUP.md)** - Complete step-by-step database initialization guide
+
+Quick overview:
+```bash
+export PROJECT_ROOT=/path/to/rust-stocks
+cd $PROJECT_ROOT/src-tauri
+
+# 1. Apply schema migration
+cargo run --bin migrate -- run
+
+# 2. Initialize S&P 500 stock list
+cargo run --bin init_sp500
+
+# 3. Fetch CIK numbers from SEC
+cargo run --bin fetch_ciks
+
+# 4. Download all financial data
+cargo run --bin refresh_data -- all
+```
+
 ### Prerequisites
 - **Node.js and npm** (for Tauri desktop application)
 - **Rust** (latest stable version)
 - **SQLite** (bundled with the application)
+- **SQLx CLI** (`cargo install sqlx-cli`) - for database migrations
 - **Python 3** (for Schwab API authentication)
 - **Schwab API credentials** (from [Schwab Developer Portal](https://developer.schwab.com/))
 

@@ -31,6 +31,10 @@ name = "migrate_fresh"
 path = "src/bin/migrate_fresh.rs"
 
 [[bin]]
+name = "init_sp500"
+path = "src/bin/init_sp500.rs"
+
+[[bin]]
 name = "db_admin"
 path = "src/bin/db_admin.rs"
 

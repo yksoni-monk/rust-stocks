@@ -61,7 +61,21 @@ def check_token_status(token_file):
     else:
         print("❌ No expires_at found in token file")
         return False
-    
+
+    # Convert expires_at to timestamp
+    if isinstance(expires_at, str):
+        # Handle ISO 8601 datetime strings (e.g., "2025-10-08T00:35:03.531020Z")
+        try:
+            expires_dt = datetime.fromisoformat(expires_at.replace('Z', '+00:00'))
+            expires_at = expires_dt.timestamp()
+        except ValueError:
+            # Try parsing as integer string
+            try:
+                expires_at = int(expires_at)
+            except ValueError:
+                print(f"❌ Invalid expires_at format: {expires_at}")
+                return False
+
     now = time.time()
     print("📊 Token Status:")
     print(f"   Expires:  {datetime.fromtimestamp(expires_at)}")

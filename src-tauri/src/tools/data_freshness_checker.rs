@@ -1218,33 +1218,63 @@ impl DataStatusReader {
         None
     }
 
-    /// Extract shares_outstanding from dei taxonomy for a specific fiscal year
-    fn extract_shares_outstanding_for_fiscal_year(
-        company_facts: &serde_json::Value,
-        fiscal_year: i32,
-        symbol: &str
+    /// Helper function to extract a value for a specific fiscal year from a field
+    fn try_extract_field_for_fiscal_year(
+        taxonomy: &serde_json::Value,
+        field_name: &str,
+        fiscal_year: i32
     ) -> Option<f64> {
-        // Extract from dei taxonomy
-        if let Some(dei_facts) = company_facts.get("facts").and_then(|f| f.get("dei")) {
-            if let Some(shares_field) = dei_facts.get("EntityCommonStockSharesOutstanding") {
-                if let Some(units) = shares_field.get("units") {
-                    if let Some(shares_data) = units.get("shares") {
-                        if let Some(values) = shares_data.as_array() {
-                            // Find the FY entry for this fiscal year
-                            for value in values {
-                                if let (Some(fy), Some(fp), Some(val)) = (
-                                    value.get("fy").and_then(|v| v.as_i64()),
-                                    value.get("fp").and_then(|v| v.as_str()),
-                                    value.get("val").and_then(|v| v.as_f64())
-                                ) {
-                                    if fy == fiscal_year as i64 && fp == "FY" && val > 0.0 {
-                                        return Some(val);
-                                    }
+        if let Some(shares_field) = taxonomy.get(field_name) {
+            if let Some(units) = shares_field.get("units") {
+                if let Some(shares_data) = units.get("shares") {
+                    if let Some(values) = shares_data.as_array() {
+                        // Find the latest entry for this fiscal year
+                        let mut best_match: Option<f64> = None;
+                        for value in values {
+                            if let (Some(fy), Some(val)) = (
+                                value.get("fy").and_then(|v| v.as_i64()),
+                                value.get("val").and_then(|v| v.as_f64())
+                            ) {
+                                if fy == fiscal_year as i64 && val > 0.0 {
+                                    best_match = Some(val);
                                 }
                             }
                         }
+                        return best_match;
                     }
                 }
+            }
+        }
+        None
+    }
+
+    /// Extract shares_outstanding for a specific fiscal year using 3-tier fallback:
+    /// 1. Primary: us-gaap CommonStockSharesOutstanding (point-in-time)
+    /// 2. Fallback #1: dei EntityCommonStockSharesOutstanding (point-in-time)
+    /// 3. Fallback #2: us-gaap WeightedAverageNumberOfSharesOutstandingBasic (period average)
+    fn extract_shares_outstanding_for_fiscal_year(
+        company_facts: &serde_json::Value,
+        fiscal_year: i32,
+        _symbol: &str
+    ) -> Option<f64> {
+        // Primary: Try us-gaap CommonStockSharesOutstanding
+        if let Some(us_gaap) = company_facts.get("facts").and_then(|f| f.get("us-gaap")) {
+            if let Some(val) = Self::try_extract_field_for_fiscal_year(us_gaap, "CommonStockSharesOutstanding", fiscal_year) {
+                return Some(val);
+            }
+        }
+
+        // Fallback #1: Try dei EntityCommonStockSharesOutstanding
+        if let Some(dei) = company_facts.get("facts").and_then(|f| f.get("dei")) {
+            if let Some(val) = Self::try_extract_field_for_fiscal_year(dei, "EntityCommonStockSharesOutstanding", fiscal_year) {
+                return Some(val);
+            }
+        }
+
+        // Fallback #2: Try us-gaap WeightedAverageNumberOfSharesOutstandingBasic
+        if let Some(us_gaap) = company_facts.get("facts").and_then(|f| f.get("us-gaap")) {
+            if let Some(val) = Self::try_extract_field_for_fiscal_year(us_gaap, "WeightedAverageNumberOfSharesOutstandingBasic", fiscal_year) {
+                return Some(val);
             }
         }
 

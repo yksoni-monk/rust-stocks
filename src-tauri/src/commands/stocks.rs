@@ -171,24 +171,10 @@ pub async fn get_stocks_paginated(limit: i64, offset: i64) -> Result<Vec<StockWi
 #[tauri::command]
 pub async fn get_sp500_symbols() -> Result<Vec<String>, String> {
     let pool = get_database_connection().await?;
-    
-    // Try to fetch fresh data from GitHub with timeout
-    let symbols = match fetch_sp500_from_github_with_timeout().await {
-        Ok(fresh_symbols) => {
-            // Update database with fresh data
-            update_sp500_in_database(&pool, &fresh_symbols).await?;
-            fresh_symbols
-        }
-        Err(e) => {
-            println!("⚠️ Failed to fetch fresh S&P 500 data: {}", e);
-            println!("📱 Using cached data from database...");
-            
-            // Fall back to database
-            get_sp500_from_database(&pool).await?
-        }
-    };
-    
-    Ok(symbols)
+
+    // Read-only: Just fetch from database (sp500_symbols is a view on stocks where is_sp500 = 1)
+    // S&P 500 membership is managed by init_sp500 binary, not by frontend commands
+    get_sp500_from_database(&pool).await
 }
 
 async fn fetch_sp500_from_github_with_timeout() -> Result<Vec<String>, String> {

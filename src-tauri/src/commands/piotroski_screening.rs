@@ -241,7 +241,7 @@ pub async fn get_piotroski_statistics() -> Result<serde_json::Value, String> {
             COUNT(CASE WHEN f_score_complete >= 6 THEN 1 END) as high_quality_stocks,
             COUNT(CASE WHEN f_score_complete >= 7 THEN 1 END) as excellent_stocks,
             COUNT(CASE WHEN f_score_complete >= 6 AND data_completeness_score >= 80 THEN 1 END) as passing_stocks
-        FROM piotroski_screening_results_new
+        FROM piotroski_screening_results
         WHERE stock_id IN (SELECT id FROM stocks WHERE is_sp500 = 1)"
     )
     .fetch_one(&pool)

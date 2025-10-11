@@ -40,6 +40,39 @@ cargo run --bin db_admin -- backup
 cargo run --bin refresh_data -- --help
 ```
 
+## 🔧 DATABASE MIGRATIONS (CRITICAL)
+**⚠️ We use a CUSTOM Rust migration tool, NOT sqlx directly!**
+
+**Environment setup (REQUIRED):**
+```bash
+export PROJECT_ROOT=/Users/yksoni/code/misc/rust-stocks
+cd $PROJECT_ROOT/src-tauri
+```
+
+**Migration commands:**
+```bash
+# Create new migration
+cargo run --bin migrate -- create <description>
+
+# Apply migrations
+cargo run --bin migrate -- run
+
+# Check status
+cargo run --bin migrate -- status
+
+# Revert last migration
+cargo run --bin migrate -- revert
+```
+
+**Database admin:**
+```bash
+# Check database status (ALWAYS run first)
+cargo run --bin db_admin -- status
+
+# Run migrations with safety (production)
+cargo run --bin db_admin -- migrate --confirm
+```
+
 ## CRITICAL REMINDERS
 - Working directory is ROOT: `/Users/yksoni/code/misc/rust-stocks`
 - Frontend is in `src/` (SolidJS TypeScript components)
@@ -55,6 +88,9 @@ cargo run --bin refresh_data -- --help
 - ❌ Create databases or migrations outside proper directories
 - ❌ Change API contracts without checking both sides
 - ❌ Use different field names between database and API models
+- ❌ Use old `sqlx migrate` commands - we have a custom tool now
+- ❌ Run migrations without setting PROJECT_ROOT environment variable
+- ❌ Modify migration files after they've been applied
 
 ## 📚 DETAILED DOCUMENTATION
 - **Architecture**: `context/ARCHITECTURE.md`

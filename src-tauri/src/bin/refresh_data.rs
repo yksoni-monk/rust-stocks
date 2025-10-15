@@ -13,7 +13,8 @@ use rust_stocks_tauri_lib::tools::{
     data_refresh_orchestrator::{
         DataRefreshManager, RefreshRequest, RefreshMode
     },
-    data_freshness_checker::{DataStatusReader, FreshnessStatus, RefreshPriority},
+    freshness_checker::DataStatusReader,
+    freshness_types::{FreshnessStatus, RefreshPriority},
 };
 
 #[derive(Parser)]

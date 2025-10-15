@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
-use sqlx::{SqlitePool, Row};
+use sqlx::Row;
+use crate::database::helpers::get_database_connection;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InitProgress {
@@ -16,11 +17,6 @@ pub struct StockData {
     pub sector: Option<String>,
 }
 
-async fn get_database_connection() -> Result<SqlitePool, String> {
-    let database_url = "sqlite:db/stocks.db";
-    SqlitePool::connect(database_url).await
-        .map_err(|e| format!("Database connection failed: {}", e))
-}
 
 #[tauri::command]
 pub async fn initialize_sp500_stocks() -> Result<String, String> {

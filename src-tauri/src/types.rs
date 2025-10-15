@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 // Re-export types from other modules for ts-rs generation
-pub use crate::tools::data_freshness_checker::{SystemFreshnessReport, DataFreshnessStatus, FreshnessStatus, RefreshPriority, RefreshRecommendation, ScreeningReadiness};
+pub use crate::tools::freshness_types::{SystemFreshnessReport, DataFreshnessStatus, FreshnessStatus, RefreshPriority, RefreshRecommendation, ScreeningReadiness};
 pub use crate::commands::piotroski_screening::{PiotoskiFScoreResult, PiotroskilScreeningCriteria};
 pub use crate::commands::oshaughnessy_screening::{OShaughnessyValueResult, OShaughnessyScreeningCriteria};
 

@@ -160,8 +160,10 @@ async fn get_oshaughnessy_screening_results_internal(
 
     query.push_str(" ORDER BY composite_score ASC, overall_rank ASC");
 
+    // Add LIMIT as parameter to prevent SQL injection
     if let Some(limit_val) = limit {
-        query.push_str(&format!(" LIMIT {}", limit_val));
+        query.push_str(" LIMIT ?");
+        params.push(limit_val.to_string());
     }
 
     // Build the query with parameters

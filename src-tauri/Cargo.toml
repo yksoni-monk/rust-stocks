@@ -12,6 +12,7 @@ default-run = "rust-stocks-tauri"
 [features]
 default = []
 test-utils = []
+debug-logging = []
 
 [[bin]]
 name = "rust-stocks-tauri"

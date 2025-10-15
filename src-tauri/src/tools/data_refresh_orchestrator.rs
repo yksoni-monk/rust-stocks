@@ -8,8 +8,9 @@ use tokio::time::sleep;
 use std::time::Duration as StdDuration;
 use uuid::Uuid;
 
-use crate::tools::data_freshness_checker::{
-    DataStatusReader, SystemFreshnessReport, DataFreshnessStatus, FreshnessStatus,
+use crate::tools::freshness_checker::DataStatusReader;
+use crate::tools::freshness_types::{
+    SystemFreshnessReport, DataFreshnessStatus, FreshnessStatus,
     RefreshPriority, DataSummary, ScreeningReadiness
 };
 use crate::tools::date_range_calculator::DateRangeCalculator;
@@ -393,7 +394,13 @@ impl DataRefreshManager {
             let config = config.clone();
 
             let task = tokio::spawn(async move {
-                let _permit = permit.acquire().await.unwrap();
+                let _permit = match permit.acquire().await {
+                    Ok(permit) => permit,
+                    Err(e) => {
+                        println!("❌ Failed to acquire permit for {}: {}", symbol, e);
+                        return Err(anyhow!("Failed to acquire permit: {}", e));
+                    }
+                };
 
                 // Create client inside task since SchwabClient doesn't implement Clone
                 let client = match SchwabClient::new(&config) {
@@ -413,7 +420,7 @@ impl DataRefreshManager {
                         if let Ok(latest_date) = chrono::NaiveDate::parse_from_str(&latest_str, "%Y-%m-%d") {
                             latest_date.succ_opt().unwrap_or(end_date)
                         } else {
-                            chrono::NaiveDate::from_ymd_opt(2015, 1, 1).unwrap()
+                            chrono::NaiveDate::from_ymd_opt(2015, 1, 1).unwrap_or_else(|| chrono::NaiveDate::from_ymd_opt(2015, 1, 1).expect("Valid date"))
                         }
                     } else {
                         chrono::NaiveDate::from_ymd_opt(2015, 1, 1).unwrap()

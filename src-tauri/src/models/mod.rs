@@ -85,13 +85,17 @@ impl Config {
         dotenvy::dotenv().ok(); // Load .env file if it exists
         
         // Debug: Print non-sensitive environment status
+        #[cfg(feature = "debug-logging")]
         println!("DEBUG: Current working directory: {:?}", std::env::current_dir());
+        #[cfg(feature = "debug-logging")]
         println!("DEBUG: DATABASE_PATH: {:?}", std::env::var("DATABASE_PATH"));
         
         let schwab_token_path = std::env::var("SCHWAB_TOKEN_PATH")
             .unwrap_or_else(|_| "schwab_tokens.json".to_string());
         
+        #[cfg(feature = "debug-logging")]
         println!("DEBUG: Final token path: {}", schwab_token_path);
+        #[cfg(feature = "debug-logging")]
         println!("DEBUG: Token file exists: {}", std::path::Path::new(&schwab_token_path).exists());
         
         Ok(Config {

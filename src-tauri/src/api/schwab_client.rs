@@ -97,26 +97,37 @@ impl SchwabClient {
 
     /// Load tokens from file
     async fn load_tokens(&self) -> Result<()> {
+        #[cfg(feature = "debug-logging")]
         debug!("DEBUG: Attempting to load tokens from path: {}", self.token_path);
+        #[cfg(feature = "debug-logging")]
         debug!("DEBUG: Current working directory: {:?}", std::env::current_dir());
+        #[cfg(feature = "debug-logging")]
         debug!("DEBUG: Token file exists: {}", std::path::Path::new(&self.token_path).exists());
         
         if !std::path::Path::new(&self.token_path).exists() {
+            #[cfg(feature = "debug-logging")]
             debug!("DEBUG: Token file does not exist at: {}", self.token_path);
             return Err(anyhow!("Token file does not exist: {}", self.token_path));
         }
 
+        #[cfg(feature = "debug-logging")]
         debug!("DEBUG: Reading token file content...");
         let content = fs::read_to_string(&self.token_path)?;
+        #[cfg(feature = "debug-logging")]
         debug!("DEBUG: Token file content length: {} bytes", content.len());
+        #[cfg(feature = "debug-logging")]
         debug!("DEBUG: Token file content preview: {}", &content[..content.len().min(200)]);
         
         // Try to parse the Python-generated token file format first
+        #[cfg(feature = "debug-logging")]
         debug!("DEBUG: Attempting to parse TokenFile format...");
         let tokens = match serde_json::from_str::<TokenFile>(&content) {
             Ok(token_file) => {
+                #[cfg(feature = "debug-logging")]
                 debug!("DEBUG: Successfully parsed TokenFile format");
+                #[cfg(feature = "debug-logging")]
                 debug!("DEBUG: Access token length: {}", token_file.token.access_token.len());
+                #[cfg(feature = "debug-logging")]
                 debug!("DEBUG: Expires at timestamp: {}", token_file.token.expires_at);
                 StoredTokens {
                     access_token: token_file.token.access_token,
@@ -126,12 +137,17 @@ impl SchwabClient {
                 }
             }
             Err(e) => {
+                #[cfg(feature = "debug-logging")]
                 debug!("DEBUG: Failed to parse TokenFile format: {}", e);
+                #[cfg(feature = "debug-logging")]
                 debug!("DEBUG: Trying NestedTokenFile format...");
                 match serde_json::from_str::<NestedTokenFile>(&content) {
                     Ok(nested_file) => {
+                        #[cfg(feature = "debug-logging")]
                         debug!("DEBUG: Successfully parsed NestedTokenFile format");
+                        #[cfg(feature = "debug-logging")]
                         debug!("DEBUG: Access token length: {}", nested_file.token.access_token.len());
+                        #[cfg(feature = "debug-logging")]
                         debug!("DEBUG: Expires at timestamp: {}", nested_file.token.expires_at);
                         StoredTokens {
                             access_token: nested_file.token.access_token,
@@ -141,14 +157,18 @@ impl SchwabClient {
                         }
                     }
                     Err(e2) => {
+                        #[cfg(feature = "debug-logging")]
                         debug!("DEBUG: Failed to parse NestedTokenFile format: {}", e2);
+                        #[cfg(feature = "debug-logging")]
                         debug!("DEBUG: Trying StoredTokens format...");
                         match serde_json::from_str::<StoredTokens>(&content) {
                             Ok(tokens) => {
+                                #[cfg(feature = "debug-logging")]
                                 debug!("DEBUG: Successfully parsed StoredTokens format");
                                 tokens
                             }
                             Err(e3) => {
+                                #[cfg(feature = "debug-logging")]
                                 debug!("DEBUG: Failed to parse StoredTokens format: {}", e3);
                                 return Err(anyhow!("Failed to parse token file in all formats: TokenFile: {}, NestedTokenFile: {}, StoredTokens: {}", e, e2, e3));
                             }
@@ -181,34 +201,49 @@ impl SchwabClient {
 
     /// Get access token, refreshing if necessary
     async fn get_access_token(&self) -> Result<String> {
+        #[cfg(feature = "debug-logging")]
         debug!("DEBUG: get_access_token called");
         
         // Try to load tokens if we don't have any yet
         {
             let tokens_guard = self.current_tokens.lock().await;
+            #[cfg(feature = "debug-logging")]
             debug!("DEBUG: Current tokens loaded: {}", tokens_guard.is_some());
             if tokens_guard.is_none() {
                 drop(tokens_guard);
+                #[cfg(feature = "debug-logging")]
                 debug!("DEBUG: No tokens loaded, attempting to load from file");
                 match self.load_tokens().await {
-                    Ok(_) => debug!("DEBUG: Successfully loaded tokens"),
-                    Err(e) => debug!("DEBUG: Failed to load tokens: {}", e),
+                    Ok(_) => {
+                        #[cfg(feature = "debug-logging")]
+                        debug!("DEBUG: Successfully loaded tokens")
+                    },
+                    Err(_e) => {
+                        #[cfg(feature = "debug-logging")]
+                        debug!("DEBUG: Failed to load tokens: {}", _e)
+                    },
                 }
             }
         }
 
         let tokens_guard = self.current_tokens.lock().await;
         if let Some(tokens) = &*tokens_guard {
+            #[cfg(feature = "debug-logging")]
             debug!("DEBUG: Found tokens, checking expiration");
+            #[cfg(feature = "debug-logging")]
             debug!("DEBUG: Token expires at: {}", tokens.expires_at);
+            #[cfg(feature = "debug-logging")]
             debug!("DEBUG: Current time: {}", Utc::now());
+            #[cfg(feature = "debug-logging")]
             debug!("DEBUG: Token is valid: {}", tokens.expires_at > Utc::now() + chrono::Duration::minutes(5));
             
             if tokens.expires_at > Utc::now() + chrono::Duration::minutes(5) {
+                #[cfg(feature = "debug-logging")]
                 debug!("DEBUG: Returning valid access token");
                 return Ok(tokens.access_token.clone());
             }
 
+            #[cfg(feature = "debug-logging")]
             debug!("DEBUG: Token expired or expiring soon, attempting refresh");
             // Try to refresh the token
             let refresh_token = tokens.refresh_token.clone();
@@ -216,6 +251,7 @@ impl SchwabClient {
             
             match self.refresh_access_token(&refresh_token).await {
                 Ok(new_tokens) => {
+                    #[cfg(feature = "debug-logging")]
                     debug!("DEBUG: Successfully refreshed token");
                     *self.current_tokens.lock().await = Some(new_tokens.clone());
                     self.save_tokens(&new_tokens)?;
@@ -226,9 +262,11 @@ impl SchwabClient {
                 }
             }
         } else {
+            #[cfg(feature = "debug-logging")]
             debug!("DEBUG: No tokens available in memory");
         }
 
+        #[cfg(feature = "debug-logging")]
         debug!("DEBUG: Returning error - no valid access token");
         Err(anyhow!("No valid access token available. Please run initial authentication."))
     }
@@ -337,7 +375,9 @@ impl SchwabClient {
                 if let Some(first_instrument) = instruments.first() {
                     if let Some(fundamental) = first_instrument.get("fundamental") {
                         if let Some(fund_obj) = fundamental.as_object() {
+                            #[cfg(feature = "debug-logging")]
                             debug!("DEBUG: Parsing fundamental data for {}", symbol);
+                            #[cfg(feature = "debug-logging")]
                             debug!("DEBUG: Available fields: {:?}", fund_obj.keys().collect::<Vec<_>>());
                             
                             // Map Schwab API fields to our FundamentalData structure
@@ -369,6 +409,7 @@ impl SchwabClient {
                             // Debt ratios
                             fundamental_data.debt_to_equity = fund_obj.get("totalDebtToEquity").and_then(|v| v.as_f64());
                             
+                            #[cfg(feature = "debug-logging")]
                             debug!("DEBUG: Parsed fundamental data: P/E={:?}, Market Cap={:?}, Div Yield={:?}", 
                                    fundamental_data.pe_ratio, fundamental_data.market_cap, fundamental_data.dividend_yield);
                         }

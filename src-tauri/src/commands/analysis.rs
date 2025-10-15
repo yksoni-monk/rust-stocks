@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
-use sqlx::{SqlitePool, Row};
+use sqlx::Row;
+use crate::database::helpers::get_database_connection;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PriceData {
@@ -47,11 +48,6 @@ pub struct ValuationExtremes {
     pub max_evs_ratio: Option<f64>,
 }
 
-async fn get_database_connection() -> Result<SqlitePool, String> {
-    let database_url = "sqlite:db/stocks.db";
-    SqlitePool::connect(database_url).await
-        .map_err(|e| format!("Database connection failed: {}", e))
-}
 
 #[tauri::command]
 pub async fn get_price_history(symbol: String, start_date: String, end_date: String) -> Result<Vec<PriceData>, String> {

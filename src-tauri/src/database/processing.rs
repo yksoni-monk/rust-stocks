@@ -93,6 +93,7 @@ pub async fn update_processing_status(
         .map_err(|e| format!("Failed to insert processing status: {}", e))?;
     }
     
+    #[cfg(feature = "debug-logging")]
     println!("DEBUG: Updated processing status for stock_id {} data_type {} to {}", stock_id, data_type, status);
     Ok(())
 }

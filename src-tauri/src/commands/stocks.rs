@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use sqlx::{SqlitePool, Row};
+use crate::database::helpers::get_database_connection;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StockInfo {
@@ -18,11 +19,6 @@ pub struct StockWithData {
     pub data_count: i64,
 }
 
-async fn get_database_connection() -> Result<SqlitePool, String> {
-    let database_url = "sqlite:db/stocks.db";
-    SqlitePool::connect(database_url).await
-        .map_err(|e| format!("Database connection failed: {}", e))
-}
 
 #[tauri::command]
 pub async fn get_all_stocks() -> Result<Vec<StockInfo>, String> {

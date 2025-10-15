@@ -2,97 +2,15 @@ use anyhow::{Result, anyhow};
 use chrono::{Utc, NaiveDate, Datelike};
 use governor::{Quota, RateLimiter};
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
 use sqlx::{SqlitePool, Row};
 use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Semaphore, Mutex};
-use ts_rs::TS;
 
-// Import SecEdgarClient for data extraction
+use crate::tools::freshness_types::*;
 use crate::tools::sec_edgar_client::{SecEdgarClient, BalanceSheetData, IncomeStatementData, CashFlowData};
-
-// SEC Company Facts API data structures
-#[derive(Debug, Clone)]
-pub struct FilingFreshnessResult {
-    pub cik: String,
-    pub our_latest_date: Option<String>,
-    pub sec_latest_date: Option<String>,
-    pub is_stale: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
-pub struct DataFreshnessStatus {
-    pub data_source: String,
-    pub status: FreshnessStatus,
-    pub latest_data_date: Option<String>, // Changed to String for TS compatibility
-    pub last_refresh: Option<String>, // Changed to String for TS compatibility
-    pub staleness_days: Option<i64>,
-    pub records_count: i64,
-    pub message: String,
-    pub refresh_priority: RefreshPriority,
-    // Enhanced fields for better UX
-    pub data_summary: DataSummary,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
-pub struct DataSummary {
-    pub date_range: Option<String>,
-    pub stock_count: Option<i64>,
-    pub data_types: Vec<String>,
-    pub key_metrics: Vec<String>,
-    pub completeness_score: Option<f32>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
-#[ts(export)]
-pub enum FreshnessStatus {
-    Current,
-    Stale,
-    Missing,
-    Error,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd, TS)]
-#[ts(export)]
-pub enum RefreshPriority {
-    Low,
-    Medium,
-    High,
-    Critical,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
-pub struct SystemFreshnessReport {
-    pub overall_status: FreshnessStatus,
-    pub market_data: DataFreshnessStatus,
-    pub financial_data: DataFreshnessStatus,
-    pub calculated_ratios: DataFreshnessStatus,
-    pub recommendations: Vec<RefreshRecommendation>,
-    pub screening_readiness: ScreeningReadiness,
-    pub last_check: String, // Changed to String for TS compatibility
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
-pub struct RefreshRecommendation {
-    pub action: String,
-    pub reason: String,
-    pub estimated_duration: String,
-    pub priority: RefreshPriority,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
-pub struct ScreeningReadiness {
-    pub valuation_analysis: bool,
-    pub blocking_issues: Vec<String>,
-}
 
 pub struct DataStatusReader {
     pool: SqlitePool,
@@ -154,7 +72,7 @@ impl DataStatusReader {
 
         Ok(SystemFreshnessReport {
             overall_status,
-            market_data: market_data.clone(),
+            market_data,
             financial_data: DataFreshnessStatus {
                 data_source: "sec_edgar".to_string(),
                 status: financial_status,
@@ -289,10 +207,75 @@ impl DataStatusReader {
         Ok(total_records_stored)
     }
 
+    /// Check daily_prices table directly
+    async fn check_daily_prices_direct(&self) -> Result<DataFreshnessStatus> {
+        let query = r#"
+            SELECT
+                COUNT(*) as total_records,
+                MAX(date) as latest_date,
+                COUNT(DISTINCT stock_id) as unique_stocks
+            FROM daily_prices
+        "#;
+
+        let row = sqlx::query(query).fetch_one(&self.pool).await?;
+        let total_records: i64 = row.get("total_records");
+        let latest_date: Option<chrono::NaiveDate> = row.get("latest_date");
+        let _unique_stocks: i64 = row.get("unique_stocks");
+        
+        let latest_date_str = latest_date.map(|d| d.format("%Y-%m-%d").to_string());
+        
+        let staleness_days = match latest_date {
+            Some(date) => {
+                let days_diff = Utc::now().date_naive() - date;
+                Some(days_diff.num_days())
+            }
+            None => None,
+        };
+        
+        let status = match (latest_date, staleness_days) {
+            (None, _) => FreshnessStatus::Missing,
+            (_, Some(days)) if days <= 7 => FreshnessStatus::Current,
+            (_, Some(days)) if days <= 30 => FreshnessStatus::Stale,
+            (_, Some(_)) => FreshnessStatus::Stale, // Consider anything > 30 days as stale
+            _ => FreshnessStatus::Current,
+        };
+        
+        let message = match status {
+            FreshnessStatus::Current => format!("Latest data: {} ({} records)", latest_date_str.as_deref().unwrap_or("N/A"), total_records),
+            FreshnessStatus::Stale => format!("Latest data: {} days old ({} records)", staleness_days.unwrap_or(0), total_records),
+            FreshnessStatus::Missing => "No market data available".to_string(),
+            FreshnessStatus::Error => "Error accessing market data".to_string(),
+        };
+
+        let priority = match status {
+            FreshnessStatus::Current => RefreshPriority::Low,
+            FreshnessStatus::Stale => RefreshPriority::Medium,
+            FreshnessStatus::Missing | FreshnessStatus::Error => RefreshPriority::Critical,
+        };
+
+        Ok(DataFreshnessStatus {
+            data_source: "daily_prices".to_string(),
+            status,
+            latest_data_date: latest_date_str.clone(),
+            last_refresh: None, // TODO: Get from refresh tracking table
+            staleness_days,
+            records_count: total_records,
+            message,
+            refresh_priority: priority,
+            data_summary: DataSummary {
+                date_range: latest_date_str.clone(),
+                stock_count: None,
+                data_types: vec!["Daily Prices".to_string()],
+                key_metrics: vec![format!("{} records", total_records)],
+                completeness_score: None,
+            },
+        })
+    }
+
     /// Create rate-limited HTTP client using governor
     async fn create_rate_limited_client(&self) -> Result<(Client, Arc<RateLimiter<governor::state::direct::NotKeyed, governor::state::InMemoryState, governor::clock::DefaultClock>>)> {
         // Define rate limit: 10 requests per second (SEC limit) - sustained rate
-        let quota = Quota::per_second(NonZeroU32::new(10).unwrap());
+        let quota = Quota::per_second(NonZeroU32::new(10).ok_or_else(|| anyhow!("Invalid rate limit quota"))?);
         let limiter = Arc::new(RateLimiter::direct(quota));
 
         let client = Client::builder()
@@ -330,7 +313,13 @@ impl DataStatusReader {
             let stock_id = *stock_id;
             
             let handle = tokio::spawn(async move {
-                let _permit = semaphore.acquire_owned().await.unwrap();
+                let _permit = match semaphore.acquire_owned().await {
+                    Ok(permit) => permit,
+                    Err(e) => {
+                        println!("❌ Failed to acquire semaphore permit for {}: {}", symbol, e);
+                        return;
+                    }
+                };
                 
                 match Self::get_all_sec_filings_for_cik_and_extract_data(&client, &limiter, &cik, stock_id, &symbol, &pool).await {
                     Ok((sec_dates, records_stored)) => {
@@ -357,9 +346,9 @@ impl DataStatusReader {
             handle.await?;
         }
         
-        let results_map = Arc::try_unwrap(results).unwrap().into_inner();
-        let total_records_count = Arc::try_unwrap(total_records).unwrap().into_inner();
-        let error_list = Arc::try_unwrap(error_reports).unwrap().into_inner();
+        let results_map = Arc::try_unwrap(results).map_err(|_| anyhow!("Failed to unwrap results Arc"))?.into_inner();
+        let total_records_count = Arc::try_unwrap(total_records).map_err(|_| anyhow!("Failed to unwrap total_records Arc"))?.into_inner();
+        let error_list = Arc::try_unwrap(error_reports).map_err(|_| anyhow!("Failed to unwrap error_reports Arc"))?.into_inner();
         
         // Store error reports for final summary
         Self::store_error_reports(error_list).await?;
@@ -599,78 +588,23 @@ impl DataStatusReader {
         Ok(rows.iter().map(|r| r.get("accession_number")).collect())
     }
 
-    /// Compare ALL filing dates using simple logic - checks ALL S&P 500 stocks
-    // OLD FUNCTION REMOVED - No longer needed with hybrid API approach
-    // The extraction now happens inline during get_all_sec_filings_for_cik_and_extract_data
-
-
-
-    /// Check daily_prices table directly
-    async fn check_daily_prices_direct(&self) -> Result<DataFreshnessStatus> {
-        let query = r#"
-            SELECT
-                COUNT(*) as total_records,
-                MAX(date) as latest_date,
-                COUNT(DISTINCT stock_id) as unique_stocks
-            FROM daily_prices
-        "#;
-
-        let row = sqlx::query(query).fetch_one(&self.pool).await?;
-        let total_records: i64 = row.get("total_records");
-        let latest_date: Option<chrono::NaiveDate> = row.get("latest_date");
-        let _unique_stocks: i64 = row.get("unique_stocks");
-        
-        let latest_date_str = latest_date.map(|d| d.format("%Y-%m-%d").to_string());
-        
-        let staleness_days = match latest_date {
-            Some(date) => {
-                let days_diff = Utc::now().date_naive() - date;
-                Some(days_diff.num_days())
-            }
-            None => None,
-        };
-        
-        let status = match (latest_date, staleness_days) {
-            (None, _) => FreshnessStatus::Missing,
-            (_, Some(days)) if days <= 7 => FreshnessStatus::Current,
-            (_, Some(days)) if days <= 30 => FreshnessStatus::Stale,
-            (_, Some(_)) => FreshnessStatus::Stale, // Consider anything > 30 days as stale
-            _ => FreshnessStatus::Current,
-        };
-        
-        let message = match status {
-            FreshnessStatus::Current => format!("Latest data: {} ({} records)", latest_date_str.as_deref().unwrap_or("N/A"), total_records),
-            FreshnessStatus::Stale => format!("Latest data: {} days old ({} records)", staleness_days.unwrap_or(0), total_records),
-            FreshnessStatus::Missing => "No market data available".to_string(),
-            FreshnessStatus::Error => "Error accessing market data".to_string(),
-        };
-
-        let priority = match status {
-            FreshnessStatus::Current => RefreshPriority::Low,
-            FreshnessStatus::Stale => RefreshPriority::Medium,
-            FreshnessStatus::Missing | FreshnessStatus::Error => RefreshPriority::Critical,
-        };
-
-        Ok(DataFreshnessStatus {
-            data_source: "daily_prices".to_string(),
-            status,
-            latest_data_date: latest_date_str.clone(),
-            last_refresh: None, // TODO: Get from refresh tracking table
-            staleness_days,
-            records_count: total_records,
-            message,
-            refresh_priority: priority,
-            data_summary: DataSummary {
-                date_range: latest_date_str.clone(),
-                stock_count: None,
-                data_types: vec!["Daily Prices".to_string()],
-                key_metrics: vec![format!("{} records", total_records)],
-                completeness_score: None,
-            },
-        })
+    /// Store error reports for final summary
+    async fn store_error_reports(errors: Vec<(String, String, String)>) -> Result<()> {
+        // Store errors for final summary
+        for (symbol, cik, error) in errors {
+            println!("❌ Error processing {} ({}): {}", symbol, cik, error);
+        }
+        Ok(())
     }
 
-    /// Get our filing dates for a single CIK (used in tests)
+    /// Get error count for final summary (used in tests)
+    #[cfg(test)]
+    async fn get_error_count() -> Result<i64> {
+        // Return count of errors encountered
+        Ok(0) // Placeholder - could be implemented with a global error counter
+    }
+
+    /// Get our filing dates for a specific CIK (used in tests)
     #[cfg(test)]
     async fn get_our_filing_dates_for_cik(pool: &SqlitePool, cik: &str) -> Result<Vec<String>> {
         let query = r#"
@@ -695,268 +629,6 @@ impl DataStatusReader {
         }
         
         Ok(results)
-    }
-
-    
-    /// Extract and store balance sheet data for missing dates (used in tests)
-    #[cfg(test)]
-    async fn extract_and_store_balance_sheet_data(
-        edgar_client: &mut SecEdgarClient,
-        json: &serde_json::Value,
-        stock_id: i64,
-        symbol: &str,
-        missing_dates: &[String]
-    ) -> Result<i64> {
-        println!("    📊 Processing balance sheet data for {}...", symbol);
-        
-        // Use existing parse_company_facts_json logic
-        let historical_data = edgar_client.parse_company_facts_json(json, symbol)?;
-        
-        if historical_data.is_empty() {
-            println!("    ⚠️ No balance sheet data found for {}", symbol);
-            return Ok(0);
-        }
-        
-        println!("    📈 Found {} balance sheet data points", historical_data.len());
-        
-        // Extract filing metadata
-        let filing_metadata_vec = edgar_client.extract_filing_metadata(json, symbol).ok();
-        
-        // Group by FILED DATE and store only those filed dates we are missing
-        let mut records_stored = 0;
-        let mut balance_by_filed: HashMap<String, (String, HashMap<String, f64>)> = HashMap::new();
-        
-        for (field_name, value, report_date, filed_date) in historical_data {
-            if missing_dates.contains(&filed_date) {
-                let entry = balance_by_filed.entry(filed_date.clone()).or_insert_with(|| (report_date.clone(), HashMap::new()));
-                // Keep the first non-empty report_date if multiple tuples differ
-                if entry.0.is_empty() && !report_date.is_empty() { entry.0 = report_date.clone(); }
-                entry.1.insert(field_name, value);
-            }
-        }
-        
-        // Store balance sheet data for missing filed dates
-        for (filed_date, (report_date, balance_data)) in balance_by_filed {
-            let fiscal_year = report_date.split('-').next().unwrap().parse::<i32>().unwrap_or(0);
-            
-            println!("    💾 Storing balance sheet for {} filed_date={} report_date={}", symbol, filed_date, report_date);
-            
-            // Calculate derived values
-            let short_term_debt = balance_data.get("ShortTermDebt").copied()
-                .or_else(|| balance_data.get("DebtCurrent").copied());
-            let long_term_debt = balance_data.get("LongTermDebt").copied()
-                .or_else(|| balance_data.get("LongTermDebtAndCapitalLeaseObligations").copied());
-            let total_debt = match (short_term_debt, long_term_debt) {
-                (Some(st), Some(lt)) => Some(st + lt),
-                (Some(st), None) => Some(st),
-                (None, Some(lt)) => Some(lt),
-                (None, None) => None,
-            };
-            
-            let balance_sheet_data = BalanceSheetData {
-                stock_id,
-                symbol: symbol.to_string(),
-                report_date: chrono::NaiveDate::parse_from_str(&report_date, "%Y-%m-%d")?,
-                fiscal_year: fiscal_year,
-                total_assets: balance_data.get("Assets").copied(),
-                total_liabilities: balance_data.get("Liabilities").copied(),
-                total_equity: balance_data.get("StockholdersEquity").copied(),
-                cash_and_equivalents: balance_data.get("CashAndCashEquivalentsAtCarryingValue").copied(),
-                short_term_debt,
-                long_term_debt,
-                total_debt,
-                current_assets: balance_data.get("AssetsCurrent").copied(),
-                current_liabilities: balance_data.get("LiabilitiesCurrent").copied(),
-                share_repurchases: balance_data.get("ShareRepurchases").copied(),
-                shares_outstanding: balance_data.get("SharesOutstanding").copied(),
-            };
-            
-            // Pick matching metadata for this filed_date
-            let meta = filing_metadata_vec
-                .as_ref()
-                .and_then(|vec| vec.iter().find(|m| m.filing_date == filed_date));
-
-            if let Some(metadata) = meta {
-                edgar_client.store_balance_sheet_data(&balance_sheet_data, Some(metadata)).await?;
-                records_stored += 1;
-            } else {
-                println!("🔴 WARNING: No matching metadata for {} filed_date={}", symbol, filed_date);
-                println!("   Available metadata filing_dates: {:?}",
-                    filing_metadata_vec.as_ref().map(|v| v.iter().map(|m| &m.filing_date).collect::<Vec<_>>()));
-                println!("   This balance sheet filing will be SKIPPED. Check if extract_filing_metadata is comprehensive.");
-            }
-        }
-        
-        Ok(records_stored)
-    }
-
-    /// Extract and store income statement data for missing dates (used in tests)
-    #[cfg(test)]
-    async fn extract_and_store_income_statement_data(
-        edgar_client: &mut SecEdgarClient,
-        json: &serde_json::Value,
-        stock_id: i64,
-        symbol: &str,
-        missing_dates: &[String]
-    ) -> Result<i64> {
-        println!("    📈 Processing income statement data for {}...", symbol);
-        
-        // Use existing parse_income_statement_json logic
-        let historical_data = edgar_client.parse_income_statement_json(json, symbol)?;
-        
-        if historical_data.is_empty() {
-            println!("    ⚠️ No income statement data found for {}", symbol);
-            return Ok(0);
-        }
-        
-        println!("    📊 Found {} income statement data points", historical_data.len());
-        
-        // Extract filing metadata
-        let filing_metadata_vec = edgar_client.extract_filing_metadata(json, symbol).ok();
-        
-        // Group by FILED DATE and store only those filed dates we are missing
-        let mut records_stored = 0;
-        let mut income_by_filed: HashMap<String, (String, HashMap<String, f64>)> = HashMap::new();
-        
-        for (field_name, value, report_date, filed_date) in historical_data {
-            if missing_dates.contains(&filed_date) {
-                let entry = income_by_filed.entry(filed_date.clone()).or_insert_with(|| (report_date.clone(), HashMap::new()));
-                if entry.0.is_empty() && !report_date.is_empty() { entry.0 = report_date.clone(); }
-                entry.1.insert(field_name, value);
-            }
-        }
-        
-        // Store income statement data for missing filed dates
-        for (filed_date, (report_date, income_data)) in income_by_filed {
-            let fiscal_year = report_date.split('-').next().unwrap().parse::<i32>().unwrap_or(0);
-            
-            println!("    💾 Storing income statement for {} filed_date={} report_date={}", symbol, filed_date, report_date);
-            
-            let income_statement_data = IncomeStatementData {
-                stock_id,
-                symbol: symbol.to_string(),
-                period_type: "Annual".to_string(),
-                report_date: chrono::NaiveDate::parse_from_str(&report_date, "%Y-%m-%d")?,
-                fiscal_year: fiscal_year,
-                revenue: income_data.get("Revenues").copied()
-                    .or_else(|| income_data.get("RevenueFromContractWithCustomerExcludingAssessedTax").copied()),
-                gross_profit: income_data.get("GrossProfit").copied(),
-                operating_income: income_data.get("OperatingIncomeLoss").copied(),
-                net_income: income_data.get("NetIncomeLoss").copied(),
-                cost_of_revenue: income_data.get("CostOfGoodsAndServicesSold").copied(),
-                interest_expense: income_data.get("InterestExpense").copied(),
-                tax_expense: income_data.get("IncomeTaxExpenseBenefit").copied(),
-                shares_basic: income_data.get("WeightedAverageNumberOfSharesOutstandingBasic").copied(),
-                shares_diluted: income_data.get("WeightedAverageNumberOfSharesOutstandingDiluted").copied(),
-            };
-            
-            let meta = filing_metadata_vec
-                .as_ref()
-                .and_then(|vec| vec.iter().find(|m| m.filing_date == filed_date));
-
-            if let Some(metadata) = meta {
-                edgar_client.store_income_statement_data(&income_statement_data, Some(metadata)).await?;
-                records_stored += 1;
-            } else {
-                println!("🔴 WARNING: No matching metadata for {} filed_date={}", symbol, filed_date);
-                println!("   Available metadata filing_dates: {:?}",
-                    filing_metadata_vec.as_ref().map(|v| v.iter().map(|m| &m.filing_date).collect::<Vec<_>>()));
-                println!("   This income statement filing will be SKIPPED. Check if extract_filing_metadata is comprehensive.");
-            }
-        }
-        
-        Ok(records_stored)
-    }
-
-    /// Extract and store cash flow data for missing dates (used in tests)
-    #[cfg(test)]
-    async fn extract_and_store_cash_flow_data(
-        edgar_client: &mut SecEdgarClient,
-        json: &serde_json::Value,
-        stock_id: i64,
-        symbol: &str,
-        missing_dates: &[String]
-    ) -> Result<i64> {
-        println!("    💰 Processing cash flow data for {}...", symbol);
-        
-        // Use existing parse_cash_flow_json logic
-        let historical_data = edgar_client.parse_cash_flow_json(json, symbol)?;
-        
-        if historical_data.is_empty() {
-            println!("    ⚠️ No cash flow data found for {}", symbol);
-            return Ok(0);
-        }
-        
-        println!("    📊 Found {} cash flow data points", historical_data.len());
-        
-        // Extract filing metadata
-        let filing_metadata_vec = edgar_client.extract_filing_metadata(json, symbol).ok();
-        
-        // Group by FILED DATE and store only those filed dates we are missing
-        let mut records_stored = 0;
-        let mut cashflow_by_filed: HashMap<String, (String, HashMap<String, f64>)> = HashMap::new();
-        
-        for (field_name, value, report_date, filed_date) in historical_data {
-            if missing_dates.contains(&filed_date) {
-                let entry = cashflow_by_filed.entry(filed_date.clone()).or_insert_with(|| (report_date.clone(), HashMap::new()));
-                if entry.0.is_empty() && !report_date.is_empty() { entry.0 = report_date.clone(); }
-                entry.1.insert(field_name, value);
-            }
-        }
-        
-        // Store cash flow data for missing filed dates
-        for (filed_date, (report_date, cashflow_data)) in cashflow_by_filed {
-            let fiscal_year = report_date.split('-').next().unwrap().parse::<i32>().unwrap_or(0);
-            
-            println!("    💾 Storing cash flow for {} filed_date={} report_date={}", symbol, filed_date, report_date);
-            
-            let cash_flow_data = CashFlowData {
-                stock_id,
-                symbol: symbol.to_string(),
-                report_date: chrono::NaiveDate::parse_from_str(&report_date, "%Y-%m-%d")?,
-                fiscal_year: fiscal_year,
-                operating_cash_flow: cashflow_data.get("NetCashProvidedByUsedInOperatingActivities").copied(),
-                depreciation_expense: cashflow_data.get("DepreciationDepletionAndAmortization").copied()
-                    .or_else(|| cashflow_data.get("DepreciationExpense").copied()),
-                amortization_expense: cashflow_data.get("AmortizationExpense").copied(),
-                investing_cash_flow: cashflow_data.get("NetCashProvidedByUsedInInvestingActivities").copied(),
-                financing_cash_flow: cashflow_data.get("NetCashProvidedByUsedInFinancingActivities").copied(),
-                dividends_paid: cashflow_data.get("PaymentsOfDividends").copied(),
-                share_repurchases: cashflow_data.get("PaymentsForRepurchaseOfCommonStock").copied(),
-            };
-            
-            let meta = filing_metadata_vec
-                .as_ref()
-                .and_then(|vec| vec.iter().find(|m| m.filing_date == filed_date));
-
-            if let Some(metadata) = meta {
-                edgar_client.store_cash_flow_data(&cash_flow_data, Some(metadata)).await?;
-                records_stored += 1;
-            } else {
-                println!("🔴 WARNING: No matching metadata for {} filed_date={}", symbol, filed_date);
-                println!("   Available metadata filing_dates: {:?}",
-                    filing_metadata_vec.as_ref().map(|v| v.iter().map(|m| &m.filing_date).collect::<Vec<_>>()));
-                println!("   This cash flow filing will be SKIPPED. Check if extract_filing_metadata is comprehensive.");
-            }
-        }
-        
-        Ok(records_stored)
-    }
-
-    /// Store error reports for final summary
-    async fn store_error_reports(errors: Vec<(String, String, String)>) -> Result<()> {
-        // Store errors for final summary
-        for (symbol, cik, error) in errors {
-            println!("❌ Error processing {} ({}): {}", symbol, cik, error);
-        }
-        Ok(())
-    }
-
-    /// Get error count for final summary (used in tests)
-    #[cfg(test)]
-    async fn get_error_count() -> Result<i64> {
-        // Return count of errors encountered
-        Ok(0) // Placeholder - could be implemented with a global error counter
     }
 
     /// Helper: Find a single value for a specific accession number in Company Facts JSON
@@ -1151,81 +823,7 @@ impl DataStatusReader {
             financing_cash_flow: Self::find_value_for_accession(facts, "NetCashProvidedByUsedInFinancingActivities", accession_number),
         })
     }
-
 }
-
-impl FreshnessStatus {
-    pub fn is_current(&self) -> bool {
-        matches!(self, FreshnessStatus::Current)
-    }
-
-    pub fn needs_refresh(&self) -> bool {
-        matches!(self, FreshnessStatus::Stale | FreshnessStatus::Missing | FreshnessStatus::Error)
-    }
-}
-
-impl SystemFreshnessReport {
-    pub fn get_stale_components(&self) -> Vec<String> {
-        let mut stale_components = Vec::new();
-        
-        if self.market_data.status.needs_refresh() {
-            stale_components.push("market_data".to_string());
-        }
-        if self.financial_data.status.needs_refresh() {
-            stale_components.push("financial_data".to_string());
-        }
-        if self.calculated_ratios.status.needs_refresh() {
-            stale_components.push("calculated_ratios".to_string());
-        }
-        
-        stale_components
-    }
-
-    pub fn get_freshness_warning_message(&self) -> String {
-        let stale_components = self.get_stale_components();
-        if stale_components.len() == 3 {
-            "All data sources need refresh - please run latest update".to_string()
-        } else if !stale_components.is_empty() {
-            format!("Stale data sources: {}", stale_components.join(", "))
-        } else {
-            "All data sources are current".to_string()
-        }
-    }
-
-    pub fn get_overall_status(&self) -> FreshnessStatus {
-        self.overall_status.clone()
-    }
-
-    pub fn is_data_fresh(&self) -> bool {
-        self.market_data.status == FreshnessStatus::Current && self.financial_data.status == FreshnessStatus::Current
-    }
-
-    pub fn should_show_freshness_warning(&self) -> bool {
-        if self.financial_data.records_count == 0 {
-            return false;
-        }
-        
-        match self.financial_data.status {
-            FreshnessStatus::Stale => true,
-            FreshnessStatus::Current => false,
-            FreshnessStatus::Missing => false,
-            FreshnessStatus::Error => false,
-        }
-    }
-
-    pub fn get_freshness_specific_message(&self) -> String {
-        let stale = self.get_stale_components();
-        if stale.is_empty() {
-            "All data sources are current".to_string()
-        } else {
-            format!("Stale data sources: {}", stale.join(", "))
-        }
-    }
-}
-
-// ============================================================================
-// UNIT TESTS
-// ============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -1235,44 +833,6 @@ mod tests {
     /// Test helper to create a test database pool
     async fn create_test_pool() -> SqlitePool {
         SqlitePool::connect(":memory:").await.unwrap()
-    }
-
-    /// Test helper to create test JSON data
-    #[allow(dead_code)]
-    fn create_test_json() -> serde_json::Value {
-        serde_json::json!({
-            "facts": {
-                "us-gaap": {
-                    "Assets": {
-                        "units": {
-                            "USD": [
-                                {
-                                    "val": 1000000000.0,
-                                    "end": "2023-12-31",
-                                    "filed": "2024-01-15"
-                                },
-                                {
-                                    "val": 950000000.0,
-                                    "end": "2022-12-31", 
-                                    "filed": "2023-01-15"
-                                }
-                            ]
-                        }
-                    },
-                    "Revenues": {
-                        "units": {
-                            "USD": [
-                                {
-                                    "val": 500000000.0,
-                                    "end": "2023-12-31",
-                                    "filed": "2024-01-15"
-                                }
-                            ]
-                        }
-                    }
-                }
-            }
-        })
     }
 
     #[tokio::test]
@@ -1290,63 +850,6 @@ mod tests {
                 // The important thing is that the function doesn't panic
             }
         }
-    }
-
-    #[tokio::test]
-    async fn test_extract_and_store_balance_sheet_data_empty_data() {
-        let pool = create_test_pool().await;
-        let mut edgar_client = SecEdgarClient::new(pool);
-        let json = serde_json::json!({});
-        let missing_dates = vec!["2023-12-31".to_string()];
-        
-        let result = DataStatusReader::extract_and_store_balance_sheet_data(
-            &mut edgar_client, 
-            &json, 
-            1, 
-            "TEST", 
-            &missing_dates
-        ).await;
-        
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 0);
-    }
-
-    #[tokio::test]
-    async fn test_extract_and_store_income_statement_data_empty_data() {
-        let pool = create_test_pool().await;
-        let mut edgar_client = SecEdgarClient::new(pool);
-        let json = serde_json::json!({});
-        let missing_dates = vec!["2023-12-31".to_string()];
-        
-        let result = DataStatusReader::extract_and_store_income_statement_data(
-            &mut edgar_client, 
-            &json, 
-            1, 
-            "TEST", 
-            &missing_dates
-        ).await;
-        
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 0);
-    }
-
-    #[tokio::test]
-    async fn test_extract_and_store_cash_flow_data_empty_data() {
-        let pool = create_test_pool().await;
-        let mut edgar_client = SecEdgarClient::new(pool);
-        let json = serde_json::json!({});
-        let missing_dates = vec!["2023-12-31".to_string()];
-        
-        let result = DataStatusReader::extract_and_store_cash_flow_data(
-            &mut edgar_client, 
-            &json, 
-            1, 
-            "TEST", 
-            &missing_dates
-        ).await;
-        
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 0);
     }
 
     #[tokio::test]
@@ -1461,7 +964,7 @@ mod tests {
             overall_status: FreshnessStatus::Current,
             market_data: market_data.clone(),
             financial_data: financial_data.clone(),
-            calculated_ratios: market_data.clone(),
+            calculated_ratios: market_data,
             recommendations: vec![],
             screening_readiness: ScreeningReadiness {
                 valuation_analysis: true,
@@ -1502,7 +1005,7 @@ mod tests {
         ];
 
         for (date_str, expected_year) in test_cases {
-            let fiscal_year = date_str.split('-').next().unwrap().parse::<i32>().unwrap_or(0);
+            let fiscal_year = date_str.split('-').next().unwrap_or("0").parse::<i32>().unwrap_or(0);
             assert_eq!(fiscal_year, expected_year);
         }
     }

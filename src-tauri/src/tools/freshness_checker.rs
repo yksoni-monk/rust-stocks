@@ -301,25 +301,22 @@ impl DataStatusReader {
         let mut handles = Vec::new();
         
         for (stock_id, cik, symbol) in stocks.iter() {
+            // Acquire permit BEFORE spawning - ensures only 10 tasks run concurrently
+            let permit = semaphore.clone().acquire_owned().await.unwrap();
+            
+            // Clone everything for the task
             let client = client.clone();
             let limiter = limiter.clone();
             let results = results.clone();
             let total_records = total_records.clone();
             let error_reports = error_reports.clone();
-            let semaphore = semaphore.clone();
             let pool = self.pool.clone();  // Clone pool for database access
             let cik = cik.clone();
             let symbol = symbol.clone();
             let stock_id = *stock_id;
             
             let handle = tokio::spawn(async move {
-                let _permit = match semaphore.acquire_owned().await {
-                    Ok(permit) => permit,
-                    Err(e) => {
-                        println!("❌ Failed to acquire semaphore permit for {}: {}", symbol, e);
-                        return;
-                    }
-                };
+                let _permit = permit; // Move permit into task
                 
                 match Self::get_all_sec_filings_for_cik_and_extract_data(&client, &limiter, &cik, stock_id, &symbol, &pool).await {
                     Ok((sec_dates, records_stored)) => {
@@ -337,6 +334,7 @@ impl DataStatusReader {
                         errors.push((symbol, cik, e.to_string()));
                     }
                 }
+                // Permit drops here, allowing next task to spawn
             });
             handles.push(handle);
         }

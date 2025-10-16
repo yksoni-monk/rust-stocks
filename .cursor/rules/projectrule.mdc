@@ -1,5 +1,68 @@
 # Cursor Rules
 
+**⚠️ IMPORTANT: This file has been updated to reflect the current CUSTOM Rust migration system.**
+**Old sqlx-specific rules have been replaced with our custom `cargo run --bin migrate --` commands.**
+
+---
+
+# 🚨 CRITICAL QUICK REFERENCE
+
+## PRODUCTION DATABASE (NEVER FORGET!)
+- **Location**: `src-tauri/db/stocks.db` (2.5GB PRODUCTION DATABASE)
+- **Size**: 2.5GB with S&P 500 financial data
+- **Status**: PRODUCTION - contains all valuable data
+- **Stats**: 5,892 stocks, 6.5M+ price records, 142K+ financial records
+
+## WORKING DIRECTORY
+**ALWAYS**: `/Users/yksoni/code/misc/rust-stocks` (ROOT)
+
+## 🔧 DATABASE MIGRATIONS (CRITICAL)
+**⚠️ We use a CUSTOM Rust migration tool, NOT sqlx directly!**
+
+**Environment setup (REQUIRED):**
+```bash
+export PROJECT_ROOT=/Users/yksoni/code/misc/rust-stocks
+cd $PROJECT_ROOT/src-tauri
+```
+
+**Migration commands:**
+```bash
+# Create new migration
+cargo run --bin migrate -- create <description>
+
+# Apply migrations
+cargo run --bin migrate -- run
+
+# Check status
+cargo run --bin migrate -- status
+
+# Revert last migration
+cargo run --bin migrate -- revert
+```
+
+**Database admin:**
+```bash
+# Check database status (ALWAYS run first)
+cargo run --bin db_admin -- status
+
+# Run migrations with safety (production)
+cargo run --bin db_admin -- migrate --confirm
+```
+
+## 🚫 NEVER DO THESE THINGS
+- ❌ Look for database in ROOT - it's in `src-tauri/db/stocks.db`
+- ❌ Put migrations in root - they belong in `src-tauri/db/migrations/`
+- ❌ Confuse frontend (src/) with backend (src-tauri/src/)
+- ❌ Use old `sqlx migrate` commands - we have a custom tool now
+- ❌ Run migrations without setting PROJECT_ROOT environment variable
+- ❌ Modify migration files after they've been applied
+- ❌ Use hardcoded database paths - always use environment variables
+- ❌ Change API contracts without checking both sides
+
+---
+
+# 📋 DETAILED TECHNICAL RULES
+
 
 ## Project Structure Rules
 - Working directory is ALWAYS ROOT: `/Users/yksoni/code/misc/rust-stocks`
@@ -13,11 +76,11 @@
 
 
 ## Database Rules
-- CRITICAL: Database changes MUST use sqlx migrations only.
+- CRITICAL: Database changes MUST use our CUSTOM Rust migration tool, NOT sqlx directly.
   - NEVER run direct SQL (ALTER TABLE/UPDATE/CREATE/DROP) against the DB from the terminal or ad-hoc scripts.
-  - Use files under `db/migrations/` 
-  - check context/database_migrations.md to fully understand the migrations feature
-  - Make a backup before migrations when touching critical tables (use the existing `DatabaseManager::create_backup`).
+  - Use the custom migration tool: `cargo run --bin migrate --`
+  - Check context/DATABASE_MIGRATIONS.md to fully understand the migrations feature
+  - Make a backup before migrations when touching critical tables (automatic with migration tool).
   - After migration, compile and run a freshness check to validate (`cargo check` and app status call).
 - CRITICAL: Always use environment variables for database access. NEVER use relative paths.
   - Use `DATABASE_URL` environment variable (preferred) or `DATABASE_PATH` as fallback
@@ -25,29 +88,66 @@
   - Always check for environment variables first: `std::env::var("DATABASE_URL")` or `std::env::var("DATABASE_PATH")`
   - If environment variables are not set, return an error - do not use fallback paths
 
-## Migration Rules (NON-NEGOTIABLE)
+## Migration Rules (NON-NEGOTIABLE) - UPDATED SYSTEM
+**⚠️ CRITICAL: We use a CUSTOM Rust migration tool, NOT sqlx directly!**
+
+### Environment Setup (REQUIRED)
+```bash
+# ALWAYS set up environment first
+export PROJECT_ROOT=/Users/yksoni/code/misc/rust-stocks
+cd $PROJECT_ROOT/src-tauri
+```
+
+### Current Migration Commands
+```bash
+# Create new migration (creates both .up.sql and .down.sql)
+cargo run --bin migrate -- create <description>
+
+# Apply migrations
+cargo run --bin migrate -- run
+
+# Check migration status  
+cargo run --bin migrate -- status
+
+# Revert last migration
+cargo run --bin migrate -- revert
+```
+
+### Database Admin Commands
+```bash
+# Check database status (ALWAYS run first)
+cargo run --bin db_admin -- status
+
+# Create manual backup
+cargo run --bin db_admin -- backup
+
+# Run migrations with safety checks (REQUIRES --confirm for production)
+cargo run --bin db_admin -- migrate --confirm
+
+# Verify data integrity
+cargo run --bin db_admin -- verify
+```
+
 - CRITICAL: NEVER modify an applied migration file - this breaks checksum validation
-- ALWAYS create new migrations for schema changes using `sqlx migrate add`
+- ALWAYS create new migrations using `cargo run --bin migrate -- create <description>`
 - ALWAYS test migrations on a backup database first before production
-- ALWAYS backup the database before running migrations on production data
-- ALWAYS verify migration status with `sqlx migrate info` before and after changes
+- ALWAYS backup the database before running migrations on production data (automatic with tool)
+- ALWAYS verify migration status with `cargo run --bin migrate -- status`
 - ALWAYS use descriptive migration names that explain the change
 - NEVER delete migration files once they've been applied to any database
 - NEVER edit migration files after they've been applied (creates checksum mismatches)
-- ALWAYS run `sqlx migrate run` to apply new migrations in chronological order
-- ALWAYS validate that all migrations are installed with `sqlx migrate info`
-- CRITICAL: ALWAYS use `--source db/migrations` flag with sqlx commands
-  - ALWAYS use: `sqlx migrate add --source db/migrations <description>`
-  - ALWAYS use: `sqlx migrate run --source db/migrations --database-url "sqlite:db/stocks.db"`
-  - ALWAYS use: `sqlx migrate info --source db/migrations --database-url "sqlite:db/stocks.db"`
-  - NEVER run sqlx commands without the `--source db/migrations` flag
-  - This prevents creating migrations in the wrong directory (`src-tauri/migrations/` vs `src-tauri/db/migrations/`)
+- ALWAYS run `cargo run --bin migrate -- run` to apply new migrations in chronological order
+- ALWAYS validate that all migrations are installed with `cargo run --bin migrate -- status`
+- CRITICAL: ALWAYS set PROJECT_ROOT environment variable and run from src-tauri directory
+- ALWAYS create reversible migrations (tool creates both .up.sql and .down.sql automatically)
 
 ## Key Migration Principles I Will Follow:
 - NEVER modify migration files after creation
 - NEVER manually apply migrations with sqlite3
-- NEVER manually insert into _sqlx_migrations
-- ALWAYS use sqlx migrate run
+- NEVER manually insert into migration tracking tables
+- ALWAYS use the custom migration tool: `cargo run --bin migrate --`
+- ALWAYS set PROJECT_ROOT environment variable before running migrations
+- ALWAYS run from the correct directory: `$PROJECT_ROOT/src-tauri`
 - ALWAYS fix issues properly, not bypass them
 
 ## API Contract Discipline (NON-NEGOTIABLE)
